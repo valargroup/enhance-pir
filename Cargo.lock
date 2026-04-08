@@ -585,6 +585,7 @@ dependencies = [
  "pir-types",
  "reqwest",
  "serde",
+ "serde_json",
  "spiral-rs",
  "thiserror",
  "tokio",
