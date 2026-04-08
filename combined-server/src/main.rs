@@ -25,6 +25,11 @@ use witness_server::pir_ypir::YpirPirEngine as WitPirEngine;
 #[cfg(all(feature = "witness", any(feature = "ipir", feature = "ypir")))]
 use witness_types::{L0_DB_ROWS, SUBSHARD_ROW_BYTES};
 
+#[cfg(feature = "decryption")]
+use decryption_server::pir_ypir::YpirPirEngine as DecPirEngine;
+#[cfg(feature = "decryption")]
+use decryption_types::{DECRYPT_DB_ROWS, DECRYPT_ROW_BYTES};
+
 #[derive(Parser)]
 #[command(name = "spend-server", about = "Zcash PIR server")]
 struct Cli {
@@ -64,6 +69,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(cli.data_dir.join("nullifier"))?;
     #[cfg(feature = "witness")]
     std::fs::create_dir_all(cli.data_dir.join("witness"))?;
+    #[cfg(feature = "decryption")]
+    std::fs::create_dir_all(cli.data_dir.join("decryption"))?;
 
     let config = combined_server::server::CombinedConfig {
         #[cfg(feature = "nullifier")]
@@ -79,6 +86,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "nullifier",
         #[cfg(feature = "witness")]
         "witness",
+        #[cfg(feature = "decryption")]
+        "decryption",
     ];
 
     tracing::info!(
@@ -121,12 +130,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(engine)
     };
 
+    #[cfg(feature = "decryption")]
+    let dec_engine = {
+        let dec_scenario = YpirScenario {
+            num_items: DECRYPT_DB_ROWS as u64,
+            item_size_bits: (DECRYPT_ROW_BYTES * 8) as u64,
+        };
+        Arc::new(DecPirEngine::new(&dec_scenario))
+    };
+
     combined_server::server::run(
         config,
         #[cfg(feature = "nullifier")]
         nf_engine,
         #[cfg(feature = "witness")]
         wit_engine,
+        #[cfg(feature = "decryption")]
+        dec_engine,
     )
     .await?;
 
