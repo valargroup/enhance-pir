@@ -28,7 +28,7 @@ decryption = [
     "dep:decryption-db",
 ]
 ypir = ["spend-server?/ypir", "witness-server?/ypir", "decryption-server?/ypir"]
-ipir = ["spend-server?/ipir", "witness-server?/ipir"]
+ipir = ["spend-server?/ipir", "witness-server?/ipir", "decryption-server?/ipir"]
 
 [dependencies]
 spend-server = { path = "../nullifier/spend-server", optional = true }

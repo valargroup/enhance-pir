@@ -25,11 +25,13 @@ use witness_server::pir_ypir::YpirPirEngine as WitPirEngine;
 #[cfg(all(feature = "witness", any(feature = "ipir", feature = "ypir")))]
 use witness_types::{L0_DB_ROWS, SUBSHARD_ROW_BYTES};
 
-#[cfg(all(feature = "decryption", feature = "ypir"))]
-use decryption_server::pir_ypir::YpirPirEngine as DecPirEngine;
-#[cfg(all(feature = "decryption", not(feature = "ypir")))]
+#[cfg(all(feature = "decryption", feature = "ipir"))]
+use decryption_server::pir_ipir::IpirPirEngine as DecPirEngine;
+#[cfg(all(feature = "decryption", not(any(feature = "ipir", feature = "ypir"))))]
 use decryption_server::pir_stub::StubPirEngine as DecPirEngine;
-#[cfg(all(feature = "decryption", feature = "ypir"))]
+#[cfg(all(feature = "decryption", not(feature = "ipir"), feature = "ypir"))]
+use decryption_server::pir_ypir::YpirPirEngine as DecPirEngine;
+#[cfg(all(feature = "decryption", any(feature = "ipir", feature = "ypir")))]
 use decryption_types::{DECRYPT_DB_ROWS, DECRYPT_ROW_BYTES};
 
 #[derive(Parser)]
@@ -134,14 +136,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(feature = "decryption")]
     let dec_engine = {
-        #[cfg(feature = "ypir")]
+        #[cfg(any(feature = "ipir", feature = "ypir"))]
         let dec_scenario = YpirScenario {
             num_items: DECRYPT_DB_ROWS as u64,
             item_size_bits: (DECRYPT_ROW_BYTES * 8) as u64,
         };
-        #[cfg(feature = "ypir")]
+        #[cfg(feature = "ipir")]
+        let engine = DecPirEngine::new(&dec_scenario)?;
+        #[cfg(all(not(feature = "ipir"), feature = "ypir"))]
         let engine = DecPirEngine::new(&dec_scenario);
-        #[cfg(not(feature = "ypir"))]
+        #[cfg(not(any(feature = "ipir", feature = "ypir")))]
         let engine = DecPirEngine;
         Arc::new(engine)
     };

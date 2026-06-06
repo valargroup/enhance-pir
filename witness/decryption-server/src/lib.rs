@@ -1,4 +1,6 @@
 pub mod pir_stub;
+#[cfg(feature = "ipir")]
+pub mod pir_ipir;
 #[cfg(feature = "ypir")]
 pub mod pir_ypir;
 pub mod routes;

@@ -582,6 +582,8 @@ dependencies = [
  "axum",
  "decryption-db",
  "decryption-types",
+ "inspiring",
+ "ipir-sp",
  "pir-types",
  "reqwest",
  "serde",
