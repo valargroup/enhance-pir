@@ -570,7 +570,7 @@ name = "decryption-db"
 version = "0.1.0"
 dependencies = [
  "decryption-types",
- "thiserror",
+ "thiserror 2.0.18",
  "xxhash-rust",
 ]
 
@@ -586,11 +586,11 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "spiral-rs",
- "thiserror",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
- "ypir",
+ "valar-spiral-rs 0.5.0",
+ "valar-ypir",
 ]
 
 [[package]]
@@ -1635,9 +1635,9 @@ dependencies = [
 
 [[package]]
 name = "orchard"
-version = "0.13.1"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "497e74492624a1d1cc8c9675a7afb17b430d32fd9efc171513d0840140b5f0c7"
+checksum = "a54f8d29bfb1e76a9d4e868a1a08cce2e57dd2bdc66232982822ad3114b91ab3"
 dependencies = [
  "aes",
  "bitvec",
@@ -3568,7 +3568,7 @@ dependencies = [
  "incrementalmerkletree",
  "inspiring",
  "ipir-sp",
- "orchard 0.13.1",
+ "orchard 0.14.0",
  "pir-types",
  "reqwest",
  "serde",

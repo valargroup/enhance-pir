@@ -17,8 +17,8 @@ arc-swap = "1"
 serde = { version = "1", features = ["derive"] }
 tracing = "0.1"
 thiserror = "2"
-ypir = { git = "https://github.com/valargroup/ypir.git", branch = "valar/artifact", default-features = false, features = ["server"], optional = true }
-spiral-rs = { git = "https://github.com/valargroup/spiral-rs.git", branch = "valar/avoid-avx512", optional = true }
+ypir = { package = "valar-ypir", git = "https://github.com/valargroup/ypir.git", branch = "valar/artifact", default-features = false, features = ["server"], optional = true }
+spiral-rs = { package = "valar-spiral-rs", git = "https://github.com/valargroup/spiral-rs.git", branch = "valar/avoid-avx512", optional = true }
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json"] }
