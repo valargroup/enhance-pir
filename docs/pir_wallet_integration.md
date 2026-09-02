@@ -77,10 +77,10 @@ Wallet Rust layer (libzcashlc)
   lib.rs            -> DB-facing zcashlc_* helpers
 
 Wallet DB / logic
-  zcash_client_sqlite
+  zakura-client-sqlite
     pir_witness_data
     shard_scanned_condition
-  zcash_client_backend
+  zakura-client-backend
     pir_orchard_witnesses
 
 Swift SDK / app
@@ -96,12 +96,16 @@ Swift SDK / app
 
 ## Repository Map
 
-| Repository | Role | Key PIR code |
+The wallet-layer crates below live in `zakura-core/wallet-libraries`, under
+their upstream `librustzcash/<name>/` directory names; only the published
+package names carry the `zakura-` prefix.
+
+| Repository / crate | Role | Key PIR code |
 |---|---|---|
 | `spendability-pir` | PIR servers and client libraries | `nullifier/spend-client/`, `nullifier/spend-types/`, `witness/witness-client/`, `witness/witness-types/` |
 | `zcash-swift-wallet-sdk` | Rust FFI and Swift orchestration | `rust/src/spendability.rs`, `rust/src/witness.rs`, `rust/src/lib.rs`, `Sources/ZcashLightClientKit/Synchronizer/SDKSynchronizer.swift` |
-| `zcash_client_sqlite` | Wallet DB integration | `src/wallet/spendability_pir.rs`, `src/wallet/common.rs`, `src/wallet.rs` |
-| `zcash_client_backend` | Transaction construction fallback | `src/data_api/wallet.rs` |
+| `zakura-client-sqlite` | Wallet DB integration | `src/wallet/spendability_pir.rs`, `src/wallet/common.rs`, `src/wallet.rs` |
+| `zakura-client-backend` | Transaction construction fallback | `src/data_api/wallet.rs` |
 | `zodl-ios` | App-level triggers and diagnostics | `RootInitialization.swift`, `PIRDebugStore.swift` |
 
 ## Spendability Model
@@ -333,12 +337,12 @@ spendability-pir/spend-client  ----+
 spendability-pir/witness-client ---+
                                               |
                                               v
-                                      zcash_client_sqlite
+                                      zakura-client-sqlite
                                         spendability_pir.rs
                                         common.rs
                                               |
                                               v
-                                      zcash_client_backend
+                                      zakura-client-backend
                                         pir_orchard_witnesses
                                               |
                                               v

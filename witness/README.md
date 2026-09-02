@@ -430,6 +430,34 @@ axum = "0.7"
 arc-swap = "1"
 ```
 
+### Orchard: use the Zakura fork, not upstream
+
+`commitment-tree-db` and `witness-client` depend on Orchard for Sinsemilla
+Merkle hashing (`MerkleHashOrchard`), and must take it from the Zakura fork:
+
+```toml
+orchard = { package = "zakura-orchard", version = "1.0", default-features = false }
+incrementalmerkletree = "0.8.2"
+```
+
+`zakura-orchard` sets `[lib] name = "orchard"`, so the `use` paths are
+unchanged; only the dependency edge is renamed.
+
+**Why this matters.** The wallet consumes both this repo's client crates and
+`zakura-client-backend`/`-sqlite`, which pin `zakura-orchard`. If this repo took
+upstream crates.io `orchard` instead, the wallet's lockfile would carry two
+Orchard copies whose `MerkleHashOrchard` types are unrelated, and the
+`PirWitness → MerklePath<MerkleHashOrchard>` conversion below would not type-check
+downstream. Keep the requirement a caret (`"1.0"`), not an exact pin, so it
+unifies with whatever exact version the wallet layer pins.
+
+`incrementalmerkletree` is *not* forked by Zakura — `zakura-orchard` itself
+depends on the crates.io release, so it stays as-is, matched to the `0.8.2` that
+`zakura-client-backend` requires.
+
+The fork's MSRV (`rust-version = 1.91`, edition 2024) is what sets this
+workspace's toolchain pin in `rust-toolchain.toml`.
+
 ### Deployment modes
 
 1. **Separate binaries** (default): `nullifier/spend-server` and `witness/witness-server` each have a `[[bin]]` target and run as independent processes. Each connects to lightwalletd independently. Two systemd services, each with its own port.
@@ -492,9 +520,9 @@ Same as Test A but through the real YPIR pipeline: server builds database, clien
 
 ## Wallet integration
 
-The wallet-side integration is implemented across `zcash_client_sqlite`, `zcash_client_backend`, `zcash-swift-wallet-sdk`, and `zodl-ios`, following the patterns established by nullifier PIR.
+The wallet-side integration is implemented across `zakura-client-sqlite`, `zakura-client-backend`, `zcash-swift-wallet-sdk`, and `zodl-ios`, following the patterns established by nullifier PIR.
 
-### Storage (`zcash_client_sqlite`)
+### Storage (`zakura-client-sqlite`)
 
 The `pir_witness_data` table stores PIR-obtained witnesses:
 
@@ -511,10 +539,10 @@ Key queries in `wallet/pir_witness.rs`: `get_notes_needing_pir_witness` (notes w
 
 ### Feature flag
 
-`sync-witness-pir` — defined in `zcash_client_sqlite/Cargo.toml`, forwarded to `zcash_client_backend`. Enables coin selection bypass, transaction builder fallback, and FFI entry points. The SDK enables it alongside `spendability-pir`:
+`sync-witness-pir` — defined in `librustzcash/zcash_client_sqlite/Cargo.toml` (in `zakura-core/wallet-libraries`), forwarded to `zakura-client-backend`. Enables coin selection bypass, transaction builder fallback, and FFI entry points. The SDK enables it alongside `spendability-pir`. The Zakura fork keeps the upstream library name, so consumers rename it back on the dependency edge:
 
 ```toml
-zcash_client_sqlite = { features = ["spendability-pir", "sync-witness-pir"] }
+zcash_client_sqlite = { package = "zakura-client-sqlite", features = ["spendability-pir", "sync-witness-pir"] }
 ```
 
 ### Coin selection gate bypass
@@ -523,7 +551,7 @@ The `shard_scanned_condition` in `wallet/common.rs` governs whether a note's sha
 
 This is distinct from the `unscanned_tip_exists` bypass (which is tied to `spendability-pir` and skips the blanket rejection of all notes when unscanned ranges exist). The two flags compose: nullifier PIR removes the global gate, witness PIR removes the per-note shard-completeness gate.
 
-### Transaction builder fallback (`zcash_client_backend`)
+### Transaction builder fallback (`zakura-client-backend`)
 
 In `data_api/wallet.rs`, when `witness_at_checkpoint_id_caching` fails for an Orchard input (shard incomplete), the builder falls back to `pir_orchard_witness_fallback`. This reads stored PIR witnesses via `get_pir_orchard_merkle_path` and constructs `MerklePath<MerkleHashOrchard>` from the stored siblings and position. All Orchard inputs in a transaction must share one anchor root — the fallback enforces this.
 
