@@ -1,0 +1,18 @@
+[network]
+network = "Mainnet"
+listen_addr = "[::]:8233"
+cache_dir = "/root/.cache/zakura"
+
+[rpc]
+listen_addr = "127.0.0.1:8232"
+cookie_dir = "/root/.cache/zakura"
+cookie_file_name = ".cookie"
+enable_cookie_auth = true
+max_response_body_size = 52428800
+
+[state]
+cache_dir = "/root/.cache/zakura"
+storage_mode = "archive"
+
+[health]
+listen_addr = "127.0.0.1:8081"

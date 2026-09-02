@@ -1,0 +1,16 @@
+[Unit]
+Description=Ironwood memo PIR shard worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/memo-pir-worker --listen 0.0.0.0:8091 --data-dir /srv/memo-pir/artifacts
+Restart=on-failure
+RestartSec=3
+User=root
+LimitNOFILE=1048576
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target
