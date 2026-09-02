@@ -21,7 +21,7 @@ enum Command {
     Metadata,
     /// Fetch and verify a note commitment witness through the PIR protocol.
     Witness {
-        /// Absolute Orchard commitment tree position. Defaults to tree_size - 1.
+        /// Absolute Ironwood commitment tree position. Defaults to tree_size - 1.
         #[arg(long)]
         position: Option<u64>,
     },

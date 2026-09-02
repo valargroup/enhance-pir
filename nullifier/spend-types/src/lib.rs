@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 // Re-export shared PIR types so existing consumers (spend-server, nf-ingest)
 // continue to compile without import changes.
 pub use pir_types::{
-    PirEngine, ServerPhase, YpirScenario, CONFIRMATION_DEPTH, IPIR_SETUP_SEED,
-    NU5_MAINNET_ACTIVATION,
+    min_sync_height, PirEngine, ServerPhase, YpirScenario, ZcashNetwork, CONFIRMATION_DEPTH,
+    IPIR_SETUP_SEED, NU6_3_MAINNET_ACTIVATION, NU6_3_TESTNET_ACTIVATION, POOL,
 };
 
 pub const TARGET_SIZE: usize = 1_000_000;
@@ -125,11 +125,62 @@ pub struct SpendabilityMetadata {
     pub num_nullifiers: u64,
     pub num_buckets: u64,
     pub phase: ServerPhase,
+    /// The shielded pool this database covers. Always [`POOL`] for servers
+    /// built from this tree; clients reject anything else so that a wallet
+    /// cannot silently take Orchard answers for Ironwood questions.
+    ///
+    /// Defaults to `"orchard"` when absent, because only pre-Ironwood servers
+    /// omit the field.
+    #[serde(default = "legacy_pool")]
+    pub pool: String,
+}
+
+fn legacy_pool() -> String {
+    "orchard".to_string()
+}
+
+impl SpendabilityMetadata {
+    /// Whether this metadata describes the pool this build serves.
+    pub fn is_expected_pool(&self) -> bool {
+        self.pool == POOL
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_without_pool_reads_as_orchard() {
+        // Pre-Ironwood servers omit the field entirely. They must not be taken
+        // for Ironwood servers by default — a missing pool is an old server,
+        // not a matching one.
+        let json = r#"{
+            "earliest_height": 1687104,
+            "latest_height": 3296494,
+            "num_nullifiers": 1000000,
+            "num_buckets": 16384,
+            "phase": "Serving"
+        }"#;
+        let metadata: SpendabilityMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(metadata.pool, "orchard");
+        assert!(!metadata.is_expected_pool());
+    }
+
+    #[test]
+    fn metadata_with_ironwood_pool_is_accepted() {
+        let json = r#"{
+            "earliest_height": 3428143,
+            "latest_height": 3469096,
+            "num_nullifiers": 134734,
+            "num_buckets": 16384,
+            "phase": "Serving",
+            "pool": "ironwood"
+        }"#;
+        let metadata: SpendabilityMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(metadata.pool, POOL);
+        assert!(metadata.is_expected_pool());
+    }
 
     #[test]
     fn test_hash_to_bucket_in_range() {

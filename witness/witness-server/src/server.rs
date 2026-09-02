@@ -4,12 +4,13 @@ use crate::state::{AppState, PirState, ServerConfig, WitnessMetadata};
 use axum::routing::{get, post};
 use axum::Router;
 use commitment_tree_db::CommitmentTreeDb;
-use pir_types::{PirEngine, ServerPhase, NU5_MAINNET_ACTIVATION};
+use pir_types::{min_sync_height, PirEngine, ServerPhase, ZcashNetwork};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use witness_types::{WitnessChainEvent, L0_MAX_SHARDS, SHARD_LEAVES};
 
-const ORCHARD_PROTOCOL: i32 = 1;
+/// `ShieldedProtocol::ironwood` in the lightwalletd service definition.
+const IRONWOOD_PROTOCOL: i32 = 2;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ServerError {
@@ -87,6 +88,7 @@ pub fn rebuild_pir<P: PirEngine>(
         window_shard_count: tree.window_shard_count(),
         populated_shards: tree.populated_shards(),
         phase: ServerPhase::Serving,
+        pool: pir_types::POOL.to_string(),
     };
 
     tracing::info!(
@@ -115,14 +117,22 @@ pub fn rebuild_pir<P: PirEngine>(
 ///
 /// Returns `(CommitmentTreeDb, sync_from_height, initial_tree_size)`.
 /// If there are enough completed shards, creates a windowed tree with
-/// prefetched roots and syncs only the window. Otherwise syncs from NU5.
+/// prefetched roots and syncs only the window. Otherwise syncs from NU6.3
+/// activation.
+///
+/// Ironwood completes far fewer shards than Orchard did (2 on mainnet as of
+/// height 3,469,041), so the full-sync branch is the common one until the pool
+/// grows; it covers only the blocks since NU6.3 activation.
 async fn prepare_tree(
     client: &mut chain_ingest::LwdClient,
+    network: Option<ZcashNetwork>,
     tip_height: u64,
     window_shard_limit: usize,
 ) -> Result<(CommitmentTreeDb, u64, Option<u32>)> {
     let window_shard_limit = window_shard_limit.clamp(1, L0_MAX_SHARDS);
-    let subtree_roots = client.get_subtree_roots(ORCHARD_PROTOCOL, 0, 65535).await?;
+    let subtree_roots = client
+        .get_subtree_roots(IRONWOOD_PROTOCOL, 0, 65535)
+        .await?;
     let num_completed = subtree_roots.len();
 
     tracing::info!(
@@ -185,12 +195,12 @@ async fn prepare_tree(
 
         Ok((tree, sync_from, initial_tree_size))
     } else {
-        let floor = min_sync_height(tip_height);
+        let floor = min_sync_height(network, tip_height);
         tracing::info!(
             completed_shards = num_completed,
             window_shard_limit,
             sync_from = floor,
-            "full sync from NU5 (fewer than {} completed shards)",
+            "full sync from NU6.3 activation (fewer than {} completed shards)",
             window_shard_limit,
         );
         Ok((CommitmentTreeDb::new(), floor, None))
@@ -201,14 +211,14 @@ fn completing_block_spillover(
     block: &chain_ingest::proto::CompactBlock,
     leaf_offset: u64,
 ) -> Vec<[u8; 32]> {
-    // `orchard_commitment_tree_size` is the cumulative size after this block,
+    // `ironwood_commitment_tree_size` is the cumulative size after this block,
     // so it tells us how many of this block's commitments landed inside the
     // current window beyond `leaf_offset`.
     let all = commitment_ingest::parser::extract_commitments(block);
     let end_tree_size = block
         .chain_metadata
         .as_ref()
-        .map_or(0u64, |m| m.orchard_commitment_tree_size as u64);
+        .map_or(0u64, |m| m.ironwood_commitment_tree_size as u64);
     spillover_from_commitments(&all, end_tree_size, leaf_offset)
 }
 
@@ -260,15 +270,6 @@ fn validate_prior_tree_size(
         expected,
         actual,
     })
-}
-
-/// Lowest block height we'll ever sync.
-fn min_sync_height(tip_height: u64) -> u64 {
-    if tip_height >= NU5_MAINNET_ACTIVATION {
-        NU5_MAINNET_ACTIVATION
-    } else {
-        1
-    }
 }
 
 /// Sync a block range into the tree, reporting progress via `phase`.
@@ -350,6 +351,11 @@ pub async fn run<P: PirEngine + 'static>(config: ServerConfig, engine: Arc<P>) -
         .await
         .map_err(commitment_ingest::ingest::IngestError::from)?;
 
+    let network = client
+        .detect_ironwood_network()
+        .await
+        .map_err(commitment_ingest::ingest::IngestError::from)?;
+
     // Try loading from snapshot first
     let (mut tree, forward_start, initial_tree_size) =
         match snapshot_io::load_snapshot(&config.data_dir).await {
@@ -368,10 +374,18 @@ pub async fn run<P: PirEngine + 'static>(config: ServerConfig, engine: Arc<P>) -
                 );
                 (t, resume, ts)
             }
-            Err(_) => {
-                // No snapshot — use GetSubtreeRoots for smart sync
+            Err(e) => {
+                // No usable snapshot — rebuild from scratch. An Orchard-era
+                // snapshot lands here too (its magic is rejected), so say why
+                // rather than looking like a first run.
+                tracing::warn!(
+                    error = %e,
+                    data_dir = %config.data_dir.display(),
+                    "no usable snapshot; rebuilding the Ironwood tree from the chain"
+                );
                 prepare_tree(
                     &mut client,
+                    network,
                     tip_height,
                     config.effective_window_shard_limit(),
                 )
@@ -515,6 +529,11 @@ pub async fn run_sync_only<P: PirEngine + 'static>(
         .await
         .map_err(commitment_ingest::ingest::IngestError::from)?;
 
+    let network = client
+        .detect_ironwood_network()
+        .await
+        .map_err(commitment_ingest::ingest::IngestError::from)?;
+
     let (mut tree, forward_start, initial_tree_size) =
         match snapshot_io::load_snapshot(&config.data_dir).await {
             Ok(t) => {
@@ -526,9 +545,18 @@ pub async fn run_sync_only<P: PirEngine + 'static>(
                 };
                 (t, resume, ts)
             }
-            Err(_) => {
+            Err(e) => {
+                // No usable snapshot — rebuild from scratch. An Orchard-era
+                // snapshot lands here too (its magic is rejected), so say why
+                // rather than looking like a first run.
+                tracing::warn!(
+                    error = %e,
+                    data_dir = %config.data_dir.display(),
+                    "no usable snapshot; rebuilding the Ironwood tree from the chain"
+                );
                 prepare_tree(
                     &mut client,
+                    network,
                     tip_height,
                     config.effective_window_shard_limit(),
                 )
@@ -589,12 +617,12 @@ mod tests {
             hash: vec![height as u8; 32],
             prev_hash: vec![height.saturating_sub(1) as u8; 32],
             vtx: vec![CompactTx {
-                actions: tags.iter().copied().map(make_action).collect(),
+                ironwood_actions: tags.iter().copied().map(make_action).collect(),
                 ..Default::default()
             }],
             chain_metadata: Some(ChainMetadata {
-                sapling_commitment_tree_size: 0,
-                orchard_commitment_tree_size: tree_size as u32,
+                ironwood_commitment_tree_size: tree_size as u32,
+                ..Default::default()
             }),
             ..Default::default()
         }

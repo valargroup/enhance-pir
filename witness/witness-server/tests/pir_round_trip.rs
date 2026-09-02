@@ -41,7 +41,8 @@ use ypir::params::params_for_scenario_simplepir;
 use ypir::serialize::ToBytes;
 
 const LWD_ENDPOINT: &str = "https://us.zec.stardust.rest:443";
-const ORCHARD_PROTOCOL: i32 = 1;
+/// `ShieldedProtocol::ironwood` in the lightwalletd service definition.
+const IRONWOOD_PROTOCOL: i32 = 2;
 const TEST_WINDOW_SHARD_LIMIT: usize = 2;
 
 /// Canonical oracle data built directly from lightwalletd.
@@ -128,7 +129,7 @@ fn canonical_window_spillover(block: &CompactBlock, leaf_offset: u64) -> Vec<Has
     let end_tree_size = block
         .chain_metadata
         .as_ref()
-        .map(|meta| meta.orchard_commitment_tree_size as u64)
+        .map(|meta| meta.ironwood_commitment_tree_size as u64)
         .unwrap_or(0);
 
     if end_tree_size <= leaf_offset {
@@ -161,7 +162,7 @@ async fn build_canonical_reference(
         .expect("failed to connect to lightwalletd for canonical reference");
 
     let subtree_roots = client
-        .get_subtree_roots(ORCHARD_PROTOCOL, 0, 65535)
+        .get_subtree_roots(IRONWOOD_PROTOCOL, 0, 65535)
         .await
         .expect("failed to fetch subtree roots for canonical reference");
 
@@ -290,10 +291,7 @@ async fn query_server_witness(
 }
 
 /// Returns the canonical PIR row slice and row coordinates for a position.
-fn reference_decoded_row<'a>(
-    canonical: &'a CanonicalReference,
-    position: u64,
-) -> (&'a [u8], u32, u8, u8) {
+fn reference_decoded_row(canonical: &CanonicalReference, position: u64) -> (&[u8], u32, u8, u8) {
     let (shard_idx, subshard_idx, leaf_idx, row_start, row_end) =
         row_bounds(position, canonical.broadcast.window_start_shard);
     (

@@ -2371,6 +2371,7 @@ version = "0.1.0"
 dependencies = [
  "pir-types",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

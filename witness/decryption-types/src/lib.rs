@@ -1,6 +1,6 @@
 //! Types and constants for the decryption PIR subsystem.
 //!
-//! Each leaf in the decryption PIR database corresponds to a single Orchard
+//! Each leaf in the decryption PIR database corresponds to a single Ironwood
 //! action and stores the fields needed (alongside `cmx` from the witness PIR)
 //! to reconstruct a [`CompactAction`] for trial decryption:
 //!
@@ -11,6 +11,16 @@
 //! The database shares the same sub-shard geometry as the witness PIR
 //! (256 leaves per sub-shard, 256 sub-shards per shard) but with larger
 //! per-leaf entries (116 bytes vs 32 bytes for witness).
+//!
+//! The layout is unchanged from the Orchard era: Ironwood notes use V3
+//! plaintexts (lead byte `0x03` rather than Orchard's `0x02`), but
+//! `IronwoodDomain` is otherwise identical to `OrchardDomain` and the compact
+//! ciphertext prefix is still 52 bytes.
+//!
+//! **Wallets must trial-decrypt these leaves with
+//! `orchard::note_encryption::IronwoodDomain`, not `OrchardDomain`.** The wrong
+//! domain rejects every V3 plaintext and simply finds no notes — there is no
+//! error to notice.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -31,7 +41,7 @@ pub const DECRYPT_DB_ROWS: usize = L0_DB_ROWS; // 8,192
 /// Total PIR database size in bytes.
 pub const DECRYPT_DB_BYTES: usize = DECRYPT_DB_ROWS * DECRYPT_ROW_BYTES; // ~232 MB
 
-/// A single decryption PIR leaf — the data needed to trial-decrypt one Orchard
+/// A single decryption PIR leaf — the data needed to trial-decrypt one Ironwood
 /// action when paired with `cmx` from the witness PIR.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecryptionLeaf {

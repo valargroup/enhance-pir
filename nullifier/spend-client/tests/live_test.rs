@@ -6,6 +6,10 @@
 //!   2. Run this test: cargo test -p spend-client --features live --test live_test -- \
 //!      --nocapture --ignored
 //!
+//! The combined server mounts the nullifier routes under `/nullifier`, so point
+//! `PIR_SERVER_URL` at that prefix when testing against it:
+//!   PIR_SERVER_URL=http://127.0.0.1:8080/nullifier cargo test ...
+//!
 //! This test is ignored by default so it doesn't run in CI.
 
 #![cfg(feature = "live")]
@@ -15,13 +19,19 @@ use nf_ingest::LwdClient;
 use spend_client::SpendClient;
 use std::time::Instant;
 
-const SERVER_URL: &str = "http://127.0.0.1:8080";
+const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:8080";
 const LWD_URL: &str = "https://us.zec.stardust.rest:443";
+
+/// Base URL of the running spend-server. Override with `PIR_SERVER_URL` to test
+/// against a combined server, which mounts these routes under `/nullifier`.
+fn server_url() -> String {
+    std::env::var("PIR_SERVER_URL").unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string())
+}
 
 #[tokio::test]
 #[ignore]
 async fn test_live_random_nullifier_not_spent() {
-    let client = SpendClient::connect(SERVER_URL).await.unwrap();
+    let client = SpendClient::connect(&server_url()).await.unwrap();
     println!("Connected to spend-server");
     println!("  earliest_height: {}", client.earliest_height());
     println!("  latest_height:   {}", client.latest_height());
@@ -46,12 +56,12 @@ async fn test_live_real_nullifier_is_spent() {
     let (tip_height, _) = lwd.get_latest_block().await.unwrap();
     println!("Chain tip: {tip_height}");
 
-    // Scan backwards from the tip to find a block with Orchard nullifiers
+    // Scan backwards from the tip to find a block with Ironwood nullifiers
     let mut real_nf: Option<[u8; 32]> = None;
     let mut found_height = 0u64;
     let search_start = tip_height.saturating_sub(500);
 
-    println!("Searching for Orchard nullifiers in blocks {search_start}..{tip_height}");
+    println!("Searching for Ironwood nullifiers in blocks {search_start}..{tip_height}");
     let blocks = lwd.get_block_range(search_start, tip_height).await.unwrap();
 
     for block in &blocks {
@@ -72,10 +82,10 @@ async fn test_live_real_nullifier_is_spent() {
         }
     }
 
-    let real_nf = real_nf.expect("no Orchard nullifiers found in recent 500 blocks");
+    let real_nf = real_nf.expect("no Ironwood nullifiers found in recent 500 blocks");
 
     // Connect to our spend-server
-    let client = SpendClient::connect(SERVER_URL).await.unwrap();
+    let client = SpendClient::connect(&server_url()).await.unwrap();
     println!(
         "\nSpend-server covers heights {}..{}",
         client.earliest_height(),
@@ -110,7 +120,7 @@ async fn test_live_real_nullifier_is_spent() {
 #[tokio::test]
 #[ignore]
 async fn test_live_server_tracks_new_blocks() {
-    let mut client = SpendClient::connect(SERVER_URL).await.unwrap();
+    let mut client = SpendClient::connect(&server_url()).await.unwrap();
     let initial_height = client.latest_height();
     let initial_nfs = client.metadata().num_nullifiers;
     println!("Initial state: height={initial_height}, nullifiers={initial_nfs}");

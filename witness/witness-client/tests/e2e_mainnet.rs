@@ -24,7 +24,8 @@ use witness_client::reconstruct::reconstruct_witness;
 use witness_types::*;
 
 const LWD_ENDPOINT: &str = "https://us.zec.stardust.rest:443";
-const ORCHARD_PROTOCOL: i32 = 1;
+/// `ShieldedProtocol::ironwood` in the lightwalletd service definition.
+const IRONWOOD_PROTOCOL: i32 = 2;
 const BATCH_SIZE: u64 = 10_000;
 
 /// Ingest blocks in batches and append commitments to the tree.
@@ -51,7 +52,13 @@ async fn ingest_blocks(client: &mut LwdClient, tree: &mut CommitmentTreeDb, from
     }
 }
 
-/// Build a windowed tree covering the last 2 completed shards from mainnet.
+/// Build a windowed tree covering the last completed shards from mainnet.
+///
+/// The window is at most 2 shards wide, but always leaves at least one shard
+/// behind it as a prefetched root — that prefix is what makes this a *windowed*
+/// tree rather than a full one, which is the thing under test. Ironwood has
+/// only 2 completed shards today, so the window is usually 1 shard wide; it
+/// widens to 2 on its own once the pool has 3.
 ///
 /// Returns `(tree, subtree_roots, num_completed)` with the tree synced through
 /// the end of the last completed shard.
@@ -63,20 +70,21 @@ async fn build_windowed_tree(
     usize,
 ) {
     let subtree_roots = client
-        .get_subtree_roots(ORCHARD_PROTOCOL, 0, 65535)
+        .get_subtree_roots(IRONWOOD_PROTOCOL, 0, 65535)
         .await
         .expect("failed to get subtree roots");
 
     let num_completed = subtree_roots.len();
     assert!(
-        num_completed >= 3,
-        "need at least 3 completed shards for this test, got {num_completed}"
+        num_completed >= 2,
+        "need at least 2 completed shards for this test, got {num_completed}"
     );
 
-    tracing::info!(num_completed, "fetched completed Orchard shard roots");
+    tracing::info!(num_completed, "fetched completed Ironwood shard roots");
 
-    // Prefetch all but the last 2 completed shards
-    let prefetch_count = num_completed - 2;
+    // Window the last shards, keeping at least one prefetched root behind it.
+    let window_shards = 2.min(num_completed - 1);
+    let prefetch_count = num_completed - window_shards;
     let prefetched: Vec<Hash> = subtree_roots[..prefetch_count]
         .iter()
         .map(|sr| {
@@ -281,6 +289,7 @@ async fn e2e_witness_roundtrip_server() {
 
     let engine_state = engine.setup(&pir_db, &scenario).unwrap();
     let metadata = WitnessMetadata {
+        pool: pir_types::POOL.to_string(),
         anchor_height,
         tree_size: tree.tree_size(),
         window_start_shard: tree.window_start_shard(),

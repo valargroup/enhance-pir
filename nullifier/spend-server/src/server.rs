@@ -5,22 +5,12 @@ use axum::routing::{get, post};
 use axum::Router;
 use hashtable_pir::HashTableDb;
 use spend_types::{
-    ChainEvent, PirEngine, ServerPhase, SpendabilityMetadata, NU5_MAINNET_ACTIVATION, NUM_BUCKETS,
+    min_sync_height, ChainEvent, PirEngine, ServerPhase, SpendabilityMetadata, NUM_BUCKETS,
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
 const BACKFILL_BATCH: u64 = 50_000;
-
-/// Lowest block height we'll ever sync. On mainnet this is the NU5 activation
-/// height; on test chains whose tip is below that, fall back to height 1.
-fn min_sync_height(tip_height: u64) -> u64 {
-    if tip_height >= NU5_MAINNET_ACTIVATION {
-        NU5_MAINNET_ACTIVATION
-    } else {
-        1
-    }
-}
 
 #[derive(thiserror::Error, Debug)]
 pub enum ServerError {
@@ -78,6 +68,7 @@ pub fn rebuild_pir<P: PirEngine>(
         num_nullifiers: hashtable.len() as u64,
         num_buckets: NUM_BUCKETS as u64,
         phase: ServerPhase::Serving,
+        pool: spend_types::POOL.to_string(),
     };
 
     tracing::info!(
@@ -173,6 +164,11 @@ pub async fn run<P: PirEngine + 'static>(config: ServerConfig, engine: Arc<P>) -
         .await
         .map_err(nf_ingest::ingest::IngestError::from)?;
 
+    let network = client
+        .detect_ironwood_network()
+        .await
+        .map_err(nf_ingest::ingest::IngestError::from)?;
+
     // Load snapshot or fresh start
     let (mut hashtable, from_snapshot) = match snapshot_io::load_snapshot(&config.data_dir).await {
         Ok(ht) => {
@@ -180,11 +176,20 @@ pub async fn run<P: PirEngine + 'static>(config: ServerConfig, engine: Arc<P>) -
             tracing::info!(resume_height = resume, "loaded snapshot");
             (ht, true)
         }
-        Err(_) => (HashTableDb::new(), false),
+        Err(e) => {
+            // An Orchard-era snapshot is rejected by the version check and
+            // lands here; say why rather than looking like a first run.
+            tracing::warn!(
+                error = %e,
+                data_dir = %config.data_dir.display(),
+                "no usable snapshot; rebuilding the Ironwood hash table from the chain"
+            );
+            (HashTableDb::new(), false)
+        }
     };
 
     // Sync mode: catch up to tip, then backfill if we need more nullifiers
-    let floor = min_sync_height(tip_height);
+    let floor = min_sync_height(network, tip_height);
     let forward_start = if from_snapshot {
         hashtable
             .latest_height()
@@ -363,12 +368,26 @@ pub async fn run_sync_only<P: PirEngine + 'static>(
         .await
         .map_err(nf_ingest::ingest::IngestError::from)?;
 
+    let network = client
+        .detect_ironwood_network()
+        .await
+        .map_err(nf_ingest::ingest::IngestError::from)?;
+
     let (mut hashtable, from_snapshot) = match snapshot_io::load_snapshot(&config.data_dir).await {
         Ok(ht) => (ht, true),
-        Err(_) => (HashTableDb::new(), false),
+        Err(e) => {
+            // An Orchard-era snapshot is rejected by the version check and
+            // lands here; say why rather than looking like a first run.
+            tracing::warn!(
+                error = %e,
+                data_dir = %config.data_dir.display(),
+                "no usable snapshot; rebuilding the Ironwood hash table from the chain"
+            );
+            (HashTableDb::new(), false)
+        }
     };
 
-    let floor = min_sync_height(tip_height);
+    let floor = min_sync_height(network, tip_height);
     let forward_start = if from_snapshot {
         hashtable
             .latest_height()

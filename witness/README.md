@@ -23,32 +23,51 @@ PIR is a **sync-time accelerator**, not a permanent replacement for the ShardTre
 
 ## Key data: shard geometry and 6-month volume
 
-Orchard uses depth 32 with `SHARD_HEIGHT = 16`, so each shard covers 2^16 = 65,536 leaves. Sapling is out of scope — its volume is declining (~13K notes/month vs Orchard's ~100K/month) and the pool is expected to sunset.
+Ironwood uses depth 32 with `SHARD_HEIGHT = 16`, so each shard covers 2^16 = 65,536 leaves — the
+same geometry Orchard used, and the same Sinsemilla hash (`MerkleHashOrchard` is pool-agnostic).
+Sapling and Orchard are both out of scope: Ironwood is the pool new value flows into, and Orchard
+is what it turnstiles out of.
 
-At the current mainnet rate of ~3,465 Orchard notes/day (measured April 2026):
+Ironwood activated at NU6.3 (mainnet height **3,428,143**) with an empty tree, so unlike Orchard
+there is no 50M-note history to bootstrap over. At the observed rate of ~3,772 Ironwood
+notes/day (measured September 2026):
 
-- One shard fills in **~19 days**
-- 6-month window: **~623,694 notes = ~9.5 shards**
-- Total leaf data for 6 months: 623,694 × 32 = **~19.5 MB**
-- Total populated shards on mainnet: **~761 completed + 1 frontier** (= ~49.9M cumulative notes / 65,536 per shard)
+- One shard fills in **~17 days**
+- 6-month window: **~688,000 notes ≈ 10.5 shards**
+- Total populated shards on mainnet: **2 completed + 1 frontier** (134,545 cumulative notes / 65,536 per shard)
 
-| Period (heights) | Orchard notes | Sapling notes | Orchard/day |
-|------------------|--------------|---------------|-------------|
-| 3,089,134 → 3,123,694 | 129,776 | 15,732 | 4,326 |
-| 3,123,694 → 3,158,254 | 144,472 | 14,305 | 4,816 |
-| 3,158,254 → 3,192,814 | 84,360 | 12,687 | 2,812 |
-| 3,192,814 → 3,227,374 | 83,549 | 12,455 | 2,785 |
-| 3,227,374 → 3,261,934 | 103,900 | 12,841 | 3,463 |
-| 3,261,934 → 3,296,494 | 77,637 | 12,653 | 2,588 |
-| **Total** | **623,694** | **80,673** | **~3,465 avg** |
+| Period (heights) | Ironwood notes | Orchard notes | Ironwood/day |
+|------------------|---------------|---------------|--------------|
+| 3,428,143 → 3,438,000 | 29,256 | 90,941 | 3,404 |
+| 3,438,000 → 3,448,000 | 28,509 | 58,640 | 3,269 |
+| 3,448,000 → 3,458,000 | 35,253 | 41,249 | 4,043 |
+| 3,458,000 → 3,469,040 | 41,527 | 20,961 | 4,310 |
+| **Total (since activation)** | **134,545** | **211,791** | **~3,772 avg** |
 
-The Orchard commitment tree is **append-only** — notes are added sequentially from left to right, so the tree fills from position 0 onward. "Populated" means the shard contains at least one real note commitment: shards 0 through 760 are fully completed (all 65,536 leaf slots filled), shard 761 is the **frontier** (partially filled, currently receiving new notes), and shards 762 through 65,535 are completely empty. The count grows slowly — one new shard completes roughly every 19 days, adding 32 bytes to the cap broadcast. For the cap tree, the client fills unpopulated slots with `MerkleHashOrchard::empty_root(Level::from(16))` — a precomputed constant — so only the ~762 real roots contribute meaningful hashes.
+Ironwood's rate is rising while Orchard's falls, as expected during the turnstile migration.
 
-The small 6-month volume makes a three-tier design unnecessary. The design uses a single broadcast + single PIR tier. L0 is sized at 8,192 rows (32 shards, ~2.1M notes, 64 MB), covering ~1.7 years at current rates.
+The Ironwood commitment tree is **append-only** — notes are added sequentially from left to right,
+so the tree fills from position 0 onward. "Populated" means the shard contains at least one real
+note commitment: shards 0 and 1 are fully completed (all 65,536 leaf slots filled), shard 2 is the
+**frontier** (partially filled, currently receiving new notes), and shards 3 through 65,535 are
+completely empty. The count grows slowly — one new shard completes roughly every 17 days, adding
+32 bytes to the cap broadcast. For the cap tree, the client fills unpopulated slots with
+`MerkleHashOrchard::empty_root(Level::from(16))` — a precomputed constant — so only the handful of
+real roots contribute meaningful hashes.
+
+The small volume makes a three-tier design unnecessary. The design uses a single broadcast + single
+PIR tier. L0 is sized at 8,192 rows (32 shards, ~2.1M notes, 64 MB), covering ~1.5 years at current
+rates.
+
+> **Sizing note.** These constants were chosen for Orchard, where the cap held ~762 shard roots.
+> Ironwood's cap currently holds 3, so the broadcast is far smaller than the figures below and the
+> 64 MB L0 database is mostly empty padding. Everything is *correct* at this size — the tree is
+> simply young. Retuning the geometry for Ironwood scale is deliberately left to a follow-up so
+> that the pool swap stays reviewable on its own.
 
 ## Design: Broadcast + Single-Tier PIR Witness Service
 
-A server maintains the full Orchard note commitment tree (depth 32). The tree is decomposed at two depths, but only the lowest tier uses PIR:
+A server maintains the full Ironwood note commitment tree (depth 32). The tree is decomposed at two depths, but only the lowest tier uses PIR:
 
 ```
 Depth 0 (root)
@@ -86,7 +105,7 @@ The split at **depth 24** (creating 256-leaf sub-shards) balances three constrai
 
 **Why not three tiers?** An alternative design would PIR-query both the sub-shard roots (depth 16 → 24) and the leaf commitments (depth 24 → 32). But with only ~10 shards in a 6-month window, the middle tier would have ~10 rows. PIR on 10 rows is wasteful — the query/response overhead (~600 KB) dwarfs the data. Broadcasting ~80 KB instead eliminates one entire PIR round trip with no privacy cost, since all clients receive identical broadcast data.
 
-**Why this layout works well** — three properties of the Orchard tree make it amenable to this decomposition:
+**Why this layout works well** — three properties of the Ironwood tree make it amenable to this decomposition:
 
 - **Append-only**: New leaves are only added at the frontier. Once a shard fills, its data never changes. Most of the PIR database is static — only one sub-shard row mutates per block.
 - **Sparse at the top**: With ~762 shards out of 65,536 possible slots, the cap tree is mostly empty sentinels (precomputed constants). Broadcasting all real shard roots costs only ~24 KB.
@@ -97,7 +116,7 @@ The net effect: **24 of 32 siblings come free** via broadcast, and only the bott
 ### Tier parameters
 
 - **Broadcast (cap + sub-shard roots)**: Downloaded periodically by the client (cached, refreshed when stale or on verification failure).
-  - Cap: the server broadcasts all populated shard roots as an array (~762 × 32 = ~24 KB). The client rebuilds the depth-16 cap tree locally: populated positions get shard roots, the rest are `MerkleHashOrchard::empty_root(Level::from(16))`. Only ~762 leaves need hashing — ~12K Sinsemilla operations, well under 50ms on mobile.
+  - Cap: the server broadcasts all populated shard roots as an array. Sized for Orchard this was ~762 × 32 = ~24 KB; on Ironwood today it is 3 × 32 = 96 bytes, and it grows by 32 bytes roughly every 17 days. The client rebuilds the depth-16 cap tree locally: populated positions get shard roots, the rest are `MerkleHashOrchard::empty_root(Level::from(16))`. Even at Orchard's cap size only ~762 leaves needed hashing — ~12K Sinsemilla operations, well under 50ms on mobile.
   - Sub-shard roots for active window: ~80 KB at 10 shards (6-month window), up to ~256 KB at 32 shards.
   - **Total broadcast: ~104 KB initially, up to ~280 KB at capacity.** Provides **24 of 32** authentication path siblings.
 - **PIR tier (sub-shard leaf data)**: One row per populated sub-shard, padded to 8,192 rows.
@@ -197,7 +216,7 @@ Follows the same per-block rebuild cycle as the nullifier PIR server: ingest eac
 
 For each of the 8,192 sub-shards in the window, the function:
 
-1. Reads 256 leaf commitments from `self.leaves` (padding with the Orchard empty leaf sentinel for positions beyond the tree frontier)
+1. Reads 256 leaf commitments from `self.leaves` (padding with the empty leaf sentinel for positions beyond the tree frontier)
 2. Writes them into the PIR database buffer
 3. Computes the sub-shard root via Sinsemilla hashing (if not cached)
 
@@ -355,7 +374,7 @@ If a wallet's note falls outside the window, `get_witness()` returns `WitnessErr
 
 ### Scaling: LSM-style tiered PIR
 
-At current volume, L0 covers ~1.7 years. If Orchard adoption increases, L0 fills faster. The solution borrows from LSM-trees: L0 absorbs new data with per-block rebuilds, and flushes completed shards into a cold tier (L1) that rebuilds infrequently.
+At current volume, L0 covers ~1.5 years. As wallets migrate into Ironwood, L0 fills faster. The solution borrows from LSM-trees: L0 absorbs new data with per-block rebuilds, and flushes completed shards into a cold tier (L1) that rebuilds infrequently.
 
 |                    | L0 (hot)    | L1 (cold) |
 | ------------------ | ----------- | --------- |
@@ -404,7 +423,7 @@ spendability-pir/
 ### Shared crate extraction
 
 - `shared/pir-types` — extracted from `spend-types`: `PirEngine` trait, `YpirScenario`, `ServerPhase`, `NU5_MAINNET_ACTIVATION`, `CONFIRMATION_DEPTH`. What stays in `nullifier/spend-types`: `NUM_BUCKETS`, `BUCKET_CAPACITY`, `ENTRY_BYTES`, `BUCKET_BYTES`, `DB_BYTES`, `hash_to_bucket`, `ChainEvent`, `NewBlock`, `OrphanedBlock`, `SpendabilityMetadata`.
-- `shared/chain-ingest` — extracted from `nf-ingest`: `LwdClient` (`client.rs`), `ChainTracker`/`ChainAction` (`chain_tracker.rs`), proto types (`proto.rs` + generated code). What stays in `nullifier/nf-ingest`: `parser.rs` (`extract_nullifiers`), `ingest.rs` (nullifier-specific sync/follow). The witness-side `commitment-ingest` writes its own sync/follow loop using `LwdClient` + `ChainTracker`, extracting `CompactOrchardAction.cmx` instead of nullifiers.
+- `shared/chain-ingest` — extracted from `nf-ingest`: `LwdClient` (`client.rs`), `ChainTracker`/`ChainAction` (`chain_tracker.rs`), proto types (`proto.rs` + generated code). What stays in `nullifier/nf-ingest`: `parser.rs` (`extract_nullifiers`), `ingest.rs` (nullifier-specific sync/follow). The witness-side `commitment-ingest` writes its own sync/follow loop using `LwdClient` + `ChainTracker`, extracting `cmx` from `CompactTx.ironwoodActions` instead of nullifiers. (Ironwood actions reuse the `CompactOrchardAction` wire message; only the field they arrive in differs.)
 
 ### Workspace dependencies
 
@@ -430,9 +449,15 @@ axum = "0.7"
 arc-swap = "1"
 ```
 
-### Orchard: use the Zakura fork, not upstream
+### Orchard crate: use the Zakura fork, not upstream
 
-`commitment-tree-db` and `witness-client` depend on Orchard for Sinsemilla
+This is a dependency on the *`orchard` crate*, not on the Orchard *pool*. The
+crate's `tree` module is pool-agnostic — there is a single
+`MERKLE_CRH_PERSONALIZATION` with no Ironwood variant — so `MerkleHashOrchard`
+is exactly the right Sinsemilla hash for the Ironwood commitment tree too. The
+pool swap required no change here.
+
+`commitment-tree-db` and `witness-client` depend on the crate for Sinsemilla
 Merkle hashing (`MerkleHashOrchard`), and must take it from the Zakura fork:
 
 ```toml
@@ -455,6 +480,10 @@ unifies with whatever exact version the wallet layer pins.
 depends on the crates.io release, so it stays as-is, matched to the `0.8.2` that
 `zakura-client-backend` requires.
 
+`zakura-orchard` 1.0.1 already carries Ironwood support (`ValuePool::Ironwood`,
+`BundleVersion::ironwood_v3()`, `IronwoodDomain`), so no version bump was needed
+for the pool migration.
+
 The fork's MSRV (`rust-version = 1.91`, edition 2024) is what sets this
 workspace's toolchain pin in `rust-toolchain.toml`.
 
@@ -475,7 +504,7 @@ Phase 0 reorganizes the existing crates into `nullifier/` without changing any c
   - `PirWitness { position: Position, siblings: [MerkleHashOrchard; 32], anchor_height: BlockHeight, anchor_root: MerkleHashOrchard }` — complete witness bundle. Contains everything needed to convert to `MerklePath<MerkleHashOrchard>` and to verify/store in the wallet. `position` determines left/right merge direction at each level; `anchor_root` is for self-verification.
   - `CapData` — serialized shard roots for cap tree reconstruction.
   - `BroadcastData` — cap + sub-shard roots + `window_start_shard` + `window_shard_count` + `anchor_height`.
-- **`commitment-ingest`**: Depends on `chain-ingest` for `LwdClient`, `ChainTracker`. Extracts Orchard note commitments (`CompactOrchardAction.cmx`). Feeds them into the tree builder.
+- **`commitment-ingest`**: Depends on `chain-ingest` for `LwdClient`, `ChainTracker`. Extracts Ironwood note commitments (`cmx` from `CompactTx.ironwoodActions`). Feeds them into the tree builder.
 - **`commitment-tree-db`**: In-memory Merkle tree. Internal nodes use `MerkleHashOrchard::combine(level, left, right)` (Sinsemilla hash); empty subtrees use `MerkleHashOrchard::empty_root(level)` (level-dependent). Requires the `orchard` crate. Key operations:
   - `append_commitments(height, commitments)` — extend the tree
   - `rollback_to(height)` — handle reorgs
@@ -505,11 +534,11 @@ Before any wallet integration, the PIR witness system must pass an end-to-end te
 
 Validates tree construction, sub-shard decomposition, and witness reconstruction without YPIR overhead.
 
-1. `commitment-ingest` syncs the Orchard tree from lightwalletd up to target height H.
-2. Pick a known Orchard note commitment at position P (from a compact block's `CompactOrchardAction.cmx`).
+1. `commitment-ingest` syncs the Ironwood tree from lightwalletd up to target height H.
+2. Pick a known Ironwood note commitment at position P (from a compact block's `ironwoodActions[i].cmx`).
 3. `commitment-tree-db` builds the tree, produces broadcast data and raw PIR row bytes.
 4. Look up the sub-shard row directly by index (no YPIR). Reconstruct the 32-sibling authentication path.
-5. Verify against `GetTreeState(H)`: deserialize `orchardTree` frontier, call `.root()`, confirm the authentication path produces this root.
+5. Verify against `GetTreeState(H)`: deserialize the `ironwoodTree` frontier, call `.root()`, confirm the authentication path produces this root.
 6. Cross-validate against a local `ShardTree`: confirm paths match byte-for-byte.
 
 **Test B: full PIR round-trip (slow, YPIR)**
@@ -547,13 +576,17 @@ zcash_client_sqlite = { package = "zakura-client-sqlite", features = ["spendabil
 
 ### Coin selection gate bypass
 
-The `shard_scanned_condition` in `wallet/common.rs` governs whether a note's shard must be fully scanned before the note is selected as spendable. With `sync-witness-pir`, Orchard notes that have a row in `pir_witness_data` bypass this gate — the PIR witness provides the authentication path that the incomplete shard cannot.
+The `shard_scanned_condition` in `wallet/common.rs` governs whether a note's shard must be fully scanned before the note is selected as spendable. With `sync-witness-pir`, Ironwood notes that have a row in `pir_witness_data` bypass this gate — the PIR witness provides the authentication path that the incomplete shard cannot.
 
 This is distinct from the `unscanned_tip_exists` bypass (which is tied to `spendability-pir` and skips the blanket rejection of all notes when unscanned ranges exist). The two flags compose: nullifier PIR removes the global gate, witness PIR removes the per-note shard-completeness gate.
 
 ### Transaction builder fallback (`zakura-client-backend`)
 
-In `data_api/wallet.rs`, when `witness_at_checkpoint_id_caching` fails for an Orchard input (shard incomplete), the builder falls back to `pir_orchard_witness_fallback`. This reads stored PIR witnesses via `get_pir_orchard_merkle_path` and constructs `MerklePath<MerkleHashOrchard>` from the stored siblings and position. All Orchard inputs in a transaction must share one anchor root — the fallback enforces this.
+In `data_api/wallet.rs`, when `witness_at_checkpoint_id_caching` fails for an Ironwood input (shard incomplete), the builder falls back to `pir_orchard_witness_fallback`. This reads stored PIR witnesses via `get_pir_orchard_merkle_path` and constructs `MerklePath<MerkleHashOrchard>` from the stored siblings and position. All shielded inputs in a transaction must share one anchor root — the fallback enforces this.
+
+> The `*_orchard_*` names here are `zakura-client-backend` API names, carried over from before
+> Ironwood; they are the wallet crate's to rename, not ours. Confirm the current names against the
+> wallet crate before wiring this up.
 
 The `WalletCommitmentTrees` trait in `data_api.rs` has a default `get_pir_orchard_merkle_path` returning `Ok(None)`; the SQLite implementation overrides it when `sync-witness-pir` is enabled.
 
@@ -609,11 +642,15 @@ Nullifier PIR comparison: ~56 MB database / ~3.3 MB bandwidth. Witness PIR per-q
 
 ## Method (volume analysis)
 
-The measurements use `orchardCommitmentTreeSize` from `ChainMetadata` in compact blocks via lightwalletd (`us.zec.stardust.rest:443`), collected April 2026. Each Orchard action produces one nullifier and one note commitment, so tree size growth equals the number of Orchard actions.
+The measurements use `ironwoodCommitmentTreeSize` from `ChainMetadata` in compact blocks via
+lightwalletd (`zec.rocks:443`), collected September 2026. Each Ironwood action produces one
+nullifier and one note commitment, so tree size growth equals the number of Ironwood actions.
+Per-day rates are derived from block timestamps rather than an assumed block interval.
 
 | Metric | Value |
 |--------|-------|
-| Chain tip | 3,296,494 |
-| NU5 activation | 1,687,104 |
-| Cumulative Orchard notes | 49,876,639 |
-| Cumulative Sapling notes | 73,890,312 |
+| Chain tip | 3,469,040 |
+| NU6.3 (Ironwood) activation | 3,428,143 |
+| Cumulative Ironwood notes | 134,545 |
+| Cumulative Orchard notes | 50,439,671 |
+| Cumulative Sapling notes | 73,953,911 |
