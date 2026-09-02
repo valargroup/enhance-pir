@@ -61,7 +61,7 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets
+      - run: cargo clippy --workspace --all-targets --all-features
 
   test-nullifier:
     name: Test (nullifier)
@@ -202,10 +202,42 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - run: cargo test --workspace --all-features --release --lib
 
+  test-ipir:
+    name: Test (IPIR)
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.91.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ipir
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      # IPIR is what production ships (see deploy.yml / release.yml), but the
+      # other jobs either omit the feature or pass --lib, so nothing else runs
+      # these integration tests. Release matters: the offline precomputation
+      # takes minutes in a debug build.
+      - name: IPIR integration tests
+        run: >-
+          cargo test
+          -p spend-server
+          -p witness-server
+          -p spend-client
+          --features ipir
+          --release
+          --test ipir_test --test end_to_end
+
   notify-slack:
     name: Slack Notification
     if: ${{ always() && github.ref == 'refs/heads/main' && github.event_name == 'push' && contains(join(needs.*.result, ','), 'failure') }}
-    needs: [lint, test-nullifier, test-witness, test-tree-correctness, test-pir-round-trip, test-ypir]
+    needs: [lint, test-nullifier, test-witness, test-tree-correctness, test-pir-round-trip, test-ypir, test-ipir]
     runs-on: ubuntu-latest
     steps:
       - name: Notify Slack on failure
@@ -232,7 +264,7 @@ jobs:
                 },
                 {
                   "type": "section",
-                  "text": { "type": "mrkdwn", "text": "*Job Results:*\nLint: `${{ needs.lint.result }}` | Nullifier: `${{ needs.test-nullifier.result }}` | Witness: `${{ needs.test-witness.result }}` | Tree: `${{ needs.test-tree-correctness.result }}` | PIR: `${{ needs.test-pir-round-trip.result }}` | YPIR: `${{ needs.test-ypir.result }}`" }
+                  "text": { "type": "mrkdwn", "text": "*Job Results:*\nLint: `${{ needs.lint.result }}` | Nullifier: `${{ needs.test-nullifier.result }}` | Witness: `${{ needs.test-witness.result }}` | Tree: `${{ needs.test-tree-correctness.result }}` | PIR: `${{ needs.test-pir-round-trip.result }}` | YPIR: `${{ needs.test-ypir.result }}` | IPIR: `${{ needs.test-ipir.result }}`" }
                 }
               ]
             }

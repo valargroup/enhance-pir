@@ -58,6 +58,28 @@ pub async fn params<P: PirEngine + 'static>(
     Json(state.scenario.clone())
 }
 
+/// Snapshot-constant public parameters clients need to decode responses.
+///
+/// For IPIR these are the `c1` rows, which used to ride along with every
+/// answer. Serving them once here is most of the response-size win, and every
+/// answer carries the epoch naming which set it was produced under so a client
+/// can tell when its cached copy has gone stale.
+pub async fn public_params<P: PirEngine + 'static>(
+    State(state): State<Arc<AppState<P>>>,
+) -> Response {
+    let pir = state.live_pir.load();
+    let pir_state = match pir.as_ref() {
+        Some(s) => s,
+        None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+        state.engine.public_params(&pir_state.engine_state),
+    )
+        .into_response()
+}
+
 pub async fn query<P: PirEngine + 'static>(
     State(state): State<Arc<AppState<P>>>,
     body: Bytes,

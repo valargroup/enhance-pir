@@ -3,8 +3,9 @@ use serde::{Deserialize, Serialize};
 // Re-export shared PIR types so existing consumers (spend-server, nf-ingest)
 // continue to compile without import changes.
 pub use pir_types::{
-    min_sync_height, PirEngine, ServerPhase, YpirScenario, ZcashNetwork, CONFIRMATION_DEPTH,
-    IPIR_SETUP_SEED, NU6_3_MAINNET_ACTIVATION, NU6_3_TESTNET_ACTIVATION, POOL,
+    min_sync_height, public_params_epoch, split_epoch, PirEngine, ServerPhase, YpirScenario,
+    ZcashNetwork, CONFIRMATION_DEPTH, IPIR_SETUP_SEED, NU6_3_MAINNET_ACTIVATION,
+    NU6_3_TESTNET_ACTIVATION, PIR_EPOCH_BYTES, POOL,
 };
 
 pub const TARGET_SIZE: usize = 1_000_000;

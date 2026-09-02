@@ -47,8 +47,46 @@ fn query_for_bucket(engine: &IpirPirEngine, bucket_idx: usize) -> (Vec<u8>, ipir
         client.generate_fresh_query_simplepir(&offline_query_polys, bucket_idx);
     let mut query_bytes =
         serialize_packing_keys(client.rlwe_params(), &packing_keys).expect("serialize keys");
-    query_bytes.extend(query.to_packed_bytes(client.rlwe_params().q));
+    query_bytes
+        .extend(query.to_switched_bytes(client.rlwe_params().q, engine.ypir_params().query_bits));
     (query_bytes, seed)
+}
+
+/// Decode a server answer the way a real client does.
+///
+/// The response carries only `c2` behind an epoch tag; `c1` comes from the
+/// engine's published parameters, which is what `/public-params` serves.
+fn decode(
+    engine: &IpirPirEngine,
+    state: &<IpirPirEngine as PirEngine>::ServerState,
+    seed: ipir_sp::IPIRSeed,
+    response: &[u8],
+) -> Vec<u8> {
+    let published_bytes = engine.public_params(state);
+    assert!(
+        !published_bytes.is_empty(),
+        "engine must publish c1 rows; an empty body means public_params was not forwarded",
+    );
+
+    let rlwe = engine.rlwe_params();
+    let blocks = engine.ypir_params().db_cols / rlwe.d;
+    assert_eq!(
+        published_bytes.len(),
+        blocks * ipir_sp::modulus_switch::published_c1_len(rlwe.d, rlwe.q),
+        "published c1 must be one full-precision row per output block",
+    );
+    let published_c1 =
+        ipir_sp::modulus_switch::recover_published_c1(&published_bytes, rlwe.d, blocks, rlwe.q);
+
+    let (epoch, body) = spend_types::split_epoch(response).expect("response carries an epoch tag");
+    assert_eq!(
+        epoch,
+        spend_types::public_params_epoch(&published_bytes),
+        "response epoch must name the parameters it decodes against",
+    );
+
+    let client = ipir_sp::IPIRClient::new(rlwe, engine.ypir_params());
+    client.decode_response_simplepir(seed, &published_c1, body)
 }
 
 #[test]
@@ -64,8 +102,7 @@ fn test_ipir_roundtrip_found() {
     let (query_bytes, seed) = query_for_bucket(&engine, bucket_idx);
     let response = engine.answer_query(&state, &query_bytes).unwrap();
 
-    let client = ipir_sp::IPIRClient::new(engine.rlwe_params(), engine.ypir_params());
-    let decoded = client.decode_response_simplepir(seed, &response);
+    let decoded = decode(&engine, &state, seed, &response);
     assert!(
         decoded.len() >= BUCKET_BYTES,
         "decoded response too short: {} < {}",
@@ -94,12 +131,64 @@ fn test_ipir_roundtrip_not_found() {
     let (query_bytes, seed) = query_for_bucket(&engine, absent_bucket);
     let response = engine.answer_query(&state, &query_bytes).unwrap();
 
-    let client = ipir_sp::IPIRClient::new(engine.rlwe_params(), engine.ypir_params());
-    let decoded = client.decode_response_simplepir(seed, &response);
+    let decoded = decode(&engine, &state, seed, &response);
     let bucket_data = &decoded[..BUCKET_BYTES];
 
     let found = bucket_data
         .chunks_exact(ENTRY_BYTES)
         .any(|chunk| chunk[..32] == absent_nf[..]);
     assert!(!found, "absent nullifier should not appear in bucket");
+}
+
+/// Record what a query actually costs on the wire.
+///
+/// The point of the upgrade is bandwidth, and the two halves move in opposite
+/// directions: the response shrinks because `c1` moved out of it, while `c1`
+/// itself becomes a one-time fetch. A response that did not shrink means `c1`
+/// is still inline and the migration is incomplete.
+#[test]
+fn ipir_wire_sizes() {
+    let sc = scenario();
+    let engine = IpirPirEngine::new(&sc).unwrap();
+    let rlwe = engine.rlwe_params();
+    let ypir = engine.ypir_params();
+
+    let db = vec![0u8; NUM_BUCKETS * BUCKET_BYTES];
+    let state = engine.setup(&db, &sc).unwrap();
+    let (query_bytes, _seed) = query_for_bucket(&engine, 0);
+    let response = engine.answer_query(&state, &query_bytes).unwrap();
+    let published = engine.public_params(&state);
+
+    let blocks = ypir.db_cols / rlwe.d;
+    let keys_len = ipir_sp::serialize::serialized_packing_keys_len(rlwe);
+    let body = response.len() - spend_types::PIR_EPOCH_BYTES;
+
+    eprintln!(
+        "ipir wire: keys {keys_len} + query {} = {} up, {body} (+{} epoch) down, \
+         {} published once over {blocks} blocks",
+        query_bytes.len() - keys_len,
+        query_bytes.len(),
+        spend_types::PIR_EPOCH_BYTES,
+        published.len(),
+    );
+
+    // The query is switched down from the full modulus width.
+    assert!(
+        query_bytes.len() - keys_len < (ypir.db_rows * 56).div_ceil(8),
+        "query must be transmitted below full `q` precision",
+    );
+    // The response carries `c2` only.
+    assert_eq!(
+        body,
+        blocks * ipir_sp::modulus_switch::response_body_len(rlwe.d, ypir.q_prime_1),
+    );
+    assert!(
+        body < blocks
+            * ipir_sp::modulus_switch::switched_rlwe_response_len(
+                rlwe.d,
+                ypir.q_prime_1,
+                ypir.q_prime_2,
+            ),
+        "body-only response must beat one that inlines c1",
+    );
 }

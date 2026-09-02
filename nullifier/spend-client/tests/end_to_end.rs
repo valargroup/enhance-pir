@@ -339,3 +339,105 @@ where
     let meta = client.is_spent(&absent_nf).await.unwrap();
     assert!(meta.is_none(), "absent nullifier should not be spent");
 }
+
+/// A client must survive the server rotating its snapshot underneath it.
+///
+/// IPIR responses carry only `c2`; `c1` is snapshot-constant and cached by the
+/// client from `/public-params`. When the server swaps its database, `c1`
+/// changes, and decoding against the stale copy recovers noise rather than an
+/// error — an unspent-looking bucket, which is the dangerous direction to be
+/// wrong in. The epoch tag on every response is what turns that silent wrong
+/// answer into a refetch, and this is the only test that exercises it.
+#[tokio::test]
+#[cfg(feature = "ipir")]
+async fn test_ipir_survives_snapshot_rotation() {
+    use spend_server::state::PirState;
+    use spend_types::{hash_to_bucket, NullifierEntry, BUCKET_BYTES, ENTRY_BYTES};
+
+    let scenario = scenario();
+    let engine = Arc::new(IpirPirEngine::new(&scenario).unwrap());
+
+    // A minimal one-block chain: the rotation, not the ingest, is under test.
+    let mock = MockState::new();
+    let initial_nf = make_nf(1);
+    mock.set_blocks(vec![make_compact_block(
+        1,
+        hash_for(1),
+        hash_for(0),
+        &[initial_nf],
+    )]);
+
+    let (lwd_addr, _lwd_shutdown) = spawn_mock_lwd(mock).await;
+    let tmp = tempfile::tempdir().unwrap();
+    let config = ServerConfig {
+        target_size: spend_types::TARGET_SIZE,
+        confirmation_depth: spend_types::CONFIRMATION_DEPTH,
+        snapshot_interval: 100,
+        data_dir: tmp.path().to_path_buf(),
+        lwd_urls: vec![format!("http://{lwd_addr}")],
+        listen_addr: "127.0.0.1:0".parse().unwrap(),
+    };
+
+    let (app_state, _hashtable) = run_sync_only(config, engine.clone()).await.unwrap();
+
+    let router = build_router(app_state.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let http_addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, router).await });
+
+    // Connecting caches the first snapshot's `c1` rows.
+    let client = SpendClient::connect(&format!("http://{http_addr}"))
+        .await
+        .unwrap();
+
+    // Absent from the first snapshot, present in the second.
+    let rotated_nf = make_nf(4242);
+    assert!(
+        client.is_spent(&rotated_nf).await.unwrap().is_none(),
+        "nullifier should be absent before the rotation",
+    );
+
+    // Rotate: a different database means different `c1` rows, so the client's
+    // cached copy is now stale.
+    let mut db = vec![0u8; NUM_BUCKETS * BUCKET_BYTES];
+    let offset = hash_to_bucket(&rotated_nf) as usize * BUCKET_BYTES;
+    db[offset..offset + ENTRY_BYTES].copy_from_slice(
+        &NullifierEntry {
+            nullifier: rotated_nf,
+            spend_height: 7,
+            first_output_position: 0,
+            action_count: 1,
+        }
+        .to_bytes(),
+    );
+
+    let rotated_state = engine.setup(&db, &scenario).unwrap();
+    let metadata = app_state
+        .live_pir
+        .load()
+        .as_ref()
+        .as_ref()
+        .expect("server is serving")
+        .metadata
+        .clone();
+    app_state.live_pir.store(Arc::new(Some(PirState {
+        engine_state: rotated_state,
+        metadata,
+    })));
+
+    // The client still holds the previous snapshot's `c1`. It must notice from
+    // the response epoch, refetch, and answer against the new snapshot.
+    let meta = client.is_spent(&rotated_nf).await.unwrap();
+    assert!(
+        meta.is_some(),
+        "after rotation the client must refresh its public params and find the nullifier, \
+         not decode against stale c1 and report it unspent",
+    );
+    assert_eq!(meta.unwrap().spend_height, 7);
+
+    // And it must keep working on the new snapshot without further refetching.
+    assert!(
+        client.is_spent(&make_nf(999_999)).await.unwrap().is_none(),
+        "an absent nullifier still reads as absent after the rotation",
+    );
+}

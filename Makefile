@@ -13,9 +13,9 @@ LWD_URL   := https://us.zec.stardust.rest:443
 
 # ── Targets ──────────────────────────────────────────────────────────
 
-.PHONY: build build-nullifier build-witness \
-        run run-nullifier run-witness \
-        test test-ypir clean help
+.PHONY: build build-nullifier build-witness build-ipir \
+        run run-nullifier run-witness run-ipir \
+        test test-ypir test-ipir clean help
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -29,6 +29,9 @@ build-nullifier: ## Build spend-server with nullifier only
 
 build-witness: ## Build spend-server with witness only
 	cargo build --release -p combined-server --no-default-features --features "witness,ypir"
+
+build-ipir: ## Build spend-server with IPIR+SP — what production ships
+	cargo build --release -p combined-server --features ipir
 
 run: ## Run spend-server with both nullifier + witness (default)
 	cargo run --release -p combined-server --features ypir -- \
@@ -48,11 +51,21 @@ run-witness: ## Run spend-server with witness only
 		--data-dir $(DATA_DIR) \
 		--listen $(LISTEN)
 
+run-ipir: ## Run spend-server with IPIR+SP — what production ships
+	cargo run --release -p combined-server --features ipir -- \
+		--lwd-url $(LWD_URL) \
+		--data-dir $(DATA_DIR) \
+		--listen $(LISTEN)
+
 test: ## Run workspace tests (no YPIR)
 	cargo test --workspace
 
 test-ypir: ## Run all tests including YPIR round-trips (release mode)
 	cargo test --workspace --all-features --release
+
+test-ipir: ## Run the IPIR integration tests (release mode)
+	cargo test -p spend-server -p witness-server -p spend-client \
+		--features ipir --release --test ipir_test --test end_to_end
 
 clean: ## Remove build artifacts and data files
 	cargo clean

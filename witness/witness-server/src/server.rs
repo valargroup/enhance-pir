@@ -58,6 +58,7 @@ pub fn build_router<P: PirEngine + 'static>(state: Arc<AppState<P>>) -> Router {
         .route("/metadata", get(routes::metadata::<P>))
         .route("/broadcast", get(routes::broadcast::<P>))
         .route("/params", get(routes::params::<P>))
+        .route("/public-params", get(routes::public_params::<P>))
         .route("/query", post(routes::query::<P>))
         .with_state(state)
 }
