@@ -5,14 +5,17 @@ edition = "2021"
 
 [features]
 default = []
-ypir = []
-ipir = ["dep:ipir-sp", "dep:inspiring"]
+# YPIR is the default PIR backend: the client code selects it with
+# `cfg(not(feature = "ipir"))`, so the `ypir` crate is a hard dependency and
+# cannot be made optional. This feature exists to pull the matching backend
+# into the `spend-server` dev-dependency for the end-to-end tests.
+ypir = ["spend-server/ypir"]
+ipir = ["dep:ipir-sp", "dep:inspiring", "spend-server/ipir"]
 live = []
 
 [dependencies]
 spend-types = { path = "../spend-types" }
 ypir = { package = "valar-ypir", git = "https://github.com/valargroup/ypir.git", branch = "valar/artifact", default-features = false }
-spiral-rs = { package = "valar-spiral-rs", git = "https://github.com/valargroup/spiral-rs.git", branch = "valar/avoid-avx512" }
 ipir-sp = { git = "https://github.com/valargroup/ipir-sp.git", rev = "2bc1075aa72895fbaa99c83e964567aae317ea61", optional = true }
 inspiring = { git = "https://github.com/valargroup/ipir-sp.git", rev = "2bc1075aa72895fbaa99c83e964567aae317ea61", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
@@ -22,7 +25,7 @@ thiserror = "2"
 tracing = "0.1"
 
 [dev-dependencies]
-spend-server = { path = "../spend-server", features = ["ypir", "ipir"] }
+spend-server = { path = "../spend-server" }
 hashtable-pir = { path = "../hashtable-pir" }
 nf-ingest = { path = "../nf-ingest" }
 axum = "0.7"

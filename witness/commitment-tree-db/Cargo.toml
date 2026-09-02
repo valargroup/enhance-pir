@@ -12,6 +12,7 @@ thiserror = "2"
 tracing = "0.1"
 
 [dev-dependencies]
+pir-types = { path = "../../shared/pir-types" }
 chain-ingest = { path = "../../shared/chain-ingest" }
 commitment-ingest = { path = "../commitment-ingest" }
 tokio = { version = "1", features = ["full"] }

@@ -456,6 +456,7 @@ dependencies = [
  "commitment-ingest",
  "hex",
  "incrementalmerkletree",
+ "pir-types",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -2335,7 +2336,6 @@ dependencies = [
  "tokio-stream",
  "tonic",
  "tracing",
- "valar-spiral-rs 0.5.0",
  "valar-ypir",
 ]
 
@@ -2350,6 +2350,7 @@ dependencies = [
  "inspiring",
  "ipir-sp",
  "nf-ingest",
+ "pir-types",
  "reqwest",
  "serde",
  "serde_json",
@@ -3410,7 +3411,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "valar-spiral-rs 0.5.0",
  "valar-ypir",
  "witness-server",
  "witness-types",

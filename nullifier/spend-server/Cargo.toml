@@ -28,6 +28,7 @@ ipir-sp = { git = "https://github.com/valargroup/ipir-sp.git", rev = "2bc1075aa7
 inspiring = { git = "https://github.com/valargroup/ipir-sp.git", rev = "2bc1075aa72895fbaa99c83e964567aae317ea61", optional = true }
 
 [dev-dependencies]
+pir-types = { path = "../../shared/pir-types" }
 tempfile = "3"
 reqwest = { version = "0.12", features = ["json"] }
 tonic = "0.12"

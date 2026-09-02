@@ -189,6 +189,64 @@ pub fn split_epoch(response: &[u8]) -> Option<([u8; PIR_EPOCH_BYTES], &[u8])> {
     Some((tag.try_into().expect("split at PIR_EPOCH_BYTES"), body))
 }
 
+// ── Test tiering ─────────────────────────────────────────────────────
+//
+// The default test tier is hermetic: no network, no PIR crypto setup, and it
+// must stay fast enough for a tight edit/test loop. Anything that reaches
+// mainnet lightwalletd, builds a multi-megabyte PIR database, or runs on a
+// wall clock is opt-in through one of the two gates below.
+//
+// See CLAUDE.md for the full policy.
+
+/// True when the opt-in slow test tier is enabled via `PIR_SLOW_TESTS`.
+///
+/// Slow means "needs the network, or takes minutes": mainnet ingest, full PIR
+/// round-trips, sustained throughput runs.
+pub fn slow_tests_enabled() -> bool {
+    std::env::var_os("PIR_SLOW_TESTS").is_some()
+}
+
+/// True when the opt-in benchmark tier is enabled via `PIR_BENCH`.
+///
+/// Benchmarks are separate from slow tests because they fail differently:
+/// they need gigabytes of RAM and produce timings rather than pass/fail
+/// signal, so they are never appropriate for CI.
+pub fn bench_tests_enabled() -> bool {
+    std::env::var_os("PIR_BENCH").is_some()
+}
+
+/// Return early from a test unless `PIR_SLOW_TESTS` is set.
+///
+/// Place as the first statement of any test that touches the network or takes
+/// more than a few seconds. The skip is printed so a skipped run is visibly
+/// distinct from a passing one.
+#[macro_export]
+macro_rules! skip_unless_slow {
+    () => {
+        if !$crate::slow_tests_enabled() {
+            eprintln!(
+                "SKIP {}: slow test; set PIR_SLOW_TESTS=1 to run it",
+                module_path!()
+            );
+            return;
+        }
+    };
+}
+
+/// Return early from a benchmark unless `PIR_BENCH` is set.
+#[macro_export]
+macro_rules! skip_unless_bench {
+    () => {
+        if !$crate::bench_tests_enabled() {
+            eprintln!(
+                "SKIP {}: benchmark; set PIR_BENCH=1 to run it",
+                module_path!()
+            );
+            return;
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

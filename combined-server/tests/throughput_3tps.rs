@@ -86,6 +86,7 @@ const REBUILD_BUDGET_3TPS: f64 = 20.0;
 
 #[test]
 fn rebuild_under_20s_at_3tps() {
+    pir_types::skip_unless_slow!();
     let actions_per_tx: u32 = 2;
     let actions_per_block: u32 = 450; // 3 TPS × 2 actions/tx × 75 s
     let warmup_blocks: u64 = 10;
@@ -236,6 +237,7 @@ fn rebuild_under_20s_at_3tps() {
 /// under concurrent rebuild load.
 #[test]
 fn sustained_5tps_15s_blocks() {
+    pir_types::skip_unless_slow!();
     const BLOCK_INTERVAL_SECS: f64 = 15.0;
     const DURATION_SECS: f64 = 120.0;
     const TPS: u32 = 5;
@@ -489,6 +491,7 @@ fn sustained_5tps_15s_blocks() {
 /// 3 TPS × 2 actions/tx × 25 s blocks = 150 actions/block = 518,400/day.
 #[test]
 fn bench_scaling_ceiling() {
+    pir_types::skip_unless_bench!();
     const BLOCK_INTERVAL: f64 = 25.0;
     const MAX_DB_BYTES: usize = 2 * 1024 * 1024 * 1024; // 2 GB cap per subsystem
 
