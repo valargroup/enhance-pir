@@ -5,8 +5,8 @@ edition = "2021"
 
 [dependencies]
 witness-types = { path = "../witness-types" }
-orchard = { version = "0.11", default-features = false }
-incrementalmerkletree = "0.8"
+orchard = { package = "zakura-orchard", version = "1.0", default-features = false }
+incrementalmerkletree = "0.8.2"
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
 thiserror = "2"
 tracing = "0.1"
@@ -14,9 +14,6 @@ tracing = "0.1"
 [dev-dependencies]
 chain-ingest = { path = "../../shared/chain-ingest" }
 commitment-ingest = { path = "../commitment-ingest" }
-witness-types = { path = "../witness-types" }
-orchard = { version = "0.11", default-features = false }
-incrementalmerkletree = "0.8"
 tokio = { version = "1", features = ["full"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 hex = "0.4"

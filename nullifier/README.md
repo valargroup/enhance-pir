@@ -195,7 +195,7 @@ Orphaned nullifiers are removed instantly — the table never serves stale data 
 
 ## Wallet integration
 
-Wallet-side PIR integration spans three repositories (`zcash_client_sqlite`, `zcash-swift-wallet-sdk`, `zodl-ios`) controlled by the `spendability-pir` Cargo feature.
+Wallet-side PIR integration spans three repositories (`zakura-core/wallet-libraries`, which publishes `zakura-client-sqlite`; `zcash-swift-wallet-sdk`; and `zodl-ios`) controlled by the `spendability-pir` Cargo feature.
 
 ### Database integration
 

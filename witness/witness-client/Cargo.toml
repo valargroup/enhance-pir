@@ -11,8 +11,8 @@ ipir = ["dep:ipir-sp", "dep:inspiring"]
 [dependencies]
 witness-types = { path = "../witness-types" }
 pir-types = { path = "../../shared/pir-types" }
-orchard = { version = "0.14", default-features = false }
-incrementalmerkletree = "0.8"
+orchard = { package = "zakura-orchard", version = "1.0", default-features = false }
+incrementalmerkletree = "0.8.2"
 ypir = { package = "valar-ypir", git = "https://github.com/valargroup/ypir.git", branch = "valar/artifact", default-features = false }
 spiral-rs = { package = "valar-spiral-rs", git = "https://github.com/valargroup/spiral-rs.git", branch = "valar/avoid-avx512" }
 ipir-sp = { git = "https://github.com/valargroup/ipir-sp.git", rev = "aff18bda01125b81e3c7d197371f59b0f02f9c4e", optional = true }
