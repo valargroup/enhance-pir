@@ -1,8 +1,8 @@
 use ipir_sp::params_for_simplepir;
 use ipir_sp::serialize::{deserialize_packing_keys, serialized_packing_keys_len};
-use ipir_sp::server::{build_pack_preprocessed_blocks, IPIRServer};
+use ipir_sp::server::{build_pack_preprocessed_blocks, published_c1_rows, IPIRServer};
 use ipir_sp::YpirSchemeParams;
-use pir_types::{PirEngine, YpirScenario, IPIR_SETUP_SEED};
+use pir_types::{public_params_epoch, PirEngine, YpirScenario, IPIR_SETUP_SEED, PIR_EPOCH_BYTES};
 use thiserror::Error;
 use witness_types::SUBSHARD_ROW_BYTES;
 
@@ -19,6 +19,14 @@ pub struct IpirServerState {
     server: IPIRServer<u16>,
     pack_preprocessed: Vec<inspiring::QueryPackPreprocessed<'static>>,
     top_key_images: inspiring::TopKeyImages<'static>,
+    /// Serialized snapshot-constant `c1` rows, one per RLWE output block.
+    ///
+    /// Derived from the CRS, hence from this state's database. It lives here
+    /// rather than on the engine so that it is swapped atomically with the
+    /// database it describes and can never name the wrong snapshot.
+    published_c1: Vec<u8>,
+    /// Epoch of `published_c1`, stamped on every response.
+    epoch: [u8; PIR_EPOCH_BYTES],
 }
 
 pub struct IpirPirEngine {
@@ -78,12 +86,16 @@ impl PirEngine for IpirPirEngine {
         let pack_preprocessed = build_pack_preprocessed_blocks(self.rlwe, &offline.crs_blocks)
             .map_err(|e| IpirError::Setup(e.to_string()))?;
         let top_key_images = inspiring::TopKeyImages::build(self.rlwe);
+        let published_c1 = published_c1_rows(&pack_preprocessed, self.rlwe.q);
+        let epoch = public_params_epoch(&published_c1);
 
         Ok(IpirServerState {
             rlwe: self.rlwe,
             server,
             pack_preprocessed,
             top_key_images,
+            published_c1,
+            epoch,
         })
     }
 
@@ -115,7 +127,13 @@ impl PirEngine for IpirPirEngine {
                     &state.pack_preprocessed,
                 )
                 .map_err(|e| IpirError::Query(e.to_string()))?;
-            Ok(response)
+
+            // The response is only `c2`; it decodes against the `c1` rows this
+            // snapshot published, so say which those are.
+            let mut tagged = Vec::with_capacity(PIR_EPOCH_BYTES + response.len());
+            tagged.extend_from_slice(&state.epoch);
+            tagged.extend_from_slice(&response);
+            Ok(tagged)
         }))
         .map_err(|e| {
             let msg = e
@@ -125,6 +143,10 @@ impl PirEngine for IpirPirEngine {
                 .unwrap_or("unknown panic");
             IpirError::Query(msg.to_string())
         })?
+    }
+
+    fn public_params(&self, state: &IpirServerState) -> Vec<u8> {
+        state.published_c1.clone()
     }
 }
 

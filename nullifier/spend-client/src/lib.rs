@@ -1,12 +1,14 @@
 #[cfg(feature = "ipir")]
+use ipir_sp::modulus_switch::recover_published_c1;
+#[cfg(feature = "ipir")]
 use ipir_sp::serialize::serialize_packing_keys;
 #[cfg(feature = "ipir")]
-use ipir_sp::{params_for_simplepir, IPIRClient, IPIRSeed};
-#[cfg(feature = "ipir")]
-use spend_types::IPIR_SETUP_SEED;
+use ipir_sp::{params_for_simplepir, IPIRClient, IPIRSeed, YpirSchemeParams};
 use spend_types::{
     hash_to_bucket, SpendMetadata, SpendabilityMetadata, YpirScenario, BUCKET_BYTES, ENTRY_BYTES,
 };
+#[cfg(feature = "ipir")]
+use spend_types::{public_params_epoch, split_epoch, IPIR_SETUP_SEED, PIR_EPOCH_BYTES};
 use thiserror::Error;
 #[cfg(not(feature = "ipir"))]
 use ypir::client::YPIRClient;
@@ -25,6 +27,10 @@ pub enum SpendClientError {
     InvalidParams(String),
     #[error("query failed: {0}")]
     QueryFailed(String),
+    #[error("server public parameters kept changing under us; the snapshot is rotating faster than a query round trip")]
+    PublicParamsUnstable,
+    #[error("server response is not a tagged PIR response ({0} bytes)")]
+    MalformedResponse(usize),
     #[error(
         "server serves the {actual} pool, but this client requires {expected}; \
          point it at an Ironwood spend-server"
@@ -51,7 +57,55 @@ pub struct SpendClient {
 #[cfg(feature = "ipir")]
 struct IpirClientState {
     client: IPIRClient,
+    ypir: YpirSchemeParams,
     offline_query_polys: Vec<Vec<u64>>,
+    /// Snapshot-constant `c1` rows, refreshed when the server rotates.
+    ///
+    /// Behind a lock rather than in `&mut self` so that `is_spent` keeps its
+    /// `&self` signature; the guard is never held across an await.
+    published: std::sync::RwLock<PublishedParams>,
+}
+
+/// The server's `c1` rows and the epoch identifying them.
+#[cfg(feature = "ipir")]
+struct PublishedParams {
+    c1: Vec<Vec<u64>>,
+    epoch: [u8; PIR_EPOCH_BYTES],
+}
+
+/// Fetch and decode the server's snapshot-constant `c1` rows.
+///
+/// The blocks count is `db_cols / d` — one published row per RLWE output block
+/// — and `recover_published_c1` asserts on any other length, so a server that
+/// does not serve `/public-params` fails loudly here rather than silently
+/// decoding to noise later.
+#[cfg(feature = "ipir")]
+async fn fetch_public_params(
+    http: &reqwest::Client,
+    base_url: &str,
+    rlwe: &inspiring::RlweParams,
+    ypir: &YpirSchemeParams,
+) -> Result<PublishedParams> {
+    let resp = http.get(format!("{base_url}/public-params")).send().await?;
+
+    if resp.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE {
+        return Err(SpendClientError::ServerUnavailable);
+    }
+
+    let bytes = resp.error_for_status()?.bytes().await?;
+    let blocks = ypir.db_cols / rlwe.d;
+    let expected = blocks * ipir_sp::modulus_switch::published_c1_len(rlwe.d, rlwe.q);
+    if bytes.len() != expected {
+        return Err(SpendClientError::InvalidParams(format!(
+            "/public-params returned {} bytes, expected {expected} for {blocks} output blocks",
+            bytes.len(),
+        )));
+    }
+
+    Ok(PublishedParams {
+        epoch: public_params_epoch(&bytes),
+        c1: recover_published_c1(&bytes, rlwe.d, blocks, rlwe.q),
+    })
 }
 
 impl SpendClient {
@@ -100,9 +154,14 @@ impl SpendClient {
             let client = IPIRClient::new(&rlwe, &ypir);
             let offline_query_polys =
                 client.generate_public_query_setup_simplepir_from_seed(IPIR_SETUP_SEED);
+            // Responses carry only `c2`; `c1` is constant for the snapshot and
+            // is fetched once here instead of riding along with every answer.
+            let published = fetch_public_params(&http, &base_url, &rlwe, &ypir).await?;
             IpirClientState {
                 client,
+                ypir,
                 offline_query_polys,
+                published: std::sync::RwLock::new(published),
             }
         };
         #[cfg(not(feature = "ipir"))]
@@ -137,13 +196,20 @@ impl SpendClient {
         let bucket_idx = hash_to_bucket(nf) as usize;
 
         #[cfg(feature = "ipir")]
-        let (query_bytes, seed) = self.generate_ipir_query(bucket_idx)?;
+        let decoded = self.ipir_round_trip(bucket_idx).await?;
         #[cfg(not(feature = "ipir"))]
-        let (query_bytes, seed) = {
+        let decoded = {
             let (query, seed) = self.ypir_client.generate_query_simplepir(bucket_idx);
-            (query.to_bytes(), seed)
+            let response_bytes = self.post_query(query.to_bytes()).await?;
+            self.ypir_client
+                .decode_response_simplepir(seed, &response_bytes)
         };
 
+        Ok(scan_bucket_for_nf(&decoded, nf))
+    }
+
+    /// POST a query body and return the raw response bytes.
+    async fn post_query(&self, query_bytes: Vec<u8>) -> Result<Vec<u8>> {
         let resp = self
             .http
             .post(format!("{}/query", self.base_url))
@@ -155,20 +221,71 @@ impl SpendClient {
             return Err(SpendClientError::ServerUnavailable);
         }
 
-        let response_bytes = resp
+        Ok(resp
             .error_for_status()
             .map_err(|e| SpendClientError::QueryFailed(e.to_string()))?
             .bytes()
-            .await?;
+            .await?
+            .to_vec())
+    }
 
-        #[cfg(feature = "ipir")]
-        let decoded = self.decode_ipir_response(seed, &response_bytes);
-        #[cfg(not(feature = "ipir"))]
-        let decoded = self
-            .ypir_client
-            .decode_response_simplepir(seed, &response_bytes);
+    /// Query one row, refreshing `c1` if the server rotated its snapshot.
+    ///
+    /// A response only decodes against the `c1` rows of the snapshot that
+    /// produced it. Decoding against stale rows yields noise rather than an
+    /// error, and a garbage bucket scan reads as "not spent" — so a mismatch is
+    /// resolved by refetching and asking again, never by decoding anyway.
+    #[cfg(feature = "ipir")]
+    async fn ipir_round_trip(&self, row_idx: usize) -> Result<Vec<u8>> {
+        // Two passes: one to discover a rotation, one to answer after it. A
+        // second mismatch means the server is rotating faster than a round
+        // trip, which no amount of retrying fixes.
+        for attempt in 0..2 {
+            let (query_bytes, seed) = self.generate_ipir_query(row_idx)?;
+            let response_bytes = self.post_query(query_bytes).await?;
+            let (epoch, body) = split_epoch(&response_bytes)
+                .ok_or(SpendClientError::MalformedResponse(response_bytes.len()))?;
 
-        Ok(scan_bucket_for_nf(&decoded, nf))
+            {
+                let published = self
+                    .ipir_client
+                    .published
+                    .read()
+                    .expect("published params lock poisoned");
+                if published.epoch == epoch {
+                    return Ok(self.ipir_client.client.decode_response_simplepir(
+                        seed,
+                        &published.c1,
+                        body,
+                    ));
+                }
+            }
+
+            if attempt == 0 {
+                tracing::info!("server public parameters rotated; refreshing and retrying");
+                self.refresh_public_params().await?;
+            }
+        }
+
+        Err(SpendClientError::PublicParamsUnstable)
+    }
+
+    /// Re-fetch the server's `c1` rows after a snapshot rotation.
+    #[cfg(feature = "ipir")]
+    async fn refresh_public_params(&self) -> Result<()> {
+        let refreshed = fetch_public_params(
+            &self.http,
+            &self.base_url,
+            self.ipir_client.client.rlwe_params(),
+            &self.ipir_client.ypir,
+        )
+        .await?;
+        *self
+            .ipir_client
+            .published
+            .write()
+            .expect("published params lock poisoned") = refreshed;
+        Ok(())
     }
 
     #[cfg(feature = "ipir")]
@@ -180,15 +297,13 @@ impl SpendClient {
         let mut query_bytes =
             serialize_packing_keys(self.ipir_client.client.rlwe_params(), &packing_keys)
                 .map_err(|e| SpendClientError::QueryFailed(e.to_string()))?;
-        query_bytes.extend(query.to_packed_bytes(self.ipir_client.client.rlwe_params().q));
+        // The query is transmitted at the derived width, not at full `q`: the
+        // precision above it is noise the server's accumulator cannot use.
+        query_bytes.extend(query.to_switched_bytes(
+            self.ipir_client.client.rlwe_params().q,
+            self.ipir_client.ypir.query_bits,
+        ));
         Ok((query_bytes, seed))
-    }
-
-    #[cfg(feature = "ipir")]
-    fn decode_ipir_response(&self, seed: IPIRSeed, response_bytes: &[u8]) -> Vec<u8> {
-        self.ipir_client
-            .client
-            .decode_response_simplepir(seed, response_bytes)
     }
 
     /// Re-fetch metadata from the server to get updated heights.

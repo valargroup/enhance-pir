@@ -1,10 +1,12 @@
 #[cfg(feature = "ipir")]
+use ipir_sp::modulus_switch::recover_published_c1;
+#[cfg(feature = "ipir")]
 use ipir_sp::serialize::serialize_packing_keys;
 #[cfg(feature = "ipir")]
-use ipir_sp::{params_for_simplepir, IPIRClient, IPIRSeed};
+use ipir_sp::{params_for_simplepir, IPIRClient, IPIRSeed, YpirSchemeParams};
 use pir_types::YpirScenario;
 #[cfg(feature = "ipir")]
-use pir_types::IPIR_SETUP_SEED;
+use pir_types::{public_params_epoch, split_epoch, IPIR_SETUP_SEED, PIR_EPOCH_BYTES};
 use thiserror::Error;
 use witness_types::*;
 #[cfg(not(feature = "ipir"))]
@@ -26,6 +28,10 @@ pub enum WitnessClientError {
     InvalidParams(String),
     #[error("query failed: {0}")]
     QueryFailed(String),
+    #[error("server public parameters kept changing under us; the snapshot is rotating faster than a query round trip")]
+    PublicParamsUnstable,
+    #[error("server response is not a tagged PIR response ({0} bytes)")]
+    MalformedResponse(usize),
     #[error("position {0} is outside the server's PIR window (shards {1}..{2})")]
     PositionOutsideWindow(u64, u32, u32),
     #[error("witness verification failed for position {0}: computed root does not match anchor")]
@@ -57,7 +63,20 @@ pub struct WitnessClient {
 #[cfg(feature = "ipir")]
 struct IpirClientState {
     client: IPIRClient,
+    ypir: YpirSchemeParams,
     offline_query_polys: Vec<Vec<u64>>,
+    /// Snapshot-constant `c1` rows, refreshed when the server rotates.
+    ///
+    /// Behind a lock rather than in `&mut self` so that `get_witness` keeps its
+    /// `&self` signature; the guard is never held across an await.
+    published: std::sync::RwLock<PublishedParams>,
+}
+
+/// The server's `c1` rows and the epoch identifying them.
+#[cfg(feature = "ipir")]
+struct PublishedParams {
+    c1: Vec<Vec<u64>>,
+    epoch: [u8; PIR_EPOCH_BYTES],
 }
 
 /// The subset of the server's `/metadata` response this client needs.
@@ -74,6 +93,41 @@ struct ServerMetadata {
 
 fn legacy_pool() -> String {
     "orchard".to_string()
+}
+
+/// Fetch and decode the server's snapshot-constant `c1` rows.
+///
+/// The blocks count is `db_cols / d` — one published row per RLWE output block
+/// — and `recover_published_c1` asserts on any other length, so a server that
+/// does not serve `/public-params` fails loudly here rather than silently
+/// decoding to noise later.
+#[cfg(feature = "ipir")]
+async fn fetch_public_params(
+    http: &reqwest::Client,
+    base_url: &str,
+    rlwe: &inspiring::RlweParams,
+    ypir: &YpirSchemeParams,
+) -> Result<PublishedParams> {
+    let resp = http.get(format!("{base_url}/public-params")).send().await?;
+
+    if resp.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE {
+        return Err(WitnessClientError::ServerUnavailable);
+    }
+
+    let bytes = resp.error_for_status()?.bytes().await?;
+    let blocks = ypir.db_cols / rlwe.d;
+    let expected = blocks * ipir_sp::modulus_switch::published_c1_len(rlwe.d, rlwe.q);
+    if bytes.len() != expected {
+        return Err(WitnessClientError::InvalidParams(format!(
+            "/public-params returned {} bytes, expected {expected} for {blocks} output blocks",
+            bytes.len(),
+        )));
+    }
+
+    Ok(PublishedParams {
+        epoch: public_params_epoch(&bytes),
+        c1: recover_published_c1(&bytes, rlwe.d, blocks, rlwe.q),
+    })
 }
 
 impl WitnessClient {
@@ -129,9 +183,14 @@ impl WitnessClient {
             let client = IPIRClient::new(&rlwe, &ypir);
             let offline_query_polys =
                 client.generate_public_query_setup_simplepir_from_seed(IPIR_SETUP_SEED);
+            // Responses carry only `c2`; `c1` is constant for the snapshot and
+            // is fetched once here instead of riding along with every answer.
+            let published = fetch_public_params(&http, &base_url, &rlwe, &ypir).await?;
             IpirClientState {
                 client,
+                ypir,
                 offline_query_polys,
+                published: std::sync::RwLock::new(published),
             }
         };
         #[cfg(not(feature = "ipir"))]
@@ -192,54 +251,20 @@ impl WitnessClient {
 
         let t1 = std::time::Instant::now();
         #[cfg(feature = "ipir")]
-        let (query_bytes, seed) = self.generate_ipir_query(row_idx)?;
+        let decoded_row = self.ipir_round_trip(row_idx).await?;
         #[cfg(not(feature = "ipir"))]
-        let (query_bytes, seed) = {
+        let decoded_row = {
             let (query, seed) = self.ypir_client.generate_query_simplepir(row_idx);
-            (query.to_bytes(), seed)
+            let response_bytes = self.post_query(query.to_bytes()).await?;
+            self.ypir_client
+                .decode_response_simplepir(seed, &response_bytes)
         };
         tracing::info!(
             elapsed_ms = t1.elapsed().as_millis(),
-            query_bytes = query_bytes.len(),
+            decoded_elements = decoded_row.len(),
             row_idx,
             position,
-            "query generated",
-        );
-
-        let t2 = std::time::Instant::now();
-        let resp = self
-            .http
-            .post(format!("{}/query", self.base_url))
-            .body(query_bytes)
-            .send()
-            .await?;
-
-        if resp.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE {
-            return Err(WitnessClientError::ServerUnavailable);
-        }
-
-        let response_bytes = resp
-            .error_for_status()
-            .map_err(|e| WitnessClientError::QueryFailed(e.to_string()))?
-            .bytes()
-            .await?;
-        tracing::info!(
-            elapsed_ms = t2.elapsed().as_millis(),
-            response_bytes = response_bytes.len(),
-            "server response received",
-        );
-
-        let t3 = std::time::Instant::now();
-        #[cfg(feature = "ipir")]
-        let decoded_row = self.decode_ipir_response(seed, &response_bytes);
-        #[cfg(not(feature = "ipir"))]
-        let decoded_row = self
-            .ypir_client
-            .decode_response_simplepir(seed, &response_bytes);
-        tracing::info!(
-            elapsed_ms = t3.elapsed().as_millis(),
-            decoded_elements = decoded_row.len(),
-            "response decoded",
+            "PIR round trip complete",
         );
 
         let t4 = std::time::Instant::now();
@@ -270,15 +295,93 @@ impl WitnessClient {
         let mut query_bytes =
             serialize_packing_keys(self.ipir_client.client.rlwe_params(), &packing_keys)
                 .map_err(|e| WitnessClientError::QueryFailed(e.to_string()))?;
-        query_bytes.extend(query.to_packed_bytes(self.ipir_client.client.rlwe_params().q));
+        // The query is transmitted at the derived width, not at full `q`: the
+        // precision above it is noise the server's accumulator cannot use.
+        query_bytes.extend(query.to_switched_bytes(
+            self.ipir_client.client.rlwe_params().q,
+            self.ipir_client.ypir.query_bits,
+        ));
         Ok((query_bytes, seed))
     }
 
+    /// POST a query body and return the raw response bytes.
+    async fn post_query(&self, query_bytes: Vec<u8>) -> Result<Vec<u8>> {
+        let resp = self
+            .http
+            .post(format!("{}/query", self.base_url))
+            .body(query_bytes)
+            .send()
+            .await?;
+
+        if resp.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE {
+            return Err(WitnessClientError::ServerUnavailable);
+        }
+
+        Ok(resp
+            .error_for_status()
+            .map_err(|e| WitnessClientError::QueryFailed(e.to_string()))?
+            .bytes()
+            .await?
+            .to_vec())
+    }
+
+    /// Query one row, refreshing `c1` if the server rotated its snapshot.
+    ///
+    /// A response only decodes against the `c1` rows of the snapshot that
+    /// produced it. Decoding against stale rows yields noise rather than an
+    /// error — here it would surface as a witness that fails to verify against
+    /// the anchor — so a mismatch is resolved by refetching and asking again.
     #[cfg(feature = "ipir")]
-    fn decode_ipir_response(&self, seed: IPIRSeed, response_bytes: &[u8]) -> Vec<u8> {
-        self.ipir_client
-            .client
-            .decode_response_simplepir(seed, response_bytes)
+    async fn ipir_round_trip(&self, row_idx: usize) -> Result<Vec<u8>> {
+        // Two passes: one to discover a rotation, one to answer after it. A
+        // second mismatch means the server is rotating faster than a round
+        // trip, which no amount of retrying fixes.
+        for attempt in 0..2 {
+            let (query_bytes, seed) = self.generate_ipir_query(row_idx)?;
+            let response_bytes = self.post_query(query_bytes).await?;
+            let (epoch, body) = split_epoch(&response_bytes)
+                .ok_or(WitnessClientError::MalformedResponse(response_bytes.len()))?;
+
+            {
+                let published = self
+                    .ipir_client
+                    .published
+                    .read()
+                    .expect("published params lock poisoned");
+                if published.epoch == epoch {
+                    return Ok(self.ipir_client.client.decode_response_simplepir(
+                        seed,
+                        &published.c1,
+                        body,
+                    ));
+                }
+            }
+
+            if attempt == 0 {
+                tracing::info!("server public parameters rotated; refreshing and retrying");
+                self.refresh_public_params().await?;
+            }
+        }
+
+        Err(WitnessClientError::PublicParamsUnstable)
+    }
+
+    /// Re-fetch the server's `c1` rows after a snapshot rotation.
+    #[cfg(feature = "ipir")]
+    async fn refresh_public_params(&self) -> Result<()> {
+        let refreshed = fetch_public_params(
+            &self.http,
+            &self.base_url,
+            self.ipir_client.client.rlwe_params(),
+            &self.ipir_client.ypir,
+        )
+        .await?;
+        *self
+            .ipir_client
+            .published
+            .write()
+            .expect("published params lock poisoned") = refreshed;
+        Ok(())
     }
 
     /// Re-fetch broadcast data from the server (new anchor, updated tree).

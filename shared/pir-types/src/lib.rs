@@ -124,16 +124,92 @@ pub trait PirEngine: Send + Sync {
     ) -> Result<Self::ServerState, Self::Error>;
 
     /// Online computation: answer a single encrypted client query.
+    ///
+    /// IPIR responses are prefixed with the [`PIR_EPOCH_BYTES`]-byte epoch of
+    /// the [`PirEngine::public_params`] they must be decoded against; see
+    /// [`public_params_epoch`].
     fn answer_query(
         &self,
         state: &Self::ServerState,
         query_bytes: &[u8],
     ) -> Result<Vec<u8>, Self::Error>;
+
+    /// Snapshot-constant public parameters a client needs before it can decode
+    /// a response.
+    ///
+    /// For IPIR this is the `c1` row of every RLWE output block. It is fixed
+    /// for the life of a snapshot but costs more than half a response, so it is
+    /// fetched once from `/public-params` rather than repeated in every answer.
+    /// Engines that inline `c1` (YPIR, the stub) leave this empty.
+    fn public_params(&self, _state: &Self::ServerState) -> Vec<u8> {
+        Vec::new()
+    }
+}
+
+/// Width of the epoch tag prefixed to every PIR response.
+pub const PIR_EPOCH_BYTES: usize = 8;
+
+/// Identify a snapshot's public parameters so a client can tell when its cached
+/// copy has gone stale.
+///
+/// Servers hot-swap their database — and therefore their `c1` rows — underneath
+/// long-lived clients. A client decoding against the previous snapshot's `c1`
+/// recovers noise, not an error, and for spendability a garbage bucket scan
+/// reads as "not spent", which is the dangerous direction to be wrong in. So
+/// every response names the parameters it was produced under, and the client
+/// refetches when that disagrees with what it holds.
+///
+/// This is FNV-1a: the epoch only has to *change* when the parameters change,
+/// and both peers derive it from the same published bytes. It is not a
+/// commitment — a server that wanted to lie could simply serve wrong `c1` rows
+/// directly.
+#[must_use]
+pub fn public_params_epoch(public_params: &[u8]) -> [u8; PIR_EPOCH_BYTES] {
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x1000_0000_01b3;
+
+    let mut hash = OFFSET_BASIS;
+    for byte in public_params {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    hash.to_le_bytes()
+}
+
+/// Split a PIR response into its epoch tag and body.
+///
+/// Returns `None` if the response is too short to carry a tag, which means the
+/// server is older than the epoch protocol (or is not a PIR server at all).
+#[must_use]
+pub fn split_epoch(response: &[u8]) -> Option<([u8; PIR_EPOCH_BYTES], &[u8])> {
+    if response.len() < PIR_EPOCH_BYTES {
+        return None;
+    }
+    let (tag, body) = response.split_at(PIR_EPOCH_BYTES);
+    Some((tag.try_into().expect("split at PIR_EPOCH_BYTES"), body))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_params_epoch_changes_with_the_parameters() {
+        let a = public_params_epoch(b"snapshot-one");
+        assert_eq!(a, public_params_epoch(b"snapshot-one"), "must be stable");
+        assert_ne!(a, public_params_epoch(b"snapshot-two"));
+        // A single flipped bit anywhere has to move the tag, otherwise a stale
+        // client can decode against the wrong `c1` and never notice.
+        assert_ne!(
+            public_params_epoch(&[0u8; 64]),
+            public_params_epoch(&{
+                let mut bytes = [0u8; 64];
+                bytes[63] = 1;
+                bytes
+            }),
+        );
+        assert_eq!(a.len(), PIR_EPOCH_BYTES);
+    }
 
     #[test]
     fn server_phase_serde_roundtrip() {

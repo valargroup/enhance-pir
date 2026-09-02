@@ -23,3 +23,16 @@ valar-spiral-rs = { git = "https://github.com/valargroup/spiral-rs.git", branch 
 [profile.release]
 lto = "fat"
 codegen-units = 1
+
+# spiral-rs's Barrett reduction is intentionally wrapping: `barrett_raw_u128`
+# computes `zy * cr1 + tmp3 + carry` and relies on it wrapping modulo 2^64. That
+# is correct, but it panics under debug overflow checks whenever the input
+# exceeds 2^64 — which IPIR's fused collapse does by design, since it
+# accumulates a whole block into a u128 before reducing once. The algorithm's
+# own bound assertion still runs; only this crate's arithmetic is exempted, and
+# only so that `cargo test` in debug can exercise the IPIR path at all.
+[profile.dev.package.valar-spiral-rs]
+overflow-checks = false
+
+[profile.test.package.valar-spiral-rs]
+overflow-checks = false
