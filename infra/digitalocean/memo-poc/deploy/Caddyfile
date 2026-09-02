@@ -1,0 +1,3 @@
+memo-pir.167.99.42.60.sslip.io {
+    reverse_proxy 127.0.0.1:8080
+}

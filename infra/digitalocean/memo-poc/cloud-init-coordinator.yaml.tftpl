@@ -1,0 +1,44 @@
+#cloud-config
+package_update: true
+packages: ${packages}
+write_files:
+  - path: /usr/local/sbin/mount-zakura-volume
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      device=/dev/disk/by-id/scsi-0DO_Volume_spendability-memo-pir-zakura
+      for attempt in $(seq 1 60); do
+        if [ -b "$device" ]; then
+          mkdir -p /srv/zakura
+          if ! grep -qF "$device /srv/zakura xfs defaults,nofail 0 2" /etc/fstab; then
+            echo "$device /srv/zakura xfs defaults,nofail 0 2" >> /etc/fstab
+          fi
+          mount /srv/zakura
+          mkdir -p /srv/zakura/archive /srv/zakura/memo-data
+          exit 0
+        fi
+        sleep 5
+      done
+      echo "Zakura volume did not appear" >&2
+      exit 1
+  - path: /etc/systemd/system/mount-zakura-volume.service
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Mount Zakura DigitalOcean volume
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/mount-zakura-volume
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+runcmd:
+  - systemctl daemon-reload
+  - systemctl enable --now mount-zakura-volume.service
