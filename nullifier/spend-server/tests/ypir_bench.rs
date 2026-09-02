@@ -26,6 +26,7 @@ fn make_nf(seed: u32) -> [u8; 32] {
 
 #[test]
 fn bench_ypir_performance() {
+    pir_types::skip_unless_bench!();
     let sc = scenario();
     println!("\n=== YPIR Performance Benchmark ===");
     println!(

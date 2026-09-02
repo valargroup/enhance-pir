@@ -1,2 +1,9 @@
 [target.'cfg(target_arch = "x86_64")']
 rustflags = ["-C", "target-cpu=native"]
+
+# Shorthands for the fast inner loop. The slow and bench tiers need environment
+# variables, which aliases cannot set, so those live in the Makefile.
+[alias]
+ft = ["test", "--workspace"]
+ck = ["check", "--workspace", "--all-targets"]
+lint = ["clippy", "--workspace", "--all-targets"]

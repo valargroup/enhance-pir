@@ -304,6 +304,7 @@ fn reference_decoded_row(canonical: &CanonicalReference, position: u64) -> (&[u8
 
 #[tokio::test]
 async fn full_pir_round_trip() {
+    pir_types::skip_unless_slow!();
     tracing_subscriber::fmt()
         .with_env_filter("info")
         .with_test_writer()

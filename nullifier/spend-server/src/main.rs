@@ -67,6 +67,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "starting spend-server",
     );
 
+    // Unused only in the stub build, where no PIR backend consumes it.
+    #[cfg_attr(not(any(feature = "ipir", feature = "ypir")), allow(unused_variables))]
     let scenario = YpirScenario {
         num_items: NUM_BUCKETS as u64,
         item_size_bits: (BUCKET_BYTES * 8) as u64,

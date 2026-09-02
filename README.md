@@ -46,9 +46,10 @@ spendability-pir/
 ### Build
 
 ```bash
-cargo build                                    # library crates (no YPIR)
+cargo build                                    # library crates, no server PIR backend
 cargo build --features ypir -p spend-server    # nullifier server with YPIR
 cargo build --features ypir -p witness-server  # witness server with YPIR
+cargo build --features ipir -p combined-server # what production ships
 ```
 
 ### Run (nullifier server)
@@ -62,10 +63,17 @@ cargo run -p spend-server --features ypir --release -- \
 
 ### Test
 
+Tests are split into three tiers so the default command is always safe to run.
+See [CLAUDE.md](CLAUDE.md) for the full policy.
+
 ```bash
-cargo test --workspace                                  # fast (~10s, no YPIR)
-cargo test --workspace --all-features --release         # full (~3min, with YPIR)
+make test-fast    # hermetic: no network, no PIR crypto (~12s warm)
+make test-slow    # mainnet ingest + PIR round-trips (minutes, needs network)
+make test-bench   # throughput/scaling benchmarks (manual only, GBs of RAM)
 ```
+
+The slow and benchmark tests self-skip unless `PIR_SLOW_TESTS` / `PIR_BENCH` is
+set, so `make test-fast` can never reach mainnet lightwalletd.
 
 ## Performance (release mode)
 

@@ -20,10 +20,6 @@ members = [
 [patch.crates-io]
 valar-spiral-rs = { git = "https://github.com/valargroup/spiral-rs.git", branch = "valar/avoid-avx512" }
 
-[profile.release]
-lto = "fat"
-codegen-units = 1
-
 # spiral-rs's Barrett reduction is intentionally wrapping: `barrett_raw_u128`
 # computes `zy * cr1 + tmp3 + carry` and relies on it wrapping modulo 2^64. That
 # is correct, but it panics under debug overflow checks whenever the input
@@ -33,6 +29,35 @@ codegen-units = 1
 # only so that `cargo test` in debug can exercise the IPIR path at all.
 [profile.dev.package.valar-spiral-rs]
 overflow-checks = false
+# A named package entry does not inherit from `package."*"`, so repeat it here.
+opt-level = 3
 
 [profile.test.package.valar-spiral-rs]
 overflow-checks = false
+# A named package entry does not inherit from `package."*"`, so repeat it here.
+opt-level = 3
+
+# Deploy artifacts: maximum optimization, slow to link.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
+# Local iteration and the fast test tier. Debuginfo is trimmed to line tables
+# (full debuginfo dominates link time and bloats target/debug), while
+# dependencies are optimized so the crypto stack (Sinsemilla, pasta, blake2)
+# does not run interpreted-slow under `cargo test`.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.test]
+opt-level = 1
+
+# Release-quality codegen without the fat-LTO link, for local runs of the slow
+# tier. Not used for deploy artifacts.
+[profile.release-fast]
+inherits = "release"
+lto = "thin"
+codegen-units = 16

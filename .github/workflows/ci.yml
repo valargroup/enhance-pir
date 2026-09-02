@@ -49,6 +49,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true' || github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -68,6 +69,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.shared == 'true' || needs.changes.outputs.nullifier == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -95,6 +97,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.shared == 'true' || needs.changes.outputs.witness == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -107,9 +110,10 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      # --lib skips integration tests (e.g. commitment-tree-db/tests/tree_correctness.rs),
-      # which hit mainnet lightwalletd and take minutes. Those run in test-tree-correctness.
-      - name: Unit tests (witness crates)
+      # No --lib needed: the mainnet tests self-skip unless PIR_SLOW_TESTS is
+      # set (see CLAUDE.md), so the integration tests here are hermetic and the
+      # mock-lightwalletd coverage that --lib used to discard now runs.
+      - name: Unit + hermetic integration tests (witness crates)
         run: >-
           cargo test
           -p pir-types
@@ -119,7 +123,6 @@ jobs:
           -p commitment-tree-db
           -p witness-server
           -p witness-client
-          --lib
 
   test-tree-correctness:
     name: Test (tree correctness)
@@ -127,6 +130,9 @@ jobs:
     if: github.event_name == 'push' && (needs.changes.outputs.shared == 'true' || needs.changes.outputs.witness == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Required: these tests self-skip without it and the job would pass on nothing.
+    env:
+      PIR_SLOW_TESTS: 1
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -156,6 +162,8 @@ jobs:
     timeout-minutes: 15
     env:
       PIR_TEST_DATA_DIR: /tmp/pir-test-snapshot
+      # Required: the test self-skips without it and the job would pass on nothing.
+      PIR_SLOW_TESTS: 1
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -188,6 +196,10 @@ jobs:
     needs: changes
     if: github.event_name == 'push' && (needs.changes.outputs.shared == 'true' || needs.changes.outputs.nullifier == 'true')
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Required: the gated tests self-skip without it.
+    env:
+      PIR_SLOW_TESTS: 1
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -200,7 +212,10 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - run: cargo test --workspace --all-features --release --lib
+      # Without --lib this actually exercises the YPIR/IPIR round-trips; with
+      # --lib the job paid for a full all-features release build and then ran
+      # only the unit tests, which the other jobs already cover.
+      - run: cargo test --workspace --all-features --release
 
   test-ipir:
     name: Test (IPIR)

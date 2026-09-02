@@ -127,6 +127,7 @@ async fn build_windowed_tree(
 #[tokio::test]
 #[ignore]
 async fn e2e_witness_reconstruction_stub() {
+    pir_types::skip_unless_slow!();
     tracing_subscriber::fmt()
         .with_env_filter("info")
         .with_test_writer()
@@ -260,6 +261,7 @@ async fn e2e_witness_reconstruction_stub() {
 #[tokio::test]
 #[ignore]
 async fn e2e_witness_roundtrip_server() {
+    pir_types::skip_unless_slow!();
     tracing_subscriber::fmt()
         .with_env_filter("info")
         .with_test_writer()

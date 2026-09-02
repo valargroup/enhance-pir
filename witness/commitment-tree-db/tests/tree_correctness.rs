@@ -251,6 +251,7 @@ async fn ingest_block_range(
 
 #[tokio::test]
 async fn verify_shard_root_against_mainnet() {
+    pir_types::skip_unless_slow!();
     tracing_subscriber::fmt()
         .with_env_filter("info")
         .with_test_writer()
@@ -341,6 +342,7 @@ async fn verify_shard_root_against_mainnet() {
 
 #[tokio::test]
 async fn verify_witness_reconstruction() {
+    pir_types::skip_unless_slow!();
     tracing_subscriber::fmt()
         .with_env_filter("info")
         .with_test_writer()
