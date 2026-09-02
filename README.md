@@ -2,11 +2,16 @@
 
 Private spendability checks for Zcash wallets using single-server Private Information Retrieval (PIR). Two subsystems let a wallet determine note status instantly — privately, with sub-second latency, no sync required.
 
-**Nullifier PIR** — detects spent notes by querying a bucketed hash table of recent Orchard nullifiers via SimplePIR. Prevents stale balances and failed transactions while the wallet is behind.
+**Nullifier PIR** — detects spent notes by querying a bucketed hash table of recent Ironwood nullifiers via SimplePIR. Prevents stale balances and failed transactions while the wallet is behind.
 
 **Witness PIR** — fetches Merkle authentication paths for newly discovered notes via YPIR, enabling immediate spendability before the local ShardTree is complete.
 
 Both are sync-time accelerators: once the wallet catches up, PIR is unnecessary. If the server is unreachable, the wallet falls back to standard scanning with no loss of funds or correctness.
+
+Both subsystems cover the **Ironwood** shielded pool (NU6.3, mainnet activation height
+**3,428,143**). Orchard and Sapling are ignored. Servers require a lightwalletd speaking
+lightwallet-protocol v0.5.0 or later, and refuse to start against an endpoint that reports an
+empty Ironwood commitment tree past activation.
 
 ## Documentation
 
@@ -29,7 +34,7 @@ spendability-pir/
 │   └── spend-client/         # SpendClient with is_spent(nf) API
 ├── witness/
 │   ├── witness-types/        # Tree constants, PirWitness, BroadcastData
-│   ├── commitment-ingest/    # Orchard note commitment extraction
+│   ├── commitment-ingest/    # Ironwood note commitment extraction
 │   ├── commitment-tree-db/   # In-memory Merkle tree, sub-shard decomposition
 │   ├── witness-server/       # Axum HTTP server, broadcast + YPIR serving
 │   └── witness-client/       # WitnessClient with get_witness(position) API

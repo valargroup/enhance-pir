@@ -25,6 +25,14 @@ pub enum SpendClientError {
     InvalidParams(String),
     #[error("query failed: {0}")]
     QueryFailed(String),
+    #[error(
+        "server serves the {actual} pool, but this client requires {expected}; \
+         point it at an Ironwood spend-server"
+    )]
+    PoolMismatch {
+        expected: &'static str,
+        actual: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, SpendClientError>;
@@ -68,6 +76,16 @@ impl SpendClient {
 
         let metadata: SpendabilityMetadata = metadata_resp.error_for_status()?.json().await?;
 
+        // Refuse an Orchard-era server outright: its nullifiers answer a
+        // different question, and a false "not spent" is the dangerous
+        // direction to be wrong in.
+        if !metadata.is_expected_pool() {
+            return Err(SpendClientError::PoolMismatch {
+                expected: spend_types::POOL,
+                actual: metadata.pool.clone(),
+            });
+        }
+
         if scenario.item_size_bits < 2048 * 14 {
             return Err(SpendClientError::InvalidParams(format!(
                 "item_size_bits {} below SimplePIR minimum 28672",
@@ -98,6 +116,7 @@ impl SpendClient {
             earliest = metadata.earliest_height,
             latest = metadata.latest_height,
             nullifiers = metadata.num_nullifiers,
+            pool = %metadata.pool,
             "connected to spend-server",
         );
 
@@ -184,7 +203,14 @@ impl SpendClient {
             return Err(SpendClientError::ServerUnavailable);
         }
 
-        self.metadata = resp.error_for_status()?.json().await?;
+        let metadata: SpendabilityMetadata = resp.error_for_status()?.json().await?;
+        if !metadata.is_expected_pool() {
+            return Err(SpendClientError::PoolMismatch {
+                expected: spend_types::POOL,
+                actual: metadata.pool,
+            });
+        }
+        self.metadata = metadata;
         Ok(())
     }
 

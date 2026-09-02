@@ -1,4 +1,4 @@
-use crate::parser::{extract_nullifiers_with_meta, orchard_tree_size};
+use crate::parser::{extract_nullifiers_with_meta, ironwood_tree_size};
 use chain_ingest::{ChainAction, ChainTracker, LwdClient};
 use spend_types::{ChainEvent, NewBlock, OrphanedBlock, CONFIRMATION_DEPTH};
 use thiserror::Error;
@@ -135,7 +135,7 @@ pub async fn follow(
                     current_height = height;
                     // After a reorg, tree size for the replacement block is
                     // unreliable — reset so the next block uses chain_metadata.
-                    prev_tree_size = orchard_tree_size(block);
+                    prev_tree_size = ironwood_tree_size(block);
                     continue;
                 }
             }

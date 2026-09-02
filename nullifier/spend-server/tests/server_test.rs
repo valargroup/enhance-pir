@@ -237,7 +237,8 @@ fn make_compact_block(
     prev_hash: [u8; 32],
     nullifiers: &[[u8; 32]],
 ) -> CompactBlock {
-    let actions: Vec<CompactOrchardAction> = nullifiers
+    // Ironwood actions reuse the CompactOrchardAction wire message.
+    let ironwood_actions: Vec<CompactOrchardAction> = nullifiers
         .iter()
         .map(|nf| CompactOrchardAction {
             nullifier: nf.to_vec(),
@@ -250,11 +251,11 @@ fn make_compact_block(
         height,
         hash: hash.to_vec(),
         prev_hash: prev_hash.to_vec(),
-        vtx: if actions.is_empty() {
+        vtx: if ironwood_actions.is_empty() {
             vec![]
         } else {
             vec![CompactTx {
-                actions,
+                ironwood_actions,
                 ..Default::default()
             }]
         },
@@ -518,6 +519,7 @@ async fn test_server_follow_new_block() {
     let db_bytes = hashtable.to_pir_bytes();
     let engine_state = engine.setup(&db_bytes, &app_state.scenario).unwrap();
     let metadata = spend_types::SpendabilityMetadata {
+        pool: spend_types::POOL.to_string(),
         earliest_height: hashtable.earliest_height().unwrap_or(0),
         latest_height: hashtable.latest_height().unwrap_or(0),
         num_nullifiers: hashtable.len() as u64,
@@ -591,6 +593,7 @@ async fn test_server_reorg_handling() {
     let db_bytes = hashtable.to_pir_bytes();
     let engine_state = engine.setup(&db_bytes, &app_state.scenario).unwrap();
     let metadata = spend_types::SpendabilityMetadata {
+        pool: spend_types::POOL.to_string(),
         earliest_height: hashtable.earliest_height().unwrap_or(0),
         latest_height: hashtable.latest_height().unwrap_or(0),
         num_nullifiers: hashtable.len() as u64,

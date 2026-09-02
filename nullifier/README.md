@@ -2,7 +2,7 @@
 
 ## Goal
 
-Enable wallets to **instantly determine if their notes have been spent** — privately, without scanning — by issuing a single encrypted YPIR query against a bucketed hash table of recent Orchard nullifiers. A synced wallet already knows its notes' spendability from the local database; PIR targets wallets that are behind and would otherwise show stale balances until sync completes.
+Enable wallets to **instantly determine if their notes have been spent** — privately, without scanning — by issuing a single encrypted YPIR query against a bucketed hash table of recent Ironwood nullifiers. A synced wallet already knows its notes' spendability from the local database; PIR targets wallets that are behind and would otherwise show stale balances until sync completes.
 
 ## Problem
 
@@ -15,7 +15,7 @@ Traditional scanning resolves this eventually but can take 30 seconds to several
 
 ### Spendability lifecycle
 
-1. **Wallet behind** (PIR active): The wallet has unspent Orchard notes in its database. It queries the PIR server for each note's nullifier. If the server's hash table contains the nullifier, the note has been spent on-chain. The wallet upserts a row in `pir_notes` with `is_spent = 1` and excludes it from balance calculations.
+1. **Wallet behind** (PIR active): The wallet has unspent Ironwood notes in its database. It queries the PIR server for each note's nullifier. If the server's hash table contains the nullifier, the note has been spent on-chain. The wallet upserts a row in `pir_notes` with `is_spent = 1` and excludes it from balance calculations.
 2. **Wallet catches up**: Scanning confirms spends by inserting into `orchard_received_note_spends`. The `pir_notes` entry becomes redundant — `spent_notes_clause` UNIONs both sources, so deduplication is automatic.
 3. **Steady state** (PIR unnecessary): The wallet is synced. New spends are detected by scanning within seconds. PIR is not queried.
 
@@ -23,27 +23,32 @@ PIR is a **sync-time accelerator**, not a replacement for scanning. The server n
 
 ## Key data: nullifier volume and table sizing
 
-Orchard is the only pool tracked. Sapling is excluded — its volume is declining (~13K notes/month vs Orchard's ~100K/month) and the pool is expected to sunset. Each Orchard action produces exactly one nullifier, so nullifier volume equals note commitment volume.
+Ironwood is the only pool tracked. Sapling and Orchard are both excluded: Orchard is the pool
+Ironwood turnstiles out of, and Sapling's volume was already declining before that. Each Ironwood
+action produces exactly one nullifier, so nullifier volume equals note commitment volume.
 
-At the current mainnet rate of ~3,465 Orchard actions/day (measured April 2026):
+Ironwood activated on mainnet at NU6.3 (height **3,428,143**), so the pool starts from an empty
+nullifier set — there is no historical backlog to ingest, unlike Orchard's ~50M.
 
-- ~1M nullifiers accumulate in **~289 days** (~9.5 months)
-- 6-month window: ~623,694 nullifiers
-- TARGET_SIZE (1M) covers ~9.5 months of nullifiers
+At the observed mainnet rate of ~3,772 Ironwood actions/day (measured September 2026):
 
-| Period (heights) | Orchard nullifiers | Orchard/day |
-|------------------|-------------------|-------------|
-| 3,089,134 → 3,123,694 | 129,776 | 4,326 |
-| 3,123,694 → 3,158,254 | 144,472 | 4,816 |
-| 3,158,254 → 3,192,814 | 84,360 | 2,812 |
-| 3,192,814 → 3,227,374 | 83,549 | 2,785 |
-| 3,227,374 → 3,261,934 | 103,900 | 3,463 |
-| 3,261,934 → 3,296,494 | 77,637 | 2,588 |
-| **Total** | **623,694** | **~3,465 avg** |
+- ~1M nullifiers accumulate in **~265 days** (~8.7 months)
+- TARGET_SIZE (1M) therefore still covers roughly the same window it did for Orchard
+
+| Period (heights) | Ironwood nullifiers | Ironwood/day |
+|------------------|--------------------|--------------|
+| 3,428,143 → 3,438,000 | 29,256 | 3,404 |
+| 3,438,000 → 3,448,000 | 28,509 | 3,269 |
+| 3,448,000 → 3,458,000 | 35,253 | 4,043 |
+| 3,458,000 → 3,469,040 | 41,527 | 4,310 |
+| **Total (since activation)** | **134,545** | **~3,772 avg** |
+
+The rate is rising as wallets migrate. For comparison, Orchard added 211,791 nullifiers over the
+same span (~5,937/day), so the two pools are within a factor of two and converging.
 
 ## Design: Bucketed Hash Table + SimplePIR
 
-The server maintains a hash table of recent Orchard nullifiers, indexed by bucket. Each nullifier maps to a bucket via `hash_to_bucket(nf) = u32_from_le(nf[0..4]) % NUM_BUCKETS`. Nullifiers are cryptographically random (derived from a PRF), so the first 4 bytes give uniform distribution across buckets.
+The server maintains a hash table of recent Ironwood nullifiers, indexed by bucket. Each nullifier maps to a bucket via `hash_to_bucket(nf) = u32_from_le(nf[0..4]) % NUM_BUCKETS`. Nullifiers are cryptographically random (derived from a PRF), so the first 4 bytes give uniform distribution across buckets.
 
 ```
 lightwalletd ──gRPC──> nf-ingest ──ChainEvent──> HashTableDb ──to_pir_bytes──> YPIR Engine
@@ -85,7 +90,7 @@ The nullifier table has 16,384 rows × 4,592 bytes per row = ~72 MB. SimplePIR i
 
 **Bucket capacity**: At 1M nullifiers across 16,384 buckets, the average occupancy is ~61 entries per bucket. The capacity of 112 provides ~1.8× headroom. Since nullifiers are cryptographically random, bucket sizes follow a tight binomial distribution — the probability of any bucket exceeding 112 at 1M entries is negligible. If a bucket overflow occurs (bug or extreme volume), the server returns an error for that block and the block's nullifiers are not inserted.
 
-**Load factor**: At TARGET_SIZE, the table is ~55% full (61/112 average). Empty slots are `NullifierEntry::ZERO` (all zero bytes). The zero entry cannot collide with a real nullifier — real Orchard nullifiers are outputs of a PRF keyed by the spending key, and the probability of the all-zero output is negligible (2^-256).
+**Load factor**: At TARGET_SIZE, the table is ~55% full (61/112 average). Empty slots are `NullifierEntry::ZERO` (all zero bytes). The zero entry cannot collide with a real nullifier — real Ironwood nullifiers are outputs of a PRF keyed by the spending key, and the probability of the all-zero output is negligible (2^-256).
 
 ## Client query protocol
 
@@ -185,7 +190,7 @@ Orphaned nullifiers are removed instantly — the table never serves stale data 
 |-------|-------------|
 | `spend-types` | Constants (`NUM_BUCKETS`, `BUCKET_CAPACITY`, `ENTRY_BYTES`, `BUCKET_BYTES`, `DB_BYTES`, `TARGET_SIZE`), types (`NullifierEntry`, `NullifierWithMeta`, `SpendMetadata`), `hash_to_bucket`, `ChainEvent`, `SpendabilityMetadata`. Re-exports shared types (`PirEngine`, `YpirScenario`, `ServerPhase`, `CONFIRMATION_DEPTH`) from `shared/pir-types`. |
 | `hashtable-pir` | Bucketed hash table storing `NullifierEntry` per slot, with per-block insert/rollback, LRU eviction by height, `to_pir_bytes()` serialization (41-byte entries), and crash-safe binary snapshots (v2) with xxHash64 checksums. |
-| `nf-ingest` | Compact block parser (`extract_nullifiers_with_meta` — computes `first_output_position` and `action_count` per transaction from `orchardCommitmentTreeSize` in `ChainMetadata`; Orchard only, ignores Sapling) and sync/follow loops that track `prev_tree_size` across blocks. Depends on `shared/chain-ingest` for `LwdClient` and `ChainTracker`. |
+| `nf-ingest` | Compact block parser (`extract_nullifiers_with_meta` — computes `first_output_position` and `action_count` per transaction from `ironwoodCommitmentTreeSize` in `ChainMetadata`; Ironwood only, ignores Sapling and Orchard) and sync/follow loops that track `prev_tree_size` across blocks. Depends on `shared/chain-ingest` for `LwdClient` and `ChainTracker`. |
 | `spend-server` | Axum HTTP server. Sync/follow lifecycle, per-block PIR rebuilds via `ArcSwap`, async snapshot I/O. `PirEngine` trait allows swapping between stub (tests) and real YPIR (production). Exposes `build_router()` for embedding in a combined server. |
 | `spend-client` | `SpendClient` (async) and `SpendClientBlocking` (sync FFI wrapper). `is_spent(nf)` returns `Option<SpendMetadata>` and `check_nullifiers` returns `Vec<Option<SpendMetadata>>` — `Some(meta)` for spent nullifiers (with spend height, output position, action count), `None` otherwise. Handles YPIR SimplePIR query generation, response decoding, and bucket scanning. |
 
@@ -195,7 +200,7 @@ Orphaned nullifiers are removed instantly — the table never serves stale data 
 
 ## Wallet integration
 
-Wallet-side PIR integration spans three repositories (`zcash_client_sqlite`, `zcash-swift-wallet-sdk`, `zodl-ios`) controlled by the `spendability-pir` Cargo feature.
+Wallet-side PIR integration spans three repositories (`zakura-core/wallet-libraries`, which publishes `zakura-client-sqlite`; `zcash-swift-wallet-sdk`; and `zodl-ios`) controlled by the `spendability-pir` Cargo feature.
 
 ### Database integration
 
@@ -203,11 +208,16 @@ Wallet-side PIR integration spans three repositories (`zcash_client_sqlite`, `zc
 
 ### Spendability gate bypass
 
-Three gates normally force `spendableValue` to zero during sync. When `spendability-pir` is enabled, all three are bypassed for Orchard (Sapling retains the original checks):
+Three gates normally force `spendableValue` to zero during sync. When `spendability-pir` is enabled, all three are bypassed for Ironwood (Sapling and Orchard retain the original checks):
 
-1. **`is_any_spendable`** (Rust): Unconditionally `true` for Orchard.
-2. **`unscanned_tip_exists`** (Rust): Check skipped for Orchard.
-3. **`chainTipUpdated`** (Swift): Orchard `spendableValue` preserved when `pirCompleted` flag is set.
+1. **`is_any_spendable`** (Rust): Unconditionally `true` for Ironwood.
+2. **`unscanned_tip_exists`** (Rust): Check skipped for Ironwood.
+3. **`chainTipUpdated`** (Swift): Ironwood `spendableValue` preserved when `pirCompleted` flag is set.
+
+> Wallet-side identifiers below (`orchard_received_notes`, `orchard_received_note_spends`) are
+> `zakura-client-sqlite` schema names, not ours. Whether the Ironwood pool reuses those tables or
+> gets its own is the wallet layer's decision; the PIR contract is unchanged either way. Confirm the
+> names against the wallet crate before wiring this up.
 
 ### FFI entry point
 
@@ -217,13 +227,13 @@ Three gates normally force `spendableValue` to zero during sync. When `spendabil
 
 After nullifier PIR identifies a spent note, the wallet discovers change outputs from the same spending transaction — without waiting for the scanner to reach that block. Because change notes can themselves be spent in subsequent transactions, the wallet follows the full spend chain recursively to determine the actual spendable balance.
 
-For each spent note, the `SpendMetadata` returned by PIR provides the exact location of the transaction's Orchard actions in the commitment tree (`first_output_position`, `action_count`) and the block height (`spend_height`).
+For each spent note, the `SpendMetadata` returned by PIR provides the exact location of the transaction's Ironwood actions in the commitment tree (`first_output_position`, `action_count`) and the block height (`spend_height`).
 
 **Phase 1 — Canonical notes:** For each note in `orchard_received_notes` that PIR identifies as spent, the wallet:
 
 1. Downloads the single compact block at `spend_height` via lightwalletd RPC
 2. Extracts the `action_count` compact actions starting at `first_output_position`
-3. Trial-decrypts each action using the account's Orchard FVK (both internal and external scopes)
+3. Trial-decrypts each action using the account's Ironwood FVK with `IronwoodDomain` (both internal and external scopes) — `OrchardDomain` rejects every V3 note plaintext without reporting an error
 4. Stores discovered notes in `pir_notes` (with `canonical_note_id = NULL`) at depth 1, with their full note fields (diversifier, rseed, rho, nullifier, cmx) — enough to reconstruct the note for spending once a witness is obtained
 
 **Phase 2 — Recursive chain:** The wallet then iteratively processes provisional notes:
@@ -264,11 +274,16 @@ PIR-detected spends appear as synthetic "detected spend" entries in the transact
 
 ## Method (volume analysis)
 
-The measurements use `orchardCommitmentTreeSize` from `ChainMetadata` in compact blocks via lightwalletd (`us.zec.stardust.rest:443`), collected April 2026. Each Orchard action produces one nullifier and one note commitment, so tree size growth equals the number of Orchard actions (= number of nullifiers).
+The measurements use `ironwoodCommitmentTreeSize` from `ChainMetadata` in compact blocks via
+lightwalletd (`zec.rocks:443`), collected September 2026. Each Ironwood action produces one
+nullifier and one note commitment, so tree size growth equals the number of Ironwood actions
+(= number of nullifiers). Per-day rates are derived from block timestamps rather than an assumed
+block interval.
 
 | Metric | Value |
 |--------|-------|
-| Chain tip | 3,296,494 |
-| NU5 activation | 1,687,104 |
-| Cumulative Orchard notes | 49,876,639 |
-| Cumulative Sapling notes | 73,890,312 |
+| Chain tip | 3,469,040 |
+| NU6.3 (Ironwood) activation | 3,428,143 |
+| Cumulative Ironwood notes | 134,545 |
+| Cumulative Orchard notes | 50,439,671 |
+| Cumulative Sapling notes | 73,953,911 |

@@ -13,7 +13,7 @@ use arc_swap::ArcSwap;
 use commitment_tree_db::CommitmentTreeDb;
 use hashtable_pir::HashTableDb;
 use pir_types::{PirEngine, YpirScenario};
-use spend_types::{BUCKET_BYTES, NUM_BUCKETS};
+use spend_types::{NullifierWithMeta, BUCKET_BYTES, NUM_BUCKETS};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -26,6 +26,28 @@ fn make_nf(seed: u32) -> [u8; 32] {
         *byte = ((seed >> ((i % 4) * 8)) as u8).wrapping_add(i as u8);
     }
     nf
+}
+
+/// Attach the spend metadata `insert_block` requires, mirroring
+/// `extract_nullifiers_with_meta`: a block's actions are grouped into
+/// transactions of `actions_per_tx`, and every action carries its
+/// transaction's action count plus the commitment-tree position of that
+/// transaction's first output.
+///
+/// Every block in these tests appends exactly `nfs.len()` commitments, so block
+/// `height` starts at tree position `(height - 1) * nfs.len()`. That keeps the
+/// hashtable metadata consistent with the leaves `append_commitments` adds for
+/// the same block.
+fn nfs_to_nwms(nfs: &[[u8; 32]], height: u64, actions_per_tx: u32) -> Vec<NullifierWithMeta> {
+    let block_start = (height - 1) as u32 * nfs.len() as u32;
+    nfs.iter()
+        .enumerate()
+        .map(|(i, nf)| NullifierWithMeta {
+            nullifier: *nf,
+            first_output_position: block_start + (i as u32 / actions_per_tx) * actions_per_tx,
+            action_count: actions_per_tx as u8,
+        })
+        .collect()
 }
 
 /// Produce a valid Pallas base field element (valid `MerkleHashOrchard` bytes).
@@ -64,6 +86,7 @@ const REBUILD_BUDGET_3TPS: f64 = 20.0;
 
 #[test]
 fn rebuild_under_20s_at_3tps() {
+    let actions_per_tx: u32 = 2;
     let actions_per_block: u32 = 450; // 3 TPS × 2 actions/tx × 75 s
     let warmup_blocks: u64 = 10;
 
@@ -108,7 +131,11 @@ fn rebuild_under_20s_at_3tps() {
             .collect();
 
         hashtable
-            .insert_block(blk, block_hash_for(blk), &nfs)
+            .insert_block(
+                blk,
+                block_hash_for(blk),
+                &nfs_to_nwms(&nfs, blk, actions_per_tx),
+            )
             .unwrap();
         tree.append_commitments(blk, block_hash_for(blk), &cmxs);
     }
@@ -147,7 +174,11 @@ fn rebuild_under_20s_at_3tps() {
 
     let ingest_start = Instant::now();
     hashtable
-        .insert_block(new_height, block_hash_for(new_height), &new_nfs)
+        .insert_block(
+            new_height,
+            block_hash_for(new_height),
+            &nfs_to_nwms(&new_nfs, new_height, actions_per_tx),
+        )
         .unwrap();
     hashtable.evict_to_target();
     tree.append_commitments(new_height, block_hash_for(new_height), &new_cmxs);
@@ -243,7 +274,11 @@ fn sustained_5tps_15s_blocks() {
             .collect();
 
         hashtable
-            .insert_block(blk, block_hash_for(blk), &nfs)
+            .insert_block(
+                blk,
+                block_hash_for(blk),
+                &nfs_to_nwms(&nfs, blk, ACTIONS_PER_TX),
+            )
             .unwrap();
         tree.append_commitments(blk, block_hash_for(blk), &cmxs);
     }
@@ -303,8 +338,8 @@ fn sustained_5tps_15s_blocks() {
 
     // ── Sustained run ────────────────────────────────────────────────
     println!(
-        "\n  {:>5}  {:>8}  {:>8}  {:>8}  {:>8}  {}",
-        "Block", "Ingest", "NF PIR", "Wit PIR", "Total", "Status",
+        "\n  {:>5}  {:>8}  {:>8}  {:>8}  {:>8}  Status",
+        "Block", "Ingest", "NF PIR", "Wit PIR", "Total",
     );
     println!("  {}", "-".repeat(62));
 
@@ -328,7 +363,11 @@ fn sustained_5tps_15s_blocks() {
         // Ingest
         let ingest_start = Instant::now();
         hashtable
-            .insert_block(height, block_hash_for(height), &nfs)
+            .insert_block(
+                height,
+                block_hash_for(height),
+                &nfs_to_nwms(&nfs, height, ACTIONS_PER_TX),
+            )
             .unwrap();
         hashtable.evict_to_target();
         tree.append_commitments(height, block_hash_for(height), &cmxs);
@@ -509,8 +548,8 @@ fn bench_scaling_ceiling() {
     );
     println!();
     println!(
-        "  {:>10}  {:>8}  {:>10}  {:>8}  {:>10}  {:>10}  {:>6}  {}",
-        "Coverage", "NF DB", "NF setup", "WIT DB", "WIT setup", "Combined", "Block", "Status",
+        "  {:>10}  {:>8}  {:>10}  {:>8}  {:>10}  {:>10}  {:>6}  Status",
+        "Coverage", "NF DB", "NF setup", "WIT DB", "WIT setup", "Combined", "Block",
     );
     println!("  {}", "-".repeat(90));
 

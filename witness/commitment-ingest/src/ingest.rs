@@ -4,7 +4,7 @@
 //! [`WitnessChainEvent`] with note commitments instead of nullifiers.
 //! Uses [`LwdClient`] and [`ChainTracker`] from `chain-ingest`.
 
-use crate::parser::{extract_commitments, orchard_tree_size};
+use crate::parser::{extract_commitments, ironwood_tree_size};
 use chain_ingest::{ChainAction, ChainTracker, LwdClient};
 use pir_types::CONFIRMATION_DEPTH;
 use thiserror::Error;
@@ -54,7 +54,7 @@ pub async fn sync(
             let hash = to_hash_array(&block.hash);
             let prev_hash = to_hash_array(&block.prev_hash);
             let commitments = extract_commitments(block);
-            let this_tree_size = orchard_tree_size(block);
+            let this_tree_size = ironwood_tree_size(block);
 
             tx.send(WitnessChainEvent::NewBlock {
                 height,
@@ -106,7 +106,7 @@ pub async fn follow(
             let hash = to_hash_array(&block.hash);
             let prev_hash = to_hash_array(&block.prev_hash);
             let commitments = extract_commitments(block);
-            let this_tree_size = orchard_tree_size(block);
+            let this_tree_size = ironwood_tree_size(block);
 
             match tracker.push_block(height, hash, prev_hash) {
                 ChainAction::Extend => {

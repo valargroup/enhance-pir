@@ -32,7 +32,8 @@ use orchard::tree::MerkleHashOrchard;
 use witness_types::*;
 
 const LWD_ENDPOINT: &str = "https://us.zec.stardust.rest:443";
-const ORCHARD_PROTOCOL: i32 = 1;
+/// `ShieldedProtocol::ironwood` in the lightwalletd service definition.
+const IRONWOOD_PROTOCOL: i32 = 2;
 const BATCH_SIZE: u64 = 10_000;
 const FRONTIER_BLOCKS: u64 = 200;
 
@@ -198,7 +199,7 @@ async fn connect_and_get_subtree_roots() -> (LwdClient, Vec<chain_ingest::proto:
         .expect("failed to connect to lightwalletd");
 
     let roots = client
-        .get_subtree_roots(ORCHARD_PROTOCOL, 0, 256)
+        .get_subtree_roots(IRONWOOD_PROTOCOL, 0, 256)
         .await
         .expect("failed to get subtree roots");
 
@@ -232,7 +233,7 @@ async fn ingest_block_range(
         for block in &blocks {
             if block.height == from && tree_size_at_start.is_none() {
                 if let Some(meta) = &block.chain_metadata {
-                    let size_after = meta.orchard_commitment_tree_size as u64;
+                    let size_after = meta.ironwood_commitment_tree_size as u64;
                     let cmx_count = extract_commitments(block).len() as u64;
                     tree_size_at_start = Some(size_after.saturating_sub(cmx_count));
                 }
@@ -323,8 +324,9 @@ async fn verify_shard_root_against_mainnet() {
         canonical_root,
         "\nshard {target_shard} root MISMATCH — Sinsemilla hash chain is incorrect!\n  \
          computed:  {}\n  canonical: {}\n\n\
-         This means the commitment tree does NOT match the canonical Orchard tree.\n\
-         Check: MerkleHashOrchard::combine levels, empty_root sentinels, leaf ordering.",
+         This means the commitment tree does NOT match the canonical Ironwood tree.\n\
+         Check: MerkleHashOrchard::combine levels, empty_root sentinels, leaf ordering, \
+         and that ingest reads CompactTx.ironwoodActions rather than .actions.",
         hex::encode(computed_root),
         hex::encode(canonical_root)
     );

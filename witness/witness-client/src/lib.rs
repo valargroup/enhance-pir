@@ -30,6 +30,14 @@ pub enum WitnessClientError {
     PositionOutsideWindow(u64, u32, u32),
     #[error("witness verification failed for position {0}: computed root does not match anchor")]
     VerificationFailed(u64),
+    #[error(
+        "server serves the {actual} pool, but this client requires {expected}; \
+         point it at an Ironwood witness-server"
+    )]
+    PoolMismatch {
+        expected: &'static str,
+        actual: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, WitnessClientError>;
@@ -52,6 +60,22 @@ struct IpirClientState {
     offline_query_polys: Vec<Vec<u64>>,
 }
 
+/// The subset of the server's `/metadata` response this client needs.
+///
+/// Deliberately not the server's own `WitnessMetadata` type — the client crate
+/// does not depend on `witness-server`, and only the pool identity is load
+/// bearing here.
+#[derive(Debug, serde::Deserialize)]
+struct ServerMetadata {
+    /// Absent on pre-Ironwood servers, which served Orchard.
+    #[serde(default = "legacy_pool")]
+    pool: String,
+}
+
+fn legacy_pool() -> String {
+    "orchard".to_string()
+}
+
 impl WitnessClient {
     /// Connect to a witness-server, fetch params and broadcast data, initialize
     /// the PIR client. The broadcast download is ~104 KB and cached for the
@@ -69,6 +93,21 @@ impl WitnessClient {
             .json()
             .await?;
         tracing::info!(elapsed_ms = t0.elapsed().as_millis(), "fetched /params");
+
+        // Check the pool before downloading the ~104 KB broadcast: an Orchard
+        // server's Merkle paths are for a different tree entirely, and a
+        // witness that verifies against the wrong anchor is worse than none.
+        let metadata_resp = http.get(format!("{base_url}/metadata")).send().await?;
+        if metadata_resp.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE {
+            return Err(WitnessClientError::ServerUnavailable);
+        }
+        let metadata: ServerMetadata = metadata_resp.error_for_status()?.json().await?;
+        if metadata.pool != pir_types::POOL {
+            return Err(WitnessClientError::PoolMismatch {
+                expected: pir_types::POOL,
+                actual: metadata.pool,
+            });
+        }
 
         let t1 = std::time::Instant::now();
         let broadcast_resp = http.get(format!("{base_url}/broadcast")).send().await?;

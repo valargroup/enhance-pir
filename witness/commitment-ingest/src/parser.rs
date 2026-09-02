@@ -1,8 +1,10 @@
-//! Orchard note commitment and decryption data extraction from compact blocks.
+//! Ironwood note commitment and decryption data extraction from compact blocks.
 //!
 //! Mirrors the nullifier parser (`nf-ingest/parser.rs`) but extracts `cmx`
 //! (note commitment) values and decryption fields (nf, ephemeral key, ciphertext)
-//! from each `CompactOrchardAction`.
+//! from each Ironwood action. Ironwood actions reuse the `CompactOrchardAction`
+//! wire message but live in their own `CompactTx.ironwoodActions` field and
+//! feed their own commitment tree.
 
 use chain_ingest::proto::{CompactBlock, CompactOrchardAction};
 use decryption_types::DecryptionLeaf;
@@ -17,21 +19,22 @@ pub struct BlockCommitments {
     pub hash: [u8; 32],
     /// Previous block hash.
     pub prev_hash: [u8; 32],
-    /// Orchard note commitments in transaction-then-action order.
+    /// Ironwood note commitments in transaction-then-action order.
     pub commitments: Vec<Hash>,
-    /// `orchardCommitmentTreeSize` from the *previous* block's metadata,
+    /// `ironwoodCommitmentTreeSize` from the *previous* block's metadata,
     /// giving the tree size at the start of this block.
     pub prior_tree_size: Option<u32>,
 }
 
-/// Extract all Orchard note commitments (`cmx`) from a compact block.
+/// Extract all Ironwood note commitments (`cmx`) from a compact block.
 ///
-/// Walks all transactions and collects the 32-byte `cmx` from each Orchard
-/// action. Sapling outputs are ignored — the witness system tracks only Orchard.
+/// Walks all transactions and collects the 32-byte `cmx` from each Ironwood
+/// action. Sapling outputs and Orchard actions are ignored — the witness system
+/// tracks only Ironwood.
 pub fn extract_commitments(block: &CompactBlock) -> Vec<Hash> {
     let mut commitments = Vec::new();
     for tx in &block.vtx {
-        for action in &tx.actions {
+        for action in &tx.ironwood_actions {
             if action.cmx.len() == 32 {
                 let mut cmx = [0u8; 32];
                 cmx.copy_from_slice(&action.cmx);
@@ -44,7 +47,7 @@ pub fn extract_commitments(block: &CompactBlock) -> Vec<Hash> {
 
 /// Extract full block commitment data including metadata.
 ///
-/// `prev_tree_size` should be the `orchardCommitmentTreeSize` from the
+/// `prev_tree_size` should be the `ironwoodCommitmentTreeSize` from the
 /// previous block's `ChainMetadata`, if available. For the first block
 /// in a batch, pass `None`.
 pub fn extract_block_commitments(
@@ -68,25 +71,25 @@ pub fn extract_block_commitments(
     }
 }
 
-/// Get the `orchardCommitmentTreeSize` from a block's chain metadata, if present.
-pub fn orchard_tree_size(block: &CompactBlock) -> Option<u32> {
+/// Get the `ironwoodCommitmentTreeSize` from a block's chain metadata, if present.
+pub fn ironwood_tree_size(block: &CompactBlock) -> Option<u32> {
     block
         .chain_metadata
         .as_ref()
-        .map(|m| m.orchard_commitment_tree_size)
+        .map(|m| m.ironwood_commitment_tree_size)
         .filter(|&size| size > 0)
 }
 
 /// Extract decryption PIR leaf data from a compact block.
 ///
-/// For each valid Orchard action (one with a 32-byte `cmx`), collects the
+/// For each valid Ironwood action (one with a 32-byte `cmx`), collects the
 /// nullifier, ephemeral key, and first 52 bytes of ciphertext. The output
 /// is 1:1 with [`extract_commitments`] — `decryption_leaves[i]` corresponds
 /// to `commitments[i]` at the same tree position.
 pub fn extract_decryption_leaves(block: &CompactBlock) -> Vec<DecryptionLeaf> {
     let mut leaves = Vec::new();
     for tx in &block.vtx {
-        for action in &tx.actions {
+        for action in &tx.ironwood_actions {
             if action.cmx.len() == 32 {
                 leaves.push(decryption_leaf_from_action(action));
             }
@@ -106,7 +109,7 @@ pub fn extract_commitments_and_decryption(
     let mut commitments = Vec::new();
     let mut leaves = Vec::new();
     for tx in &block.vtx {
-        for action in &tx.actions {
+        for action in &tx.ironwood_actions {
             if action.cmx.len() == 32 {
                 let mut cmx = [0u8; 32];
                 cmx.copy_from_slice(&action.cmx);
@@ -171,7 +174,7 @@ mod tests {
             hash: vec![1; 32],
             prev_hash: vec![0; 32],
             vtx: vec![CompactTx {
-                actions: vec![make_action(0xAA, 0x11), make_action(0xBB, 0x22)],
+                ironwood_actions: vec![make_action(0xAA, 0x11), make_action(0xBB, 0x22)],
                 ..Default::default()
             }],
             ..Default::default()
@@ -201,14 +204,14 @@ mod tests {
             height: 100,
             vtx: vec![CompactTx {
                 outputs: vec![make_sapling_output(0xCC)],
-                actions: vec![make_action(0xDD, 0x33)],
+                ironwood_actions: vec![make_action(0xDD, 0x33)],
                 ..Default::default()
             }],
             ..Default::default()
         };
 
         let cmxs = extract_commitments(&block);
-        assert_eq!(cmxs.len(), 1, "should only extract Orchard cmx");
+        assert_eq!(cmxs.len(), 1, "should only extract Ironwood cmx");
         assert_eq!(cmxs[0], [0xDD; 32]);
     }
 
@@ -218,11 +221,11 @@ mod tests {
             height: 100,
             vtx: vec![
                 CompactTx {
-                    actions: vec![make_action(0x01, 0xA1)],
+                    ironwood_actions: vec![make_action(0x01, 0xA1)],
                     ..Default::default()
                 },
                 CompactTx {
-                    actions: vec![make_action(0x02, 0xA2), make_action(0x03, 0xA3)],
+                    ironwood_actions: vec![make_action(0x02, 0xA2), make_action(0x03, 0xA3)],
                     ..Default::default()
                 },
             ],
@@ -241,7 +244,7 @@ mod tests {
         let block = CompactBlock {
             height: 100,
             vtx: vec![CompactTx {
-                actions: vec![CompactOrchardAction {
+                ironwood_actions: vec![CompactOrchardAction {
                     nullifier: vec![0; 32],
                     cmx: vec![0xFF; 16], // too short
                     ephemeral_key: vec![0; 32],
@@ -263,12 +266,12 @@ mod tests {
             hash: vec![0xAA; 32],
             prev_hash: vec![0xBB; 32],
             vtx: vec![CompactTx {
-                actions: vec![make_action(0xCC, 0x44)],
+                ironwood_actions: vec![make_action(0xCC, 0x44)],
                 ..Default::default()
             }],
             chain_metadata: Some(ChainMetadata {
-                sapling_commitment_tree_size: 0,
-                orchard_commitment_tree_size: 1000,
+                ironwood_commitment_tree_size: 1000,
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -282,36 +285,36 @@ mod tests {
     }
 
     #[test]
-    fn orchard_tree_size_present() {
+    fn ironwood_tree_size_present() {
         let block = CompactBlock {
             chain_metadata: Some(ChainMetadata {
-                sapling_commitment_tree_size: 0,
-                orchard_commitment_tree_size: 5000,
+                ironwood_commitment_tree_size: 5000,
+                ..Default::default()
             }),
             ..Default::default()
         };
-        assert_eq!(orchard_tree_size(&block), Some(5000));
+        assert_eq!(ironwood_tree_size(&block), Some(5000));
     }
 
     #[test]
-    fn orchard_tree_size_absent() {
+    fn ironwood_tree_size_absent() {
         let block = CompactBlock {
             chain_metadata: None,
             ..Default::default()
         };
-        assert_eq!(orchard_tree_size(&block), None);
+        assert_eq!(ironwood_tree_size(&block), None);
     }
 
     #[test]
-    fn orchard_tree_size_zero_treated_as_absent() {
+    fn ironwood_tree_size_zero_treated_as_absent() {
         let block = CompactBlock {
             chain_metadata: Some(ChainMetadata {
-                sapling_commitment_tree_size: 0,
-                orchard_commitment_tree_size: 0,
+                ironwood_commitment_tree_size: 0,
+                ..Default::default()
             }),
             ..Default::default()
         };
-        assert_eq!(orchard_tree_size(&block), None);
+        assert_eq!(ironwood_tree_size(&block), None);
     }
 
     #[test]
@@ -320,11 +323,11 @@ mod tests {
             height: 100,
             vtx: vec![
                 CompactTx {
-                    actions: vec![make_action(0x01, 0xA1), make_action(0x02, 0xA2)],
+                    ironwood_actions: vec![make_action(0x01, 0xA1), make_action(0x02, 0xA2)],
                     ..Default::default()
                 },
                 CompactTx {
-                    actions: vec![make_action(0x03, 0xA3)],
+                    ironwood_actions: vec![make_action(0x03, 0xA3)],
                     ..Default::default()
                 },
             ],
@@ -344,7 +347,7 @@ mod tests {
         let block = CompactBlock {
             height: 100,
             vtx: vec![CompactTx {
-                actions: vec![make_action(0xAA, 0x11), make_action(0xBB, 0x22)],
+                ironwood_actions: vec![make_action(0xAA, 0x11), make_action(0xBB, 0x22)],
                 ..Default::default()
             }],
             ..Default::default()
@@ -374,7 +377,7 @@ mod tests {
             height: 100,
             vtx: vec![CompactTx {
                 outputs: vec![make_sapling_output(0xCC)],
-                actions: vec![make_action(0xDD, 0x33)],
+                ironwood_actions: vec![make_action(0xDD, 0x33)],
                 ..Default::default()
             }],
             ..Default::default()
@@ -390,7 +393,7 @@ mod tests {
         let block = CompactBlock {
             height: 100,
             vtx: vec![CompactTx {
-                actions: vec![CompactOrchardAction {
+                ironwood_actions: vec![CompactOrchardAction {
                     nullifier: vec![0x11; 32],
                     cmx: vec![0xFF; 16],
                     ephemeral_key: vec![0x22; 32],
@@ -409,11 +412,11 @@ mod tests {
             height: 100,
             vtx: vec![
                 CompactTx {
-                    actions: vec![make_action(0x01, 0xA1), make_action(0x02, 0xA2)],
+                    ironwood_actions: vec![make_action(0x01, 0xA1), make_action(0x02, 0xA2)],
                     ..Default::default()
                 },
                 CompactTx {
-                    actions: vec![make_action(0x03, 0xA3)],
+                    ironwood_actions: vec![make_action(0x03, 0xA3)],
                     ..Default::default()
                 },
             ],
@@ -440,12 +443,12 @@ mod tests {
             height: 100,
             vtx: vec![
                 CompactTx {
-                    actions: vec![make_action(0x10, 0x20)],
+                    ironwood_actions: vec![make_action(0x10, 0x20)],
                     ..Default::default()
                 },
                 CompactTx {
                     outputs: vec![make_sapling_output(0xFF)],
-                    actions: vec![make_action(0x30, 0x40), make_action(0x50, 0x60)],
+                    ironwood_actions: vec![make_action(0x30, 0x40), make_action(0x50, 0x60)],
                     ..Default::default()
                 },
             ],
@@ -465,7 +468,7 @@ mod tests {
         let block = CompactBlock {
             height: 100,
             vtx: vec![CompactTx {
-                actions: vec![CompactOrchardAction {
+                ironwood_actions: vec![CompactOrchardAction {
                     nullifier: vec![0xAA; 16],
                     cmx: vec![0xBB; 32],
                     ephemeral_key: vec![0xCC; 10],

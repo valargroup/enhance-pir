@@ -18,5 +18,5 @@ pub mod parser;
 
 pub use parser::{
     extract_block_commitments, extract_commitments, extract_commitments_and_decryption,
-    extract_decryption_leaves, orchard_tree_size, BlockCommitments,
+    extract_decryption_leaves, ironwood_tree_size, BlockCommitments,
 };

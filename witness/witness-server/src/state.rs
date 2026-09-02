@@ -17,6 +17,18 @@ pub struct WitnessMetadata {
     pub window_shard_count: u32,
     pub populated_shards: u32,
     pub phase: ServerPhase,
+    /// The shielded pool whose commitment tree this server serves. Always
+    /// [`pir_types::POOL`] here; a client that sees anything else is talking to
+    /// a server built for a different pool and must not trust its witnesses.
+    ///
+    /// Defaults to `"orchard"` when absent, because only pre-Ironwood servers
+    /// omit the field.
+    #[serde(default = "legacy_pool")]
+    pub pool: String,
+}
+
+fn legacy_pool() -> String {
+    "orchard".to_string()
 }
 
 /// Live PIR state: engine state + broadcast data + metadata, swapped atomically.

@@ -10,10 +10,12 @@ option swift_prefix = "";
 message ChainMetadata {
     uint32 saplingCommitmentTreeSize = 1;
     uint32 orchardCommitmentTreeSize = 2;
+    uint32 ironwoodCommitmentTreeSize = 3;
 }
 
 message CompactBlock {
-    uint32 protoVersion = 1;
+    reserved 1;
+    reserved "protoVersion";
     uint64 height = 2;
     bytes hash = 3;
     bytes prevHash = 4;
@@ -30,6 +32,7 @@ message CompactTx {
     repeated CompactSaplingSpend spends = 4;
     repeated CompactSaplingOutput outputs = 5;
     repeated CompactOrchardAction actions = 6;
+    repeated CompactOrchardAction ironwoodActions = 9;
     repeated CompactTxIn vin = 7;
     repeated TxOut vout = 8;
 }
@@ -54,6 +57,8 @@ message CompactSaplingOutput {
     bytes ciphertext = 3;
 }
 
+// Also used for Ironwood actions (CompactTx.ironwoodActions); the two pools
+// share this wire shape.
 message CompactOrchardAction {
     bytes nullifier = 1;
     bytes cmx = 2;

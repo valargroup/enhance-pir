@@ -11,9 +11,77 @@ use serde::{Deserialize, Serialize};
 /// typical reorgs while still being fresh enough for practical spending.
 pub const CONFIRMATION_DEPTH: u64 = 10;
 
-/// Mainnet activation height for NU5 (Orchard). No Orchard data exists below
-/// this height, so PIR ingest starts here.
-pub const NU5_MAINNET_ACTIVATION: u64 = 1_687_104;
+/// Mainnet activation height for NU6.3, which instantiates the Ironwood value
+/// pool. No Ironwood data exists below this height, so PIR ingest starts here.
+pub const NU6_3_MAINNET_ACTIVATION: u64 = 3_428_143;
+
+/// Testnet activation height for NU6.3.
+pub const NU6_3_TESTNET_ACTIVATION: u64 = 4_134_000;
+
+/// The shielded pool these PIR databases cover.
+///
+/// Reported on the `/metadata` endpoints and checked by clients, so a wallet
+/// cannot take Orchard answers for Ironwood questions. On-disk artifacts carry
+/// their own format versions (`hashtable-pir`'s `SNAPSHOT_VERSION` and
+/// `commitment-tree-db`'s snapshot magic), which is what actually fences
+/// Orchard-era files.
+pub const POOL: &str = "ironwood";
+
+/// The Zcash network a PIR server is following.
+///
+/// Determined at bootstrap from the `network` field of a lightwalletd
+/// `TreeState` response rather than from local configuration, so a server can
+/// never disagree with the chain it is actually reading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ZcashNetwork {
+    /// Mainnet.
+    Main,
+    /// Testnet.
+    Test,
+}
+
+impl ZcashNetwork {
+    /// The NU6.3 activation height for this network — the lowest block that can
+    /// contain Ironwood data.
+    pub const fn activation_height(&self) -> u64 {
+        match self {
+            ZcashNetwork::Main => NU6_3_MAINNET_ACTIVATION,
+            ZcashNetwork::Test => NU6_3_TESTNET_ACTIVATION,
+        }
+    }
+
+    /// Parse the `network` field of a lightwalletd `TreeState` / `LightdInfo`
+    /// response ("main" or "test"). Returns `None` for anything else, including
+    /// regtest, which has no fixed activation height.
+    pub fn from_lwd_name(name: &str) -> Option<Self> {
+        match name {
+            "main" => Some(ZcashNetwork::Main),
+            "test" => Some(ZcashNetwork::Test),
+            _ => None,
+        }
+    }
+
+    /// The name lightwalletd uses for this network.
+    pub const fn as_lwd_name(&self) -> &'static str {
+        match self {
+            ZcashNetwork::Main => "main",
+            ZcashNetwork::Test => "test",
+        }
+    }
+}
+
+/// Lowest block height a PIR server will ever sync.
+///
+/// Normally the network's NU6.3 activation height. Short test chains whose tip
+/// has not reached activation fall back to height 1 so that local harnesses and
+/// regtest still work.
+pub fn min_sync_height(network: Option<ZcashNetwork>, tip_height: u64) -> u64 {
+    match network {
+        Some(network) if tip_height >= network.activation_height() => network.activation_height(),
+        _ => 1,
+    }
+}
 
 /// Public setup seed shared by IPIR-SP clients and servers.
 ///
@@ -81,6 +149,36 @@ mod tests {
         let json = serde_json::to_string(&serving).unwrap();
         let decoded: ServerPhase = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, serving);
+    }
+
+    #[test]
+    fn network_parses_lwd_names() {
+        assert_eq!(
+            ZcashNetwork::from_lwd_name("main"),
+            Some(ZcashNetwork::Main)
+        );
+        assert_eq!(
+            ZcashNetwork::from_lwd_name("test"),
+            Some(ZcashNetwork::Test)
+        );
+        assert_eq!(ZcashNetwork::from_lwd_name("regtest"), None);
+    }
+
+    #[test]
+    fn min_sync_height_uses_activation_or_falls_back() {
+        // Post-activation mainnet tip: start at NU6.3.
+        assert_eq!(
+            min_sync_height(Some(ZcashNetwork::Main), 3_469_040),
+            NU6_3_MAINNET_ACTIVATION
+        );
+        // A tip below activation (or an unknown network) means a short test
+        // chain, so sync everything.
+        assert_eq!(min_sync_height(Some(ZcashNetwork::Main), 500), 1);
+        assert_eq!(min_sync_height(None, 3_469_040), 1);
+        assert_eq!(
+            min_sync_height(Some(ZcashNetwork::Test), 4_200_000),
+            NU6_3_TESTNET_ACTIVATION
+        );
     }
 
     #[test]

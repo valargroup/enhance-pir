@@ -229,7 +229,8 @@ fn make_compact_block(
     prev_hash: [u8; 32],
     nullifiers: &[[u8; 32]],
 ) -> CompactBlock {
-    let actions: Vec<CompactOrchardAction> = nullifiers
+    // Ironwood actions reuse the CompactOrchardAction wire message.
+    let ironwood_actions: Vec<CompactOrchardAction> = nullifiers
         .iter()
         .map(|nf| CompactOrchardAction {
             nullifier: nf.to_vec(),
@@ -242,11 +243,11 @@ fn make_compact_block(
         height,
         hash: hash.to_vec(),
         prev_hash: prev_hash.to_vec(),
-        vtx: if actions.is_empty() {
+        vtx: if ironwood_actions.is_empty() {
             vec![]
         } else {
             vec![CompactTx {
-                actions,
+                ironwood_actions,
                 ..Default::default()
             }]
         },

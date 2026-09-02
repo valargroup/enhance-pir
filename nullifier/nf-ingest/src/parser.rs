@@ -1,15 +1,15 @@
 use chain_ingest::proto::CompactBlock;
 use spend_types::NullifierWithMeta;
 
-/// Extract all Orchard nullifiers from a compact block.
+/// Extract all Ironwood nullifiers from a compact block.
 ///
 /// Iterates through all transactions and collects the 32-byte nullifier from
-/// each Orchard action. Sapling nullifiers are ignored — the PIR database
-/// tracks only Orchard.
+/// each Ironwood action. Sapling and Orchard nullifiers are ignored — the PIR
+/// database tracks only Ironwood.
 pub fn extract_nullifiers(block: &CompactBlock) -> Vec<[u8; 32]> {
     let mut nullifiers = Vec::new();
     for tx in &block.vtx {
-        for action in &tx.actions {
+        for action in &tx.ironwood_actions {
             if action.nullifier.len() == 32 {
                 let mut nf = [0u8; 32];
                 nf.copy_from_slice(&action.nullifier);
@@ -20,16 +20,16 @@ pub fn extract_nullifiers(block: &CompactBlock) -> Vec<[u8; 32]> {
     nullifiers
 }
 
-/// Get the `orchardCommitmentTreeSize` from a block's chain metadata, if present.
-pub fn orchard_tree_size(block: &CompactBlock) -> Option<u32> {
+/// Get the `ironwoodCommitmentTreeSize` from a block's chain metadata, if present.
+pub fn ironwood_tree_size(block: &CompactBlock) -> Option<u32> {
     block
         .chain_metadata
         .as_ref()
-        .map(|m| m.orchard_commitment_tree_size)
+        .map(|m| m.ironwood_commitment_tree_size)
         .filter(|&size| size > 0)
 }
 
-/// Extract Orchard nullifiers with per-transaction output position metadata.
+/// Extract Ironwood nullifiers with per-transaction output position metadata.
 ///
 /// For each nullifier, records the tree position of the first output in its
 /// transaction and the transaction's action count. This lets clients address
@@ -41,9 +41,13 @@ pub fn extract_nullifiers_with_meta(
     block: &CompactBlock,
     prior_tree_size: Option<u32>,
 ) -> (Vec<NullifierWithMeta>, Option<u32>) {
-    let this_tree_size = orchard_tree_size(block);
+    let this_tree_size = ironwood_tree_size(block);
 
-    let total_actions: u32 = block.vtx.iter().map(|tx| tx.actions.len() as u32).sum();
+    let total_actions: u32 = block
+        .vtx
+        .iter()
+        .map(|tx| tx.ironwood_actions.len() as u32)
+        .sum();
 
     // Compute tree size at the start of this block:
     // preferred: derive from this block's metadata (end - total_actions)
@@ -56,10 +60,10 @@ pub fn extract_nullifiers_with_meta(
     let mut running_position: Option<u32> = tree_size_before_block;
 
     for tx in &block.vtx {
-        let action_count = tx.actions.len() as u8;
+        let action_count = tx.ironwood_actions.len() as u8;
         let first_output_position = running_position.unwrap_or(0);
 
-        for action in &tx.actions {
+        for action in &tx.ironwood_actions {
             if action.nullifier.len() == 32 {
                 let mut nf = [0u8; 32];
                 nf.copy_from_slice(&action.nullifier);
@@ -72,7 +76,7 @@ pub fn extract_nullifiers_with_meta(
         }
 
         if let Some(pos) = &mut running_position {
-            *pos += tx.actions.len() as u32;
+            *pos += tx.ironwood_actions.len() as u32;
         }
     }
 
@@ -86,7 +90,8 @@ mod tests {
         ChainMetadata, CompactOrchardAction, CompactSaplingSpend, CompactTx,
     };
 
-    fn make_orchard_action(nf_byte: u8) -> CompactOrchardAction {
+    /// Ironwood actions reuse the `CompactOrchardAction` wire message.
+    fn make_ironwood_action(nf_byte: u8) -> CompactOrchardAction {
         CompactOrchardAction {
             nullifier: vec![nf_byte; 32],
             cmx: vec![0; 32],
@@ -108,7 +113,7 @@ mod tests {
             hash: vec![0; 32],
             prev_hash: vec![0; 32],
             vtx: vec![CompactTx {
-                actions: vec![make_orchard_action(0xAA), make_orchard_action(0xBB)],
+                ironwood_actions: vec![make_ironwood_action(0xAA), make_ironwood_action(0xBB)],
                 ..Default::default()
             }],
             ..Default::default()
@@ -142,14 +147,14 @@ mod tests {
             prev_hash: vec![0; 32],
             vtx: vec![CompactTx {
                 spends: vec![make_sapling_spend(0xCC)],
-                actions: vec![make_orchard_action(0xDD)],
+                ironwood_actions: vec![make_ironwood_action(0xDD)],
                 ..Default::default()
             }],
             ..Default::default()
         };
 
         let nfs = extract_nullifiers(&block);
-        assert_eq!(nfs.len(), 1, "should only extract Orchard nullifiers");
+        assert_eq!(nfs.len(), 1, "should only extract Ironwood nullifiers");
         assert_eq!(nfs[0], [0xDD; 32]);
     }
 
@@ -161,11 +166,11 @@ mod tests {
             prev_hash: vec![0; 32],
             vtx: vec![
                 CompactTx {
-                    actions: vec![make_orchard_action(0x01)],
+                    ironwood_actions: vec![make_ironwood_action(0x01)],
                     ..Default::default()
                 },
                 CompactTx {
-                    actions: vec![make_orchard_action(0x02), make_orchard_action(0x03)],
+                    ironwood_actions: vec![make_ironwood_action(0x02), make_ironwood_action(0x03)],
                     ..Default::default()
                 },
             ],
@@ -181,7 +186,7 @@ mod tests {
         let block = CompactBlock {
             height: 1,
             vtx: vec![CompactTx {
-                actions: vec![CompactOrchardAction {
+                ironwood_actions: vec![CompactOrchardAction {
                     nullifier: vec![0xFF; 16], // too short
                     ..Default::default()
                 }],
@@ -194,6 +199,33 @@ mod tests {
         assert!(nfs.is_empty());
     }
 
+    #[test]
+    fn test_extract_ignores_orchard() {
+        // A transaction carrying both Orchard and Ironwood actions: only the
+        // Ironwood nullifiers belong in the database.
+        let block = CompactBlock {
+            height: 1,
+            vtx: vec![CompactTx {
+                actions: vec![make_ironwood_action(0x11), make_ironwood_action(0x22)],
+                ironwood_actions: vec![make_ironwood_action(0x33)],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let nfs = extract_nullifiers(&block);
+        assert_eq!(nfs.len(), 1, "should only extract Ironwood nullifiers");
+        assert_eq!(nfs[0], [0x33; 32]);
+
+        // The same must hold for the position-tracking path: Orchard actions
+        // must not shift Ironwood tree positions.
+        let (results, _) = extract_nullifiers_with_meta(&block, Some(700));
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].nullifier, [0x33; 32]);
+        assert_eq!(results[0].first_output_position, 700);
+        assert_eq!(results[0].action_count, 1);
+    }
+
     // --- extract_nullifiers_with_meta tests ---
 
     #[test]
@@ -204,12 +236,12 @@ mod tests {
             hash: vec![0; 32],
             prev_hash: vec![0; 32],
             vtx: vec![CompactTx {
-                actions: vec![make_orchard_action(0xAA), make_orchard_action(0xBB)],
+                ironwood_actions: vec![make_ironwood_action(0xAA), make_ironwood_action(0xBB)],
                 ..Default::default()
             }],
             chain_metadata: Some(ChainMetadata {
-                sapling_commitment_tree_size: 0,
-                orchard_commitment_tree_size: 1002,
+                ironwood_commitment_tree_size: 1002,
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -233,21 +265,21 @@ mod tests {
             height: 200,
             vtx: vec![
                 CompactTx {
-                    actions: vec![make_orchard_action(0x01)],
+                    ironwood_actions: vec![make_ironwood_action(0x01)],
                     ..Default::default()
                 },
                 CompactTx {
-                    actions: vec![
-                        make_orchard_action(0x02),
-                        make_orchard_action(0x03),
-                        make_orchard_action(0x04),
+                    ironwood_actions: vec![
+                        make_ironwood_action(0x02),
+                        make_ironwood_action(0x03),
+                        make_ironwood_action(0x04),
                     ],
                     ..Default::default()
                 },
             ],
             chain_metadata: Some(ChainMetadata {
-                sapling_commitment_tree_size: 0,
-                orchard_commitment_tree_size: 5004,
+                ironwood_commitment_tree_size: 5004,
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -270,7 +302,7 @@ mod tests {
         let block = CompactBlock {
             height: 300,
             vtx: vec![CompactTx {
-                actions: vec![make_orchard_action(0xCC)],
+                ironwood_actions: vec![make_ironwood_action(0xCC)],
                 ..Default::default()
             }],
             chain_metadata: None,
@@ -290,7 +322,7 @@ mod tests {
         let block = CompactBlock {
             height: 400,
             vtx: vec![CompactTx {
-                actions: vec![make_orchard_action(0xDD)],
+                ironwood_actions: vec![make_ironwood_action(0xDD)],
                 ..Default::default()
             }],
             chain_metadata: None,
@@ -309,8 +341,8 @@ mod tests {
             height: 500,
             vtx: vec![],
             chain_metadata: Some(ChainMetadata {
-                sapling_commitment_tree_size: 0,
-                orchard_commitment_tree_size: 9000,
+                ironwood_commitment_tree_size: 9000,
+                ..Default::default()
             }),
             ..Default::default()
         };

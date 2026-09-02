@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, HashMap};
 use xxhash_rust::xxh64::xxh64;
 
 const SNAPSHOT_MAGIC: u64 = 0x5350_454E_4450_4952; // "SPENDPIR"
-const SNAPSHOT_VERSION: u32 = 2;
+/// Bumped to 3 for the Ironwood pool: v2 files hold Orchard nullifiers and must
+/// not be loaded into an Ironwood database.
+const SNAPSHOT_VERSION: u32 = 3;
 
 impl HashTableDb {
     pub fn to_snapshot(&self) -> Vec<u8> {
@@ -103,8 +105,13 @@ impl HashTableDb {
         }
         let version = read_u32(&mut pos)?;
         if version != SNAPSHOT_VERSION {
+            let hint = if version < SNAPSHOT_VERSION {
+                " (an Orchard-era dataset; delete the snapshot and resync from NU6.3 activation)"
+            } else {
+                ""
+            };
             return Err(HashTableError::Snapshot(format!(
-                "unsupported snapshot version {version} (expected {SNAPSHOT_VERSION})"
+                "unsupported snapshot version {version} (expected {SNAPSHOT_VERSION}){hint}"
             )));
         }
 
@@ -173,5 +180,57 @@ impl HashTableDb {
             block_hash_to_height,
             num_entries,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Rewrite a current snapshot's version field to an older one, fixing up the
+    /// trailing checksum so the file is well-formed for that version. This is
+    /// what a genuine Orchard-era snapshot looks like on disk: valid, just built
+    /// from a different pool's nullifiers.
+    fn downgrade_version(snapshot: &[u8], version: u32) -> Vec<u8> {
+        let mut buf = snapshot[..snapshot.len() - 8].to_vec();
+        buf[8..12].copy_from_slice(&version.to_le_bytes());
+        let checksum = xxh64(&buf, 0);
+        buf.extend_from_slice(&checksum.to_le_bytes());
+        buf
+    }
+
+    #[test]
+    fn rejects_orchard_era_snapshot() {
+        let db = HashTableDb::new();
+        let snap = db.to_snapshot();
+
+        // Sanity: the snapshot we just wrote does load.
+        assert!(HashTableDb::from_snapshot(&snap).is_ok());
+
+        // A structurally valid v2 snapshot holds Orchard nullifiers. Loading it
+        // would answer Ironwood spend queries from the wrong set — and a false
+        // "not spent" is the dangerous direction to be wrong in — so it must be
+        // refused with an error that says why.
+        let old = downgrade_version(&snap, SNAPSHOT_VERSION - 1);
+        let msg = match HashTableDb::from_snapshot(&old) {
+            Ok(_) => panic!("an Orchard-era snapshot must not load"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("Orchard-era"),
+            "expected an Orchard-era diagnostic, got: {msg}"
+        );
+
+        // A newer-than-known version is a different problem and should not
+        // claim to be an Orchard dataset.
+        let newer = downgrade_version(&snap, SNAPSHOT_VERSION + 1);
+        let msg = match HashTableDb::from_snapshot(&newer) {
+            Ok(_) => panic!("an unknown future version must not load"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            !msg.contains("Orchard-era"),
+            "a future version is not an Orchard dataset, got: {msg}"
+        );
     }
 }

@@ -1,10 +1,12 @@
 //! Snapshot serialization and deserialization for [`CommitmentTreeDb`].
 //!
-//! Binary format v3 (all integers little-endian):
+//! Binary format v4 (all integers little-endian). The v4 body is byte-identical
+//! to v3; only the magic differs, so that a snapshot built from Orchard
+//! commitments can never be loaded into an Ironwood tree.
 //!
 //! | Field                 | Size     | Description                                    |
 //! |-----------------------|----------|------------------------------------------------|
-//! | magic                 | 8 bytes  | `0x434D_5452_4545_0003` (version 3)            |
+//! | magic                 | 8 bytes  | `0x434D_5452_4545_0004` (version 4)            |
 //! | tree_size             | 8 bytes  | Total global number of leaves                  |
 //! | block_count           | 8 bytes  | Number of block records                        |
 //! | latest_height         | 8 bytes  | Height of the most recent block (0 if empty)   |
@@ -25,10 +27,13 @@ use xxhash_rust::xxh64::xxh64;
 const SNAPSHOT_MAGIC_V1: u64 = 0x434D_5452_4545_0001;
 const SNAPSHOT_MAGIC_V2: u64 = 0x434D_5452_4545_0002;
 const SNAPSHOT_MAGIC_V3: u64 = 0x434D_5452_4545_0003;
+/// v4 is v3's layout over Ironwood commitments. v1-v3 snapshots hold Orchard
+/// leaves and are rejected rather than upgraded.
+const SNAPSHOT_MAGIC_V4: u64 = 0x434D_5452_4545_0004;
 const BLOCK_RECORD_SIZE: usize = 8 + 32 + 4; // height + hash + num_commitments
 
 impl CommitmentTreeDb {
-    /// Serialize the current tree state to a snapshot byte vector (v3 format).
+    /// Serialize the current tree state to a snapshot byte vector (v4 format).
     pub fn to_snapshot(&self) -> Vec<u8> {
         let block_count = self.blocks().len();
         let local_leaves = self.leaves().len();
@@ -47,7 +52,7 @@ impl CommitmentTreeDb {
         let mut buf = Vec::with_capacity(estimated);
 
         // Header
-        buf.extend_from_slice(&SNAPSHOT_MAGIC_V3.to_le_bytes());
+        buf.extend_from_slice(&SNAPSHOT_MAGIC_V4.to_le_bytes());
         buf.extend_from_slice(&self.tree_size().to_le_bytes());
         buf.extend_from_slice(&(block_count as u64).to_le_bytes());
 
@@ -96,7 +101,11 @@ impl CommitmentTreeDb {
         buf
     }
 
-    /// Restore a tree from a snapshot byte slice. Supports both v1 and v2 formats.
+    /// Restore a tree from a snapshot byte slice.
+    ///
+    /// Only v4 (Ironwood) is readable. v1-v3 hold Orchard leaves and are
+    /// rejected rather than upgraded — the leaves themselves are from a
+    /// different tree, so there is nothing to migrate.
     pub fn from_snapshot(data: &[u8]) -> Result<Self, TreeError> {
         let min_size = 8 + 8; // magic + at least a checksum
         if data.len() < min_size {
@@ -134,110 +143,22 @@ impl CommitmentTreeDb {
 
         let magic = read_u64(&mut pos)?;
         match magic {
-            SNAPSHOT_MAGIC_V1 => Self::from_snapshot_v1(payload, pos),
-            SNAPSHOT_MAGIC_V2 => Self::from_snapshot_v2(payload, pos),
-            SNAPSHOT_MAGIC_V3 => Self::from_snapshot_v3(payload, pos),
+            // v4 shares v3's layout; only the magic distinguishes an Ironwood
+            // tree from an Orchard one.
+            SNAPSHOT_MAGIC_V4 => Self::from_snapshot_v3(payload, pos),
+            SNAPSHOT_MAGIC_V1 | SNAPSHOT_MAGIC_V2 | SNAPSHOT_MAGIC_V3 => {
+                Err(TreeError::SnapshotCorrupted {
+                    reason: format!(
+                        "snapshot magic {magic:#018x} is an Orchard-era commitment tree; \
+                         Ironwood requires a rebuild from NU6.3 activation \
+                         (delete the snapshot and resync)"
+                    ),
+                })
+            }
             _ => Err(TreeError::SnapshotCorrupted {
                 reason: format!("bad magic: {magic:#018x}"),
             }),
         }
-    }
-
-    fn from_snapshot_v1(payload: &[u8], mut pos: usize) -> Result<Self, TreeError> {
-        let read_u64 = |pos: &mut usize| -> Result<u64, TreeError> {
-            if *pos + 8 > payload.len() {
-                return Err(TreeError::SnapshotCorrupted {
-                    reason: "unexpected EOF reading u64".into(),
-                });
-            }
-            let val = u64::from_le_bytes(payload[*pos..*pos + 8].try_into().unwrap());
-            *pos += 8;
-            Ok(val)
-        };
-
-        let tree_size = read_u64(&mut pos)? as usize;
-        let block_count = read_u64(&mut pos)? as usize;
-        let _latest_height = read_u64(&mut pos)?;
-
-        if pos + 32 > payload.len() {
-            return Err(TreeError::SnapshotCorrupted {
-                reason: "unexpected EOF reading latest_hash".into(),
-            });
-        }
-        pos += 32;
-
-        let (blocks, total_commitments) = Self::read_block_records(payload, &mut pos, block_count)?;
-        if total_commitments != tree_size {
-            return Err(TreeError::SnapshotCorrupted {
-                reason: format!(
-                    "block records sum to {total_commitments} commitments but header says {tree_size}"
-                ),
-            });
-        }
-
-        let leaves = Self::read_leaves(payload, &mut pos, tree_size)?;
-
-        let mut tree = CommitmentTreeDb::new();
-        tree.leaves = leaves;
-        tree.blocks = blocks;
-        Ok(tree)
-    }
-
-    fn from_snapshot_v2(payload: &[u8], mut pos: usize) -> Result<Self, TreeError> {
-        let read_u64 = |pos: &mut usize| -> Result<u64, TreeError> {
-            if *pos + 8 > payload.len() {
-                return Err(TreeError::SnapshotCorrupted {
-                    reason: "unexpected EOF reading u64".into(),
-                });
-            }
-            let val = u64::from_le_bytes(payload[*pos..*pos + 8].try_into().unwrap());
-            *pos += 8;
-            Ok(val)
-        };
-
-        let tree_size = read_u64(&mut pos)? as usize;
-        let block_count = read_u64(&mut pos)? as usize;
-        let _latest_height = read_u64(&mut pos)?;
-
-        if pos + 32 > payload.len() {
-            return Err(TreeError::SnapshotCorrupted {
-                reason: "unexpected EOF reading latest_hash".into(),
-            });
-        }
-        pos += 32;
-
-        let leaf_offset = read_u64(&mut pos)?;
-        let prefetched_count = read_u64(&mut pos)? as usize;
-
-        let mut prefetched_shard_roots = Vec::with_capacity(prefetched_count);
-        for _ in 0..prefetched_count {
-            if pos + 32 > payload.len() {
-                return Err(TreeError::SnapshotCorrupted {
-                    reason: "prefetched roots truncated".into(),
-                });
-            }
-            let mut root = [0u8; 32];
-            root.copy_from_slice(&payload[pos..pos + 32]);
-            pos += 32;
-            prefetched_shard_roots.push(root);
-        }
-
-        let (blocks, total_commitments) = Self::read_block_records(payload, &mut pos, block_count)?;
-        let local_leaves = tree_size - leaf_offset as usize;
-        if total_commitments != local_leaves {
-            return Err(TreeError::SnapshotCorrupted {
-                reason: format!(
-                    "block records sum to {total_commitments} but expected {local_leaves} local leaves"
-                ),
-            });
-        }
-
-        let leaves = Self::read_leaves(payload, &mut pos, local_leaves)?;
-
-        let mut tree = CommitmentTreeDb::with_offset(leaf_offset, prefetched_shard_roots);
-        tree.leaves = leaves;
-        tree.blocks = blocks;
-        Ok(tree)
     }
 
     fn from_snapshot_v3(payload: &[u8], mut pos: usize) -> Result<Self, TreeError> {
@@ -380,6 +301,43 @@ mod tests {
         let mut h = [0u8; 32];
         h[0] = byte;
         h
+    }
+
+    /// Rewrite a v4 snapshot's magic to an older one, fixing up the trailing
+    /// checksum so the file is well-formed for that older version. This is what
+    /// a genuine Orchard-era snapshot looks like on disk: valid, just from a
+    /// different tree.
+    fn downgrade_magic(snapshot: &[u8], magic: u64) -> Vec<u8> {
+        let mut buf = snapshot[..snapshot.len() - 8].to_vec();
+        buf[0..8].copy_from_slice(&magic.to_le_bytes());
+        let checksum = xxh64(&buf, 0);
+        buf.extend_from_slice(&checksum.to_le_bytes());
+        buf
+    }
+
+    #[test]
+    fn rejects_orchard_era_snapshots() {
+        let mut tree = CommitmentTreeDb::new();
+        tree.append_commitments(100, [0xAA; 32], &[make_leaf(1), make_leaf(2)]);
+        let snap = tree.to_snapshot();
+
+        // Sanity: the v4 snapshot we just wrote does load.
+        assert!(CommitmentTreeDb::from_snapshot(&snap).is_ok());
+
+        // A structurally valid v1/v2/v3 snapshot holds Orchard leaves. Loading
+        // it would silently serve witnesses for the wrong tree, so it must be
+        // refused — and the error must say why, not just "bad magic".
+        for magic in [SNAPSHOT_MAGIC_V1, SNAPSHOT_MAGIC_V2, SNAPSHOT_MAGIC_V3] {
+            let old = downgrade_magic(&snap, magic);
+            let msg = match CommitmentTreeDb::from_snapshot(&old) {
+                Ok(_) => panic!("an Orchard-era snapshot must not load"),
+                Err(e) => e.to_string(),
+            };
+            assert!(
+                msg.contains("Orchard-era"),
+                "expected an Orchard-era diagnostic for magic {magic:#018x}, got: {msg}"
+            );
+        }
     }
 
     #[test]
