@@ -8,7 +8,8 @@ project:
 - one `m-8vcpu-64gb-intel` coordinator with a 1 TiB XFS volume at
   `/srv/zakura`, running Zakura (archive), ingest, the coordinator, Caddy, and
   the `pir-apm` sidecar;
-- two `m-8vcpu-64gb-intel` private PIR workers; and
+- one `m-8vcpu-64gb-intel` private PIR worker that serves every table and
+  shard; and
 - a dedicated VPC and firewalls. Only the coordinator may reach worker port
   8091. SSH is restricted to `allowed_ssh_cidrs`.
 
@@ -47,11 +48,17 @@ infisical run --projectId=40862c6d-a089-4355-b405-0477be0ee3b1 --env=prod --path
 
 ## Capacity
 
-Adding capacity is append-only: provision another worker with the
-private-worker firewall, then append it to the worker inventory that the
-deploy workflow passes to the coordinator (`MEMO_WORKERS_JSON` in the
-`production` GitHub Environment). Shard ownership is derived from list order,
-so existing entries are never renamed, reordered, or removed.
+Grow the worker host before growing the worker count. If a second worker is
+ever needed: provision it with the private-worker firewall and append it to
+the inventory the deploy workflow passes to the coordinator (`MEMO_WORKERS_JSON`
+in the `production` GitHub Environment). The step from one worker to two moves
+every shard at or beyond `SHARDS_PER_WORKER` (2) to the new worker and rebuilds
+them there once; every append after that moves nothing. Existing entries are
+never renamed, reordered, or removed.
+
+`spendability-memo-pir-worker-02` from the proof of concept was removed from
+`worker_names`; `terraform apply` destroys it once the fleet has deployed with
+the one-entry inventory.
 
 ## Legacy host
 

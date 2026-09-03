@@ -1,8 +1,9 @@
 locals {
   coordinator_name = "spendability-memo-pir-coordinator-01"
+  # One worker serves every table and shard. Append a name here only after
+  # reading the note on the one-to-two transition in README.md.
   worker_names = [
     "spendability-memo-pir-worker-01",
-    "spendability-memo-pir-worker-02",
   ]
   common_packages = ["ca-certificates", "curl", "jq", "htop"]
 }

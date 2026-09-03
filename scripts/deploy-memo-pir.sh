@@ -38,7 +38,7 @@ if [[ ! "$MEMO_PUBLIC_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/?$ ]]; then
 fi
 
 if ! jq -e --arg coordinator "$MEMO_COORDINATOR_HOST" '
-  type == "array" and length >= 2 and
+  type == "array" and length >= 1 and
   all(.[];
     (keys | sort) == ["name", "service_url", "ssh_host"] and
     (.name | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9-]*$")) and
@@ -101,7 +101,8 @@ topology_is_append_only() {
 
 if [[ "$MODE" == "validate" ]]; then
   extended="$(jq -c '.workers += [{name: "self-test", url: "http://127.0.0.1:1"}]' <<<"$SERVER_CONFIG")"
-  reordered="$(jq -c '.workers |= reverse' <<<"$SERVER_CONFIG")"
+  # Prepend rather than reverse: a one-entry inventory reversed is unchanged.
+  reordered="$(jq -c '.workers = [{name: "self-test", url: "http://127.0.0.1:1"}] + .workers' <<<"$SERVER_CONFIG")"
   topology_is_append_only "$SERVER_CONFIG" "$SERVER_CONFIG" || { echo "append-only check rejects an unchanged inventory" >&2; exit 1; }
   topology_is_append_only "$SERVER_CONFIG" "$extended" || { echo "append-only check rejects an appended worker" >&2; exit 1; }
   if topology_is_append_only "$SERVER_CONFIG" "$reordered"; then echo "append-only check accepts a reordered inventory" >&2; exit 1; fi
@@ -202,8 +203,16 @@ fi
 REMOTE
 )"
 if [[ -n "$existing_config" ]] && ! topology_is_append_only "$existing_config" "$SERVER_CONFIG"; then
-  echo "worker topology is not append-only; refusing deployment" >&2
-  exit 1
+  if [[ "${MEMO_ALLOW_TOPOLOGY_CHANGE:-false}" == "true" ]]; then
+    # A deliberate, one-off change (for example removing a worker). Every
+    # shard whose owner changes is rebuilt from the journal on the next publish.
+    echo "WARNING: worker topology is not append-only; proceeding because MEMO_ALLOW_TOPOLOGY_CHANGE=true" >&2
+    echo "  live: $existing_config" >&2
+    echo "  new:  $SERVER_CONFIG" >&2
+  else
+    echo "worker topology is not append-only; refusing deployment (set allow_topology_change to override)" >&2
+    exit 1
+  fi
 fi
 
 server_config_file="$(mktemp)"

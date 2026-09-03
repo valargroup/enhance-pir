@@ -15,8 +15,8 @@ cargo clippy -p memo-pir --all-targets -- -D warnings
 cargo build --release -p memo-pir --bins
 ```
 
-The production mode requires an archive Zakura RPC and at least two private
-workers:
+The production mode requires an archive Zakura RPC and at least one private
+worker; production runs exactly one, which owns every shard:
 
 ```bash
 memo-pir-worker --listen 0.0.0.0:8091 --data-dir /srv/memo-pir/artifacts
