@@ -29,6 +29,8 @@ pub struct MetricsSnapshot {
     pub at: Instant,
     pub endpoints: BTreeMap<String, EndpointCumulative>,
     pub snapshot_gauges: BTreeMap<String, f64>,
+    /// worker name -> (gauge stem such as `up`, value)
+    pub workers: BTreeMap<String, BTreeMap<String, f64>>,
     pub resident_memory_bytes: Option<f64>,
     pub process_start_time_seconds: Option<f64>,
 }
@@ -310,6 +312,7 @@ pub fn parse_prometheus(
         .map(|name| (name.clone(), EndpointCumulative::default()))
         .collect();
     let mut snapshot_gauges = BTreeMap::new();
+    let mut workers: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
     let mut resident_memory_bytes = None;
     let mut process_start_time_seconds = None;
 
@@ -380,6 +383,13 @@ pub fn parse_prometheus(
             process_start_time_seconds = Some(sample.value);
         } else if name.starts_with(&schema.gauge_prefix) {
             snapshot_gauges.insert(name.to_string(), sample.value);
+        } else if let Some(stem) = name.strip_prefix(&schema.worker_prefix) {
+            if let Some(worker) = sample.labels.get("worker") {
+                workers
+                    .entry(worker.clone())
+                    .or_default()
+                    .insert(stem.to_string(), sample.value);
+            }
         }
     }
     for endpoint in endpoints.values_mut() {
@@ -396,6 +406,7 @@ pub fn parse_prometheus(
         at,
         endpoints,
         snapshot_gauges,
+        workers,
         resident_memory_bytes,
         process_start_time_seconds,
     })
@@ -569,6 +580,9 @@ memo_http_processing_in_flight{endpoint="query"} 2
 memo_snapshot_anchor_height 123
 memo_snapshot_generation 124
 nf_snapshot_ignored 1
+memo_worker_up{worker="worker-1"} 1
+memo_worker_up{worker="worker-2"} 0
+memo_worker_assigned_shards{worker="worker-1"} 2
 process_resident_memory_bytes 1048576
 process_start_time_seconds 1787880000
 "#;
@@ -586,6 +600,10 @@ process_start_time_seconds 1787880000
         assert_eq!(query.processing_in_flight, 2.0);
         assert_eq!(parsed.snapshot_gauges["memo_snapshot_anchor_height"], 123.0);
         assert_eq!(parsed.snapshot_gauges.len(), 2);
+        assert_eq!(parsed.workers["worker-1"]["up"], 1.0);
+        assert_eq!(parsed.workers["worker-1"]["assigned_shards"], 2.0);
+        assert_eq!(parsed.workers["worker-2"]["up"], 0.0);
+        assert!(!parsed.snapshot_gauges.contains_key("memo_worker_up"));
         assert_eq!(parsed.resident_memory_bytes, Some(1_048_576.0));
         assert_eq!(parsed.process_start_time_seconds, Some(1_787_880_000.0));
     }
@@ -642,6 +660,7 @@ process_start_time_seconds 1787880000
                 at: start + Duration::from_secs(index as u64 * 15),
                 endpoints,
                 snapshot_gauges: BTreeMap::new(),
+                workers: BTreeMap::new(),
                 resident_memory_bytes: None,
                 process_start_time_seconds: None,
             });
@@ -710,6 +729,7 @@ process_start_time_seconds 1787880000
                 at: start + Duration::from_secs(index as u64 * 15),
                 endpoints,
                 snapshot_gauges: BTreeMap::new(),
+                workers: BTreeMap::new(),
                 resident_memory_bytes: None,
                 process_start_time_seconds: None,
             });
@@ -755,6 +775,7 @@ process_start_time_seconds 1787880000
                 at: start + Duration::from_secs(index as u64 * 15),
                 endpoints,
                 snapshot_gauges: BTreeMap::new(),
+                workers: BTreeMap::new(),
                 resident_memory_bytes: None,
                 process_start_time_seconds: Some(100.0 + index as f64),
             });
@@ -831,6 +852,7 @@ memo_snapshot_generation 1
                 at: start + Duration::from_secs(index * 15),
                 endpoints,
                 snapshot_gauges: BTreeMap::new(),
+                workers: BTreeMap::new(),
                 resident_memory_bytes: None,
                 process_start_time_seconds: None,
             });

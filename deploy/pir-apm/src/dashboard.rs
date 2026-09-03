@@ -34,6 +34,7 @@ pub struct DashboardData {
     pub ready_status: Option<u16>,
     pub endpoints: BTreeMap<String, EndpointWindow>,
     pub snapshot_gauges: BTreeMap<String, f64>,
+    pub workers: BTreeMap<String, BTreeMap<String, f64>>,
     pub process_resident_memory_bytes: Option<f64>,
     pub host: HostHealth,
     pub active_alerts: Vec<Alert>,
@@ -60,6 +61,7 @@ impl DashboardData {
             ready_status: None,
             endpoints: BTreeMap::new(),
             snapshot_gauges: BTreeMap::new(),
+            workers: BTreeMap::new(),
             process_resident_memory_bytes: None,
             host,
             active_alerts: Vec::new(),
@@ -141,7 +143,7 @@ line-height:1.1;color:var(--ink);margin:0;letter-spacing:-.02em}
 .kpi .eyebrow{margin-bottom:12px}
 
 .card{border:1px solid var(--p16);background:var(--p02);padding:22px 24px 24px;
-margin-bottom:20px}
+margin-bottom:20px;min-width:0;overflow:hidden}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}
 .grid .card{margin:0}
 .card .rows+.note,.card .meter+.rows{margin-top:22px}
@@ -168,6 +170,7 @@ border-bottom:1px solid var(--p08);font-size:13.5px}
 .rows .k{color:var(--p62)}
 .rows .v{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--ink);
 text-align:right;white-space:nowrap}
+.rows .v.wrap-any{white-space:normal;overflow-wrap:anywhere;word-break:break-all;min-width:0}
 
 .meter{margin-top:22px}
 .meter:first-of-type{margin-top:0}
@@ -199,7 +202,34 @@ font-size:13.5px}
 .note{border:1px solid var(--p08);background:transparent;padding:20px 24px;
 font-size:12.5px;color:var(--p42);line-height:1.7;margin:0}
 .note strong{color:var(--p62);font-weight:500}
+.note code{display:block;margin-top:8px;white-space:pre-wrap;overflow-wrap:anywhere;
+word-break:break-all;line-height:1.5}
 
+.topo{display:flex;flex-direction:column;align-items:center;gap:0;margin:6px 0 22px}
+.node{border:1px solid var(--p22);background:var(--p02);padding:12px 18px;min-width:220px;
+max-width:100%;text-align:center}
+.node .role{font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--p42);
+margin:0 0 4px}
+.node .id{font-family:var(--mono);font-size:13px;color:var(--ink);margin:0;
+overflow-wrap:anywhere}
+.node .meta{font-family:var(--mono);font-size:11.5px;color:var(--p62);margin:5px 0 0;
+overflow-wrap:anywhere}
+.node.coord{border-color:rgba(198,161,91,.55)}
+.node.is-ok{border-color:rgba(143,181,115,.5)}
+.node.is-bad{border-color:rgba(210,105,79,.6)}
+.node.is-warn{border-color:rgba(198,161,91,.6)}
+.trunk{width:1px;height:22px;background:var(--p22)}
+.bus{position:relative;width:100%;display:flex;justify-content:center;gap:16px;
+flex-wrap:wrap;padding-top:22px}
+.bus::before{content:"";position:absolute;left:10%;right:10%;top:0;height:1px;
+background:var(--p22)}
+.bus .leaf{position:relative}
+.bus .leaf::before{content:"";position:absolute;left:50%;top:-22px;width:1px;height:22px;
+background:var(--p22)}
+.node .state{display:inline-block;margin-top:7px;font-size:10.5px;letter-spacing:.1em;
+text-transform:uppercase}
+.node.is-ok .state{color:var(--ok)}.node.is-bad .state{color:var(--bad)}
+.node.is-warn .state{color:var(--warn)}
 @media (max-width:900px){.kpis{grid-template-columns:repeat(2,1fr)}}
 @media (max-width:720px){
 #app{padding-bottom:48px}
@@ -253,6 +283,7 @@ fn render(data: &DashboardData) -> String {
     out.push_str(&kpis(data));
     out.push_str(&endpoint_table(data));
     out.push_str(&processing_latency_splits(data));
+    out.push_str(&fleet_card(data));
     out.push_str("<div class=\"grid\">");
     out.push_str(&service_card(data));
     out.push_str(&host_card(&data.host));
@@ -517,6 +548,89 @@ fn error_cell(values: &EndpointWindow) -> String {
     )
 }
 
+/// Coordinator-to-workers topology drawn from the `<prefix>_worker_*` gauges.
+/// Only inventory names are shown; worker addresses never reach the page.
+fn fleet_card(data: &DashboardData) -> String {
+    let gauge = |name: &str| {
+        data.snapshot_gauges
+            .get(&format!("{}{name}", data.schema.gauge_prefix))
+            .copied()
+    };
+    let phase = gauge("phase_code").map(phase_label).unwrap_or("unknown");
+    let generation = gauge("generation").unwrap_or(0.0);
+    let coordinator_meta = format!(
+        "{phase} &middot; anchor {anchor} &middot; generation {generation}",
+        anchor = gauge("anchor_height")
+            .map(format_number)
+            .unwrap_or_else(|| "—".into()),
+        generation = format_number(generation),
+    );
+    let leaves = if data.workers.is_empty() {
+        "<div class=\"leaf\"><div class=\"node\"><p class=\"role\">Workers</p>\
+<p class=\"id muted\">none reported yet</p></div></div>"
+            .to_string()
+    } else {
+        data.workers
+            .iter()
+            .map(|(name, gauges)| {
+                let up = gauges.get("up").copied();
+                let worker_generation = gauges.get("generation").copied().unwrap_or(0.0);
+                let (tone, state) = match up {
+                    Some(value) if value >= 1.0 => {
+                        if generation > 0.0
+                            && worker_generation > 0.0
+                            && worker_generation != generation
+                        {
+                            ("is-warn", "generation lag")
+                        } else {
+                            ("is-ok", "healthy")
+                        }
+                    }
+                    Some(_) => ("is-bad", "unreachable"),
+                    None => ("", "unknown"),
+                };
+                let meta = ["assigned_shards", "active_shards", "populated_positions"]
+                    .iter()
+                    .filter_map(|key| {
+                        gauges.get(*key).map(|value| {
+                            format!("{} {}", format_number(*value), key.replace('_', " "))
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" &middot; ");
+                format!(
+                    "<div class=\"leaf\"><div class=\"node {tone}\"><p class=\"role\">Worker</p>\
+<p class=\"id\">{name}</p><p class=\"meta\">{meta}</p>\
+<span class=\"state\">{state}</span></div></div>",
+                    name = escape(name),
+                )
+            })
+            .collect::<String>()
+    };
+    format!(
+        "<section class=\"card\"><p class=\"eyebrow\">Fleet topology</p>\
+<div class=\"topo\">\
+<div class=\"node coord\"><p class=\"role\">Coordinator</p><p class=\"id\">{hostname}</p>\
+<p class=\"meta\">{coordinator_meta}</p></div>\
+<div class=\"trunk\"></div>\
+<div class=\"bus\">{leaves}</div></div>\
+<p class=\"note\">Workers are probed by the coordinator on each scrape over the private network; \
+only their inventory names are shown here. A worker whose generation trails the coordinator's \
+is still serving the previous snapshot.</p></section>",
+        hostname = escape(&data.hostname),
+    )
+}
+
+fn phase_label(code: f64) -> &'static str {
+    match code as i64 {
+        0 => "syncing",
+        1 => "building",
+        2 => "serving",
+        3 => "failed",
+        _ => "unknown",
+    }
+}
+
 fn service_card(data: &DashboardData) -> String {
     let mut rows = String::new();
     if data.snapshot_gauges.is_empty() {
@@ -577,7 +691,7 @@ fn host_card(host: &HostHealth) -> String {
 <ul class=\"rows\">\
 <li><span class=\"k\">Load 1 / 5 / 15</span>\
 <span class=\"v\">{load_one:.2} · {load_five:.2} · {load_fifteen:.2}</span></li>\
-<li><span class=\"k\">Data directory</span><span class=\"v\">{data_dir}</span></li>\
+<li><span class=\"k\">Data directory</span><span class=\"v wrap-any\">{data_dir}</span></li>\
 </ul></section>",
         memory = meter(
             "Memory",
@@ -897,6 +1011,57 @@ mod tests {
         let mut data = sample();
         data.endpoints.insert("metadata".to_string(), window);
         assert!(!render(&data).contains("figure bad"));
+    }
+
+    #[test]
+    fn long_health_bodies_and_paths_are_allowed_to_wrap() {
+        let mut data = sample();
+        data.health_body =
+            Some("{\"phase\":{\"phase\":\"serving\"},\"anchor_height\":3470117}".into());
+        data.host.data_dir = "/srv/zakura/memo-data".into();
+        let html = render(&data);
+        assert!(html.contains(".note code{display:block"));
+        assert!(html.contains("overflow-wrap:anywhere"));
+        assert!(html.contains("<span class=\"v wrap-any\">/srv/zakura/memo-data</span>"));
+        assert!(html.contains("<code>{&quot;phase&quot;"));
+    }
+
+    #[test]
+    fn fleet_card_draws_each_worker_with_its_health() {
+        let mut data = sample();
+        data.snapshot_gauges
+            .insert("memo_snapshot_phase_code".into(), 2.0);
+        data.snapshot_gauges
+            .insert("memo_snapshot_generation".into(), 100.0);
+        data.snapshot_gauges
+            .insert("memo_snapshot_anchor_height".into(), 100.0);
+        data.workers.insert(
+            "worker-1".into(),
+            BTreeMap::from([
+                ("up".to_string(), 1.0),
+                ("generation".to_string(), 100.0),
+                ("assigned_shards".to_string(), 2.0),
+            ]),
+        );
+        data.workers
+            .insert("worker-2".into(), BTreeMap::from([("up".to_string(), 0.0)]));
+        data.workers.insert(
+            "worker-3".into(),
+            BTreeMap::from([("up".to_string(), 1.0), ("generation".to_string(), 99.0)]),
+        );
+        let html = render(&data);
+        assert!(html.contains("Fleet topology"));
+        assert!(html.contains("serving &middot; anchor 100 &middot; generation 100"));
+        assert!(html.contains("<p class=\"id\">worker-1</p>"));
+        assert!(html.contains("2 assigned shards"));
+        assert_eq!(html.matches("class=\"node is-ok\"").count(), 1);
+        assert_eq!(html.matches("class=\"node is-bad\"").count(), 1);
+        assert_eq!(html.matches("class=\"node is-warn\"").count(), 1);
+        assert!(html.contains("unreachable"));
+        assert!(html.contains("generation lag"));
+
+        let empty = render(&sample());
+        assert!(empty.contains("none reported yet"));
     }
 
     #[test]

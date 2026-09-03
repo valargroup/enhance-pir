@@ -24,6 +24,8 @@ pub struct Schema {
     pub in_flight: String,
     pub processing_in_flight: String,
     pub gauge_prefix: String,
+    /// Families like `<prefix>_worker_up{worker="..."}` describe the fleet.
+    pub worker_prefix: String,
 }
 
 impl Schema {
@@ -80,6 +82,7 @@ impl Schema {
             in_flight: format!("{prefix}_http_in_flight"),
             processing_in_flight: format!("{prefix}_http_processing_in_flight"),
             gauge_prefix: format!("{prefix}_snapshot_"),
+            worker_prefix: format!("{prefix}_worker_"),
             prefix: prefix.to_string(),
             endpoints,
             processing_endpoints,
@@ -168,6 +171,7 @@ mod tests {
             "memo_http_request_processing_duration_seconds_bucket"
         );
         assert_eq!(schema.gauge_prefix, "memo_snapshot_");
+        assert_eq!(schema.worker_prefix, "memo_worker_");
         assert_eq!(schema.latency_budget("query"), Some(5.0));
         assert_eq!(schema.latency_budget("metadata"), Some(1.0));
         assert_eq!(schema.latency_budget("nope"), None);

@@ -47,6 +47,23 @@ All variables are optional; the defaults describe the memo coordinator.
 | `PIR_APM_INTERVAL_SECONDS` | `15` | Scrape interval |
 | `PIR_APM_SLACK_WEBHOOK_URL` | unset | Incoming-webhook URL. Unset: alerts are logged to the journal only |
 
+## Fleet topology
+
+The dashboard draws the coordinator and every worker it knows about. The
+coordinator probes each remote worker's `/internal/health` (2 s timeout) on
+every `/metrics` scrape and exports, per inventory name:
+
+| Family | Meaning |
+| --- | --- |
+| `memo_worker_up{worker}` | 1 if the probe succeeded, else 0 |
+| `memo_worker_generation{worker}` | Generation the worker reports active |
+| `memo_worker_active_shards{worker}` | Shards the worker reports active |
+| `memo_worker_assigned_shards{worker}` | Shards the served snapshot assigns to it |
+| `memo_worker_populated_positions{worker}` | Ironwood positions held by those shards |
+
+The sidecar reads any `<prefix>_worker_*` family with a `worker` label, so the
+card needs no extra configuration. Worker addresses never appear on the page.
+
 ## Alerts
 
 Each check fires once when it starts breaching and recovers once when it stops.
@@ -101,6 +118,7 @@ is enough to exercise the sidecar end to end.
 
 The sidecar reads only the fixed endpoint labels the coordinator emits
 (`metadata`, `params`, `public_params`, `query`, `health`), the `memo_snapshot_*`
-gauges, and process memory. It never sees request bodies, query contents,
+gauges, the per-worker `memo_worker_*` gauges (labelled by inventory name only),
+and process memory. It never sees request bodies, query contents,
 client addresses, or headers, and the dashboard is rendered entirely
 server-side from those aggregates.
