@@ -35,6 +35,7 @@ pub struct DashboardData {
     pub endpoints: BTreeMap<String, EndpointWindow>,
     pub snapshot_gauges: BTreeMap<String, f64>,
     pub workers: BTreeMap<String, BTreeMap<String, f64>>,
+    pub layout: BTreeMap<String, f64>,
     pub process_resident_memory_bytes: Option<f64>,
     pub host: HostHealth,
     pub active_alerts: Vec<Alert>,
@@ -62,6 +63,7 @@ impl DashboardData {
             endpoints: BTreeMap::new(),
             snapshot_gauges: BTreeMap::new(),
             workers: BTreeMap::new(),
+            layout: BTreeMap::new(),
             process_resident_memory_bytes: None,
             host,
             active_alerts: Vec::new(),
@@ -207,7 +209,16 @@ word-break:break-all;line-height:1.5}
 
 .topo{display:flex;flex-direction:column;align-items:center;gap:0;margin:6px 0 22px}
 .node{border:1px solid var(--p22);background:var(--p02);padding:12px 18px;min-width:220px;
-max-width:100%;text-align:center}
+max-width:340px;text-align:center}
+.node .desc{font-size:11.5px;color:var(--p62);margin:7px 0 0;line-height:1.45}
+.node .meta.warn{color:var(--warn)}.node .meta.bad{color:var(--bad)}
+.topo .capacity{width:100%;max-width:560px;margin-top:26px}
+.explain{margin:0;display:grid;grid-template-columns:minmax(120px,180px) 1fr;gap:14px 22px;
+font-size:13.5px}
+.explain dt{color:var(--ink);font-family:var(--mono);font-size:12.5px;padding-top:2px}
+.explain dd{margin:0;color:var(--p62);line-height:1.6}
+.explain dd b{color:var(--p85);font-weight:500;font-family:var(--mono);font-size:.95em}
+@media (max-width:720px){.explain{grid-template-columns:1fr;gap:6px 0}.explain dd{margin-bottom:10px}}
 .node .role{font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--p42);
 margin:0 0 4px}
 .node .id{font-family:var(--mono);font-size:13px;color:var(--ink);margin:0;
@@ -284,6 +295,7 @@ fn render(data: &DashboardData) -> String {
     out.push_str(&endpoint_table(data));
     out.push_str(&processing_latency_splits(data));
     out.push_str(&fleet_card(data));
+    out.push_str(&explainer_card(data));
     out.push_str("<div class=\"grid\">");
     out.push_str(&service_card(data));
     out.push_str(&host_card(&data.host));
@@ -548,14 +560,16 @@ fn error_cell(values: &EndpointWindow) -> String {
     )
 }
 
-/// Coordinator-to-workers topology drawn from the `<prefix>_worker_*` gauges.
-/// Only inventory names are shown; worker addresses never reach the page.
+/// Coordinator-to-workers topology drawn from the `<prefix>_worker_*` gauges,
+/// with each node's job spelled out. Only inventory names are shown; worker
+/// addresses never reach the page.
 fn fleet_card(data: &DashboardData) -> String {
     let gauge = |name: &str| {
         data.snapshot_gauges
             .get(&format!("{}{name}", data.schema.gauge_prefix))
             .copied()
     };
+    let layout = |name: &str| data.layout.get(name).copied();
     let phase = gauge("phase_code").map(phase_label).unwrap_or("unknown");
     let generation = gauge("generation").unwrap_or(0.0);
     let coordinator_meta = format!(
@@ -565,12 +579,29 @@ fn fleet_card(data: &DashboardData) -> String {
             .unwrap_or_else(|| "—".into()),
         generation = format_number(generation),
     );
-    let leaves = if data.workers.is_empty() {
+    let coordinator_meta2 = [
+        gauge("ironwood_tree_size").map(|v| format!("{} actions indexed", format_number(v))),
+        gauge("query_slots_available").map(|v| format!("{} query slots free", format_number(v))),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" &middot; ");
+    let shards_per_worker = layout("shards_per_worker").filter(|v| *v >= 1.0);
+
+    let mut ordered: Vec<(&String, &BTreeMap<String, f64>)> = data.workers.iter().collect();
+    ordered.sort_by(|(a_name, a), (b_name, b)| {
+        let a_index = a.get("index").copied().unwrap_or(f64::INFINITY);
+        let b_index = b.get("index").copied().unwrap_or(f64::INFINITY);
+        a_index.total_cmp(&b_index).then_with(|| a_name.cmp(b_name))
+    });
+
+    let leaves = if ordered.is_empty() {
         "<div class=\"leaf\"><div class=\"node\"><p class=\"role\">Workers</p>\
 <p class=\"id muted\">none reported yet</p></div></div>"
             .to_string()
     } else {
-        data.workers
+        ordered
             .iter()
             .map(|(name, gauges)| {
                 let up = gauges.get("up").copied();
@@ -589,35 +620,213 @@ fn fleet_card(data: &DashboardData) -> String {
                     Some(_) => ("is-bad", "unreachable"),
                     None => ("", "unknown"),
                 };
-                let meta = ["assigned_shards", "active_shards", "populated_positions"]
-                    .iter()
-                    .filter_map(|key| {
-                        gauges.get(*key).map(|value| {
-                            format!("{} {}", format_number(*value), key.replace('_', " "))
-                        })
-                    })
+                let owned = match (gauges.get("index"), shards_per_worker) {
+                    (Some(index), Some(per_worker)) => {
+                        let first = index * per_worker;
+                        let last = first + per_worker - 1.0;
+                        if per_worker == 1.0 {
+                            format!("owns shard {}", format_number(first))
+                        } else {
+                            format!(
+                                "owns shards {}&ndash;{}",
+                                format_number(first),
+                                format_number(last)
+                            )
+                        }
+                    }
+                    _ => String::new(),
+                };
+                let counts = [
+                    ("assigned_shards", "assigned"),
+                    ("active_shards", "active"),
+                    ("populated_positions", "positions"),
+                ]
+                .iter()
+                .filter_map(|(key, label)| {
+                    gauges
+                        .get(*key)
+                        .map(|value| format!("{} {label}", format_number(*value)))
+                })
+                .collect::<Vec<_>>()
+                .join(" &middot; ");
+                let meta = [owned, counts]
+                    .into_iter()
+                    .filter(|part| !part.is_empty())
                     .collect::<Vec<_>>()
                     .join(" &middot; ");
+                let ram = worker_ram_line(gauges);
                 format!(
                     "<div class=\"leaf\"><div class=\"node {tone}\"><p class=\"role\">Worker</p>\
-<p class=\"id\">{name}</p><p class=\"meta\">{meta}</p>\
+<p class=\"id\">{name}</p>\
+<p class=\"desc\">Holds sealed iPIR artifacts for its shards and evaluates its slice of every query.</p>\
+<p class=\"meta\">{meta}</p>{ram}\
 <span class=\"state\">{state}</span></div></div>",
                     name = escape(name),
                 )
             })
             .collect::<String>()
     };
+
+    let capacity = fleet_capacity_meter(data);
+
     format!(
         "<section class=\"card\"><p class=\"eyebrow\">Fleet topology</p>\
 <div class=\"topo\">\
-<div class=\"node coord\"><p class=\"role\">Coordinator</p><p class=\"id\">{hostname}</p>\
-<p class=\"meta\">{coordinator_meta}</p></div>\
+<div class=\"node\"><p class=\"role\">Chain source</p><p class=\"id\">zakurad archive node</p>\
+<p class=\"desc\">Runs on the coordinator host and is reached over loopback RPC. It serves finalized blocks and the Ironwood tree size; the coordinator trusts nothing else about the chain.</p></div>\
 <div class=\"trunk\"></div>\
-<div class=\"bus\">{leaves}</div></div>\
+<div class=\"node coord\"><p class=\"role\">Coordinator</p><p class=\"id\">{hostname}</p>\
+<p class=\"desc\">Ingests every finalized Ironwood action into a local journal, publishes a new generation per block, splits each client query across the workers, and packs the answer. Clients reach it over HTTPS through Caddy; workers are private.</p>\
+<p class=\"meta\">{coordinator_meta}</p>{coordinator_meta2}</div>\
+<div class=\"trunk\"></div>\
+<div class=\"bus\">{leaves}</div>{capacity}</div>\
 <p class=\"note\">Workers are probed by the coordinator on each scrape over the private network; \
 only their inventory names are shown here. A worker whose generation trails the coordinator's \
 is still serving the previous snapshot.</p></section>",
         hostname = escape(&data.hostname),
+        coordinator_meta2 = if coordinator_meta2.is_empty() {
+            String::new()
+        } else {
+            format!("<p class=\"meta\">{coordinator_meta2}</p>")
+        },
+    )
+}
+
+/// `RAM 1.1 GiB used of 62.8 GiB · rss 0.9 GiB`, graded like the host card.
+fn worker_ram_line(gauges: &BTreeMap<String, f64>) -> String {
+    let (Some(total), Some(available)) = (
+        gauges.get("total_memory_bytes").copied(),
+        gauges.get("available_memory_bytes").copied(),
+    ) else {
+        return String::new();
+    };
+    if total <= 0.0 {
+        return String::new();
+    }
+    let rss_suffix = gauges
+        .get("process_rss_bytes")
+        .filter(|value| **value > 0.0)
+        .map(|value| format!(" &middot; rss {}", bytes_human(*value as u64)))
+        .unwrap_or_default();
+    if available <= 0.0 {
+        // Platforms that cannot report availability still get the total.
+        return format!(
+            "<p class=\"meta\">RAM {} total{rss_suffix}</p>",
+            bytes_human(total as u64)
+        );
+    }
+    let used = (total - available).max(0.0);
+    let tone = if (available as u64) < thresholds::MEMORY_AVAILABLE_BYTES {
+        " bad"
+    } else if (available as u64) < thresholds::MEMORY_AVAILABLE_BYTES * 2 {
+        " warn"
+    } else {
+        ""
+    };
+    format!(
+        "<p class=\"meta{tone}\">RAM {} used of {}{rss_suffix}</p>",
+        bytes_human(used as u64),
+        bytes_human(total as u64),
+    )
+}
+
+/// How full the fleet is: positions indexed against
+/// `workers × shards_per_worker × shard_positions`.
+fn fleet_capacity_meter(data: &DashboardData) -> String {
+    let gauge = |name: &str| {
+        data.snapshot_gauges
+            .get(&format!("{}{name}", data.schema.gauge_prefix))
+            .copied()
+    };
+    let (Some(workers), Some(per_worker), Some(shard_positions), Some(tree_size)) = (
+        gauge("workers"),
+        data.layout.get("shards_per_worker").copied(),
+        data.layout.get("shard_positions").copied(),
+        gauge("ironwood_tree_size"),
+    ) else {
+        return String::new();
+    };
+    if workers <= 0.0 || per_worker <= 0.0 || shard_positions <= 0.0 {
+        return String::new();
+    }
+    let shard_capacity = workers * per_worker;
+    let position_capacity = shard_capacity * shard_positions;
+    let ratio = tree_size / position_capacity;
+    let shards_used = (tree_size / shard_positions).ceil();
+    let tone = if ratio > 0.90 {
+        "bad"
+    } else if ratio > 0.75 {
+        "warn"
+    } else {
+        ""
+    };
+    format!(
+        "<div class=\"capacity\">{meter}\
+<p class=\"meter-foot\">Append a worker to the inventory before the tree reaches capacity; \
+ownership of existing shards never moves.</p></div>",
+        meter = meter(
+            "Fleet capacity",
+            &format!(
+                "{} of {} positions &middot; {} of {} shards",
+                format_number(tree_size),
+                format_number(position_capacity),
+                format_number(shards_used),
+                format_number(shard_capacity),
+            ),
+            ratio,
+            tone,
+        ),
+    )
+}
+
+/// Plain-language summary of how the fleet works, with every number taken
+/// from the `<prefix>_layout_*` gauges so it cannot drift from the binary.
+/// Rendered only when the layout family is present (the memo profile).
+fn explainer_card(data: &DashboardData) -> String {
+    if data.layout.is_empty() {
+        return String::new();
+    }
+    let n = |name: &str| {
+        data.layout
+            .get(name)
+            .map(|value| format_number(*value))
+            .unwrap_or_else(|| "?".to_string())
+    };
+    let per_worker = data.layout.get("shards_per_worker").copied().unwrap_or(0.0);
+    let ownership = if per_worker >= 1.0 {
+        format!(
+            "Worker <b>n</b> owns shards <b>n&times;{spw}</b> to <b>n&times;{spw}+{last}</b>.",
+            spw = format_number(per_worker),
+            last = format_number(per_worker - 1.0),
+        )
+    } else {
+        "Each worker owns a fixed range of shard ids.".to_string()
+    };
+    format!(
+        "<section class=\"card\"><p class=\"eyebrow\">How this fleet works</p>\
+<dl class=\"explain\">\
+<dt>Ingest</dt><dd>The coordinator alone reads the chain. It polls the local archive node, waits \
+<b>{confirmations}</b> confirmations, and appends each finalized block's actions to an append-only \
+journal that starts at Ironwood activation, height <b>{activation}</b>. Workers never talk to the chain.</dd>\
+<dt>Generations</dt><dd>Every new finalized block publishes a new generation named by its height. \
+Only the shard whose rows changed (the unsealed tail) is re-uploaded and rebuilt on its worker; \
+sealed shards are reused from the worker's on-disk cache, so a rebuild usually touches one shard \
+and takes seconds. Workers keep the previous generation active so in-flight queries still finish.</dd>\
+<dt>Shard layout</dt><dd>The database is indexed directly by Ironwood note position. A row packs \
+<b>{records_per_row}</b> records of <b>{record_bytes}</b> bytes, a shard is <b>{shard_rows}</b> rows, \
+so one shard covers <b>{shard_positions}</b> positions. {ownership} The inventory is append-only, \
+so adding a worker never moves a published shard.</dd>\
+<dt>Queries</dt><dd>A client fetches the public parameters and sends one query for the whole \
+database. The coordinator slices it per shard, fans the slices out to the owning workers in \
+parallel, sums the partial answers, and packs a single response. It admits two queries at a time \
+and sheds the rest with a 503.</dd>\
+</dl></section>",
+        confirmations = n("confirmations"),
+        activation = n("activation_height"),
+        records_per_row = n("records_per_row"),
+        record_bytes = n("record_bytes"),
+        shard_rows = n("shard_rows"),
+        shard_positions = n("shard_positions"),
     )
 }
 
@@ -1053,7 +1262,10 @@ mod tests {
         assert!(html.contains("Fleet topology"));
         assert!(html.contains("serving &middot; anchor 100 &middot; generation 100"));
         assert!(html.contains("<p class=\"id\">worker-1</p>"));
-        assert!(html.contains("2 assigned shards"));
+        assert!(html.contains("2 assigned"));
+        assert!(html.contains("zakurad archive node"));
+        assert!(html.contains("Ingests every finalized Ironwood action"));
+        assert!(html.contains("Holds sealed iPIR artifacts"));
         assert_eq!(html.matches("class=\"node is-ok\"").count(), 1);
         assert_eq!(html.matches("class=\"node is-bad\"").count(), 1);
         assert_eq!(html.matches("class=\"node is-warn\"").count(), 1);
@@ -1062,6 +1274,109 @@ mod tests {
 
         let empty = render(&sample());
         assert!(empty.contains("none reported yet"));
+    }
+
+    fn fleet_sample() -> DashboardData {
+        let mut data = sample();
+        data.snapshot_gauges
+            .insert("memo_snapshot_phase_code".into(), 2.0);
+        data.snapshot_gauges
+            .insert("memo_snapshot_generation".into(), 100.0);
+        data.snapshot_gauges
+            .insert("memo_snapshot_workers".into(), 2.0);
+        data.snapshot_gauges
+            .insert("memo_snapshot_ironwood_tree_size".into(), 138_124.0);
+        data.layout.insert("shards_per_worker".into(), 2.0);
+        data.layout.insert("shard_positions".into(), 65_536.0);
+        data.layout.insert("shard_rows".into(), 8_192.0);
+        data.layout.insert("records_per_row".into(), 8.0);
+        data.layout.insert("record_bytes".into(), 792.0);
+        data.layout.insert("confirmations".into(), 10.0);
+        data.layout.insert("activation_height".into(), 3_428_143.0);
+        data.workers.insert(
+            "worker-b".into(),
+            BTreeMap::from([
+                ("up".to_string(), 1.0),
+                ("index".to_string(), 0.0),
+                (
+                    "total_memory_bytes".to_string(),
+                    64.0 * 1024.0 * 1024.0 * 1024.0,
+                ),
+                (
+                    "available_memory_bytes".to_string(),
+                    60.0 * 1024.0 * 1024.0 * 1024.0,
+                ),
+                ("process_rss_bytes".to_string(), 1024.0 * 1024.0 * 1024.0),
+            ]),
+        );
+        data.workers.insert(
+            "worker-a".into(),
+            BTreeMap::from([("up".to_string(), 1.0), ("index".to_string(), 1.0)]),
+        );
+        data
+    }
+
+    #[test]
+    fn workers_are_ordered_by_inventory_index_and_show_owned_shards() {
+        let html = render(&fleet_sample());
+        let b = html.find("<p class=\"id\">worker-b</p>").unwrap();
+        let a = html.find("<p class=\"id\">worker-a</p>").unwrap();
+        assert!(b < a, "index 0 must render before index 1");
+        assert!(html.contains("owns shards 0&ndash;1"));
+        assert!(html.contains("owns shards 2&ndash;3"));
+    }
+
+    #[test]
+    fn worker_ram_line_renders_when_memory_gauges_exist() {
+        let html = render(&fleet_sample());
+        assert!(html.contains("RAM 4.00 GiB used of 64.00 GiB &middot; rss 1.00 GiB"));
+        // worker-a has no memory gauges: exactly one RAM line on the page.
+        assert_eq!(html.matches("RAM ").count(), 1);
+
+        let mut low = BTreeMap::new();
+        low.insert(
+            "total_memory_bytes".to_string(),
+            8.0 * 1024.0 * 1024.0 * 1024.0,
+        );
+        low.insert(
+            "available_memory_bytes".to_string(),
+            100.0 * 1024.0 * 1024.0,
+        );
+        assert!(worker_ram_line(&low).contains("meta bad"));
+
+        let mut unknown = BTreeMap::new();
+        unknown.insert(
+            "total_memory_bytes".to_string(),
+            8.0 * 1024.0 * 1024.0 * 1024.0,
+        );
+        unknown.insert("available_memory_bytes".to_string(), 0.0);
+        assert!(worker_ram_line(&unknown).contains("RAM 8.00 GiB total"));
+    }
+
+    #[test]
+    fn capacity_meter_uses_layout_and_worker_count() {
+        let mut data = fleet_sample();
+        let html = render(&data);
+        assert!(html.contains("Fleet capacity"));
+        assert!(html.contains("138124 of 262144 positions &middot; 3 of 4 shards"));
+        assert!(!fleet_capacity_meter(&data).contains("warn"));
+
+        data.snapshot_gauges
+            .insert("memo_snapshot_ironwood_tree_size".into(), 210_000.0);
+        assert!(fleet_capacity_meter(&data).contains("warn"));
+        data.layout.clear();
+        assert!(fleet_capacity_meter(&data).is_empty());
+    }
+
+    #[test]
+    fn explainer_substitutes_layout_numbers_and_hides_without_them() {
+        let html = render(&fleet_sample());
+        assert!(html.contains("How this fleet works"));
+        assert!(html.contains("<b>65536</b> positions"));
+        assert!(html.contains("<b>10</b> confirmations"));
+        assert!(html.contains("height <b>3428143</b>"));
+        assert!(html.contains("n&times;2+1"));
+        assert!(!render(&sample()).contains("How this fleet works"));
     }
 
     #[test]

@@ -28,6 +28,10 @@ use prometheus::{
 
 use crate::coordinator::CoordinatorPhase;
 use crate::types::DatabaseId;
+use crate::types::{
+    ACTIVATION_HEIGHT, CONFIRMATIONS, RECORDS_PER_ROW, RECORD_BYTES, SHARDS_PER_WORKER,
+    SHARD_POSITIONS, SHARD_ROWS,
+};
 
 struct Metrics {
     registry: Registry,
@@ -51,6 +55,17 @@ struct Metrics {
     worker_active_shards: IntGaugeVec,
     worker_assigned_shards: IntGaugeVec,
     worker_populated_positions: IntGaugeVec,
+    worker_index: IntGaugeVec,
+    worker_total_memory_bytes: IntGaugeVec,
+    worker_available_memory_bytes: IntGaugeVec,
+    worker_process_rss_bytes: IntGaugeVec,
+    layout_shard_positions: IntGauge,
+    layout_shard_rows: IntGauge,
+    layout_records_per_row: IntGauge,
+    layout_record_bytes: IntGauge,
+    layout_shards_per_worker: IntGauge,
+    layout_confirmations: IntGauge,
+    layout_activation_height: IntGauge,
 }
 
 fn worker_gauge(name: &str, help: &str) -> IntGaugeVec {
@@ -172,6 +187,48 @@ fn build_metrics() -> Metrics {
         "Ironwood positions held by the shards assigned to this worker.",
     );
 
+    let worker_index = worker_gauge(
+        "memo_worker_index",
+        "Zero-based position of the worker in the inventory; fixes which shards it owns.",
+    );
+    let worker_total_memory_bytes = worker_gauge(
+        "memo_worker_total_memory_bytes",
+        "Total RAM on the worker host, as reported by its health probe.",
+    );
+    let worker_available_memory_bytes = worker_gauge(
+        "memo_worker_available_memory_bytes",
+        "Available RAM on the worker host, as reported by its health probe.",
+    );
+    let worker_process_rss_bytes = worker_gauge(
+        "memo_worker_process_rss_bytes",
+        "Resident memory of the worker process, as reported by its health probe.",
+    );
+
+    // Fixed layout facts, exported so the dashboard's explainer and capacity
+    // maths never hardcode a number that lives in `types.rs`.
+    let layout_shard_positions = gauge(
+        "memo_layout_shard_positions",
+        "Ironwood positions covered by one shard.",
+    );
+    let layout_shard_rows = gauge("memo_layout_shard_rows", "PIR rows in one shard.");
+    let layout_records_per_row = gauge(
+        "memo_layout_records_per_row",
+        "Action records packed into one PIR row.",
+    );
+    let layout_record_bytes = gauge("memo_layout_record_bytes", "Bytes in one action record.");
+    let layout_shards_per_worker = gauge(
+        "memo_layout_shards_per_worker",
+        "Fixed number of shard ids each worker owns.",
+    );
+    let layout_confirmations = gauge(
+        "memo_layout_confirmations",
+        "Confirmations a block needs before its actions are ingested.",
+    );
+    let layout_activation_height = gauge(
+        "memo_layout_activation_height",
+        "Height at which Ironwood activated; ingest starts here.",
+    );
+
     for collector in [
         Box::new(http_requests.clone()) as Box<dyn prometheus::core::Collector>,
         Box::new(http_request_duration.clone()),
@@ -193,6 +250,17 @@ fn build_metrics() -> Metrics {
         Box::new(worker_active_shards.clone()),
         Box::new(worker_assigned_shards.clone()),
         Box::new(worker_populated_positions.clone()),
+        Box::new(worker_index.clone()),
+        Box::new(worker_total_memory_bytes.clone()),
+        Box::new(worker_available_memory_bytes.clone()),
+        Box::new(worker_process_rss_bytes.clone()),
+        Box::new(layout_shard_positions.clone()),
+        Box::new(layout_shard_rows.clone()),
+        Box::new(layout_records_per_row.clone()),
+        Box::new(layout_record_bytes.clone()),
+        Box::new(layout_shards_per_worker.clone()),
+        Box::new(layout_confirmations.clone()),
+        Box::new(layout_activation_height.clone()),
     ] {
         registry.register(collector).expect("register collector");
     }
@@ -225,6 +293,17 @@ fn build_metrics() -> Metrics {
         worker_active_shards,
         worker_assigned_shards,
         worker_populated_positions,
+        worker_index,
+        worker_total_memory_bytes,
+        worker_available_memory_bytes,
+        worker_process_rss_bytes,
+        layout_shard_positions,
+        layout_shard_rows,
+        layout_records_per_row,
+        layout_record_bytes,
+        layout_shards_per_worker,
+        layout_confirmations,
+        layout_activation_height,
     }
 }
 
@@ -362,12 +441,17 @@ pub async fn track_request(
 #[derive(Clone, Debug, Default)]
 pub struct WorkerObservation {
     pub name: String,
-    /// `None` when the probe failed or timed out.
+    /// Zero-based inventory position; shard ownership derives from it.
+    pub index: u64,
+    /// `false` when the probe failed or timed out.
     pub up: bool,
     pub generation: u64,
     pub active_shards: u64,
     pub assigned_shards: u64,
     pub populated_positions: u64,
+    pub total_memory_bytes: u64,
+    pub available_memory_bytes: u64,
+    pub process_rss_bytes: u64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -430,7 +514,26 @@ pub fn record_observation(observation: &Observation) {
         m.worker_populated_positions
             .with_label_values(&label)
             .set(clamp(worker.populated_positions));
+        m.worker_index
+            .with_label_values(&label)
+            .set(clamp(worker.index));
+        m.worker_total_memory_bytes
+            .with_label_values(&label)
+            .set(clamp(worker.total_memory_bytes));
+        m.worker_available_memory_bytes
+            .with_label_values(&label)
+            .set(clamp(worker.available_memory_bytes));
+        m.worker_process_rss_bytes
+            .with_label_values(&label)
+            .set(clamp(worker.process_rss_bytes));
     }
+    m.layout_shard_positions.set(clamp(SHARD_POSITIONS as u64));
+    m.layout_shard_rows.set(clamp(SHARD_ROWS as u64));
+    m.layout_records_per_row.set(clamp(RECORDS_PER_ROW as u64));
+    m.layout_record_bytes.set(clamp(RECORD_BYTES as u64));
+    m.layout_shards_per_worker.set(clamp(SHARDS_PER_WORKER));
+    m.layout_confirmations.set(clamp(CONFIRMATIONS));
+    m.layout_activation_height.set(clamp(ACTIVATION_HEIGHT));
 }
 
 /// Render the registry as Prometheus text exposition.
@@ -607,14 +710,19 @@ mod tests {
             worker_details: vec![
                 WorkerObservation {
                     name: "worker-1".into(),
+                    index: 0,
                     up: true,
                     generation: 3_000_000,
                     active_shards: 2,
                     assigned_shards: 2,
                     populated_positions: 100,
+                    total_memory_bytes: 64 << 30,
+                    available_memory_bytes: 60 << 30,
+                    process_rss_bytes: 1 << 30,
                 },
                 WorkerObservation {
                     name: "worker-2".into(),
+                    index: 1,
                     up: false,
                     ..Default::default()
                 },
@@ -631,5 +739,15 @@ mod tests {
         assert!(body.contains("memo_worker_up{worker=\"worker-1\"} 1"));
         assert!(body.contains("memo_worker_up{worker=\"worker-2\"} 0"));
         assert!(body.contains("memo_worker_assigned_shards{worker=\"worker-1\"} 2"));
+        assert!(body.contains("memo_worker_index{worker=\"worker-2\"} 1"));
+        assert!(body.contains(&format!(
+            "memo_worker_total_memory_bytes{{worker=\"worker-1\"}} {}",
+            64u64 << 30
+        )));
+        assert!(body.contains(&format!("memo_layout_shard_positions {}", SHARD_POSITIONS)));
+        assert!(body.contains(&format!(
+            "memo_layout_shards_per_worker {}",
+            SHARDS_PER_WORKER
+        )));
     }
 }

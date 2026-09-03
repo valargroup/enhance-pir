@@ -61,8 +61,19 @@ every `/metrics` scrape and exports, per inventory name:
 | `memo_worker_assigned_shards{worker}` | Shards the served snapshot assigns to it |
 | `memo_worker_populated_positions{worker}` | Ironwood positions held by those shards |
 
+| `memo_worker_index{worker}` | Inventory position; the card orders workers by it and derives the shard ids each owns |
+| `memo_worker_total_memory_bytes{worker}`, `memo_worker_available_memory_bytes{worker}`, `memo_worker_process_rss_bytes{worker}` | Host and process memory reported by the worker's health probe |
+
 The sidecar reads any `<prefix>_worker_*` family with a `worker` label, so the
 card needs no extra configuration. Worker addresses never appear on the page.
+
+The coordinator also exports fixed geometry under `memo_layout_*`
+(`shard_positions`, `shard_rows`, `records_per_row`, `record_bytes`,
+`shards_per_worker`, `confirmations`, `activation_height`). When that family
+is present the card adds a fleet-capacity meter
+(`workers × shards_per_worker × shard_positions`) and a "How this fleet works"
+explainer whose numbers are taken from those gauges. The explainer's prose is
+memo-specific; deployments without the layout family show neither.
 
 ## Alerts
 

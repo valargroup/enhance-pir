@@ -276,6 +276,7 @@ impl CoordinatorState {
                 .unwrap_or_default();
             let mut observation = metrics::WorkerObservation {
                 name: worker.name().to_string(),
+                index: index as u64,
                 assigned_shards: assigned.len() as u64,
                 populated_positions: assigned.iter().map(|s| s.populated_positions).sum(),
                 ..Default::default()
@@ -287,16 +288,25 @@ impl CoordinatorState {
                 }
             };
             probes.spawn(async move {
-                match probe {
-                    None => observation.up = true,
-                    Some((client, base_url)) => {
-                        let (up, generation, active_shards) =
-                            probe_worker_health(&client, &base_url).await;
-                        observation.up = up;
-                        observation.generation = generation;
-                        observation.active_shards = active_shards;
+                let probe = match probe {
+                    None => {
+                        let (total, available, rss) = crate::worker::host_memory();
+                        WorkerProbe {
+                            up: true,
+                            total_memory_bytes: total,
+                            available_memory_bytes: available,
+                            process_rss_bytes: rss,
+                            ..Default::default()
+                        }
                     }
-                }
+                    Some((client, base_url)) => probe_worker_health(&client, &base_url).await,
+                };
+                observation.up = probe.up;
+                observation.generation = probe.generation;
+                observation.active_shards = probe.active_shards;
+                observation.total_memory_bytes = probe.total_memory_bytes;
+                observation.available_memory_bytes = probe.available_memory_bytes;
+                observation.process_rss_bytes = probe.process_rss_bytes;
                 (index, observation)
             });
         }
@@ -860,34 +870,52 @@ fn parse_table(name: &str) -> Result<DatabaseId, StatusCode> {
     name.parse().map_err(|_| StatusCode::NOT_FOUND)
 }
 
-/// Ask a worker for `/internal/health`, returning (up, generation, active
-/// shards summed over its tables). Any error, non-2xx, or malformed body counts
-/// as down.
-async fn probe_worker_health(client: &reqwest::Client, base_url: &str) -> (bool, u64, u64) {
+/// What one `/internal/health` probe yielded. All zeros when the worker is down.
+#[derive(Clone, Debug, Default)]
+struct WorkerProbe {
+    up: bool,
+    generation: u64,
+    active_shards: u64,
+    total_memory_bytes: u64,
+    available_memory_bytes: u64,
+    process_rss_bytes: u64,
+}
+
+/// Ask a worker for `/internal/health`. Any error, non-2xx, or malformed
+/// body counts as down.
+async fn probe_worker_health(client: &reqwest::Client, base_url: &str) -> WorkerProbe {
     let response = client
         .get(format!("{base_url}/internal/health"))
         .timeout(Duration::from_secs(2))
         .send()
         .await;
     let Ok(response) = response else {
-        return (false, 0, 0);
+        return WorkerProbe::default();
     };
     if !response.status().is_success() {
-        return (false, 0, 0);
+        return WorkerProbe::default();
     }
     let Ok(body) = response.json::<serde_json::Value>().await else {
-        return (false, 0, 0);
+        return WorkerProbe::default();
     };
-    let up = body.get("status").and_then(|v| v.as_str()) == Some("ok");
-    let generation = body.get("generation").and_then(|v| v.as_u64()).unwrap_or(0);
-    let active = match body.get("active_shards") {
+    let field = |name: &str| body.get(name).and_then(|v| v.as_u64()).unwrap_or(0);
+    // `active_shards` is a per-table object on current workers and a bare
+    // number on older ones; sum either form.
+    let active_shards = match body.get("active_shards") {
         Some(serde_json::Value::Object(per_table)) => {
             per_table.values().filter_map(|v| v.as_u64()).sum()
         }
         Some(value) => value.as_u64().unwrap_or(0),
         None => 0,
     };
-    (up, generation, active)
+    WorkerProbe {
+        up: body.get("status").and_then(|v| v.as_str()) == Some("ok"),
+        generation: field("generation"),
+        active_shards,
+        total_memory_bytes: field("total_memory_bytes"),
+        available_memory_bytes: field("available_memory_bytes"),
+        process_rss_bytes: field("process_rss_bytes"),
+    }
 }
 
 /// `GET /metrics`: Prometheus text exposition for the local `pir-apm` sidecar.
