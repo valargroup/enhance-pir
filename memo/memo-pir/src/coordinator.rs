@@ -611,16 +611,28 @@ async fn handle_metrics(State(state): State<CoordinatorState>) -> Response {
         .into_response()
 }
 
-/// `GET /ready`: 200 only while the coordinator is serving a live snapshot.
-/// Deploy tooling and the sidecar use this as the readiness gate; `/memo/health`
+/// `GET /ready`: 200 while queries can be answered from a live snapshot.
+///
+/// The previous generation keeps serving during a `building` rebuild, so
+/// readiness follows the live snapshot rather than the `serving` phase; only
+/// a failed ingest, or having nothing published yet, reports 503. Deploy
+/// tooling and the sidecar use this as the readiness gate; `/memo/health`
 /// stays the richer JSON view.
 async fn ready(State(state): State<CoordinatorState>) -> Response {
     let phase = state.phase.read().await.clone();
-    if matches!(phase, CoordinatorPhase::Serving) && state.live.load().is_some() {
+    if is_ready(&phase, state.live.load().is_some()) {
         (StatusCode::OK, "ready\n").into_response()
     } else {
         (StatusCode::SERVICE_UNAVAILABLE, "not ready\n").into_response()
     }
+}
+
+fn is_ready(phase: &CoordinatorPhase, has_live_snapshot: bool) -> bool {
+    has_live_snapshot
+        && matches!(
+            phase,
+            CoordinatorPhase::Serving | CoordinatorPhase::Building { .. }
+        )
 }
 
 async fn health(State(state): State<CoordinatorState>) -> Response {
@@ -680,5 +692,26 @@ async fn query(State(state): State<CoordinatorState>, body: Bytes) -> Response {
             tracing::warn!(%error, "memo PIR query failed");
             StatusCode::SERVICE_UNAVAILABLE.into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_ready, CoordinatorPhase};
+
+    #[test]
+    fn readiness_follows_the_live_snapshot() {
+        let building = CoordinatorPhase::Building { anchor_height: 1 };
+        let syncing = CoordinatorPhase::Syncing {
+            current_height: 0,
+            target_height: 1,
+        };
+        let failed = CoordinatorPhase::Failed { reason: "x".into() };
+        assert!(is_ready(&CoordinatorPhase::Serving, true));
+        assert!(is_ready(&building, true));
+        assert!(!is_ready(&CoordinatorPhase::Serving, false));
+        assert!(!is_ready(&building, false));
+        assert!(!is_ready(&syncing, true));
+        assert!(!is_ready(&failed, true));
     }
 }
