@@ -56,7 +56,25 @@ fi
 
 SERVER_CONFIG="$(jq -c '{workers: map({name, url: (.service_url | rtrimstr("/"))})}' <<<"$MEMO_WORKERS_JSON")"
 
+# Sealed shard ownership is a function of worker order, so an existing
+# inventory may only ever be extended at the end. `-n` matters: without it jq
+# waits for stdin and, given none, produces no result, which `-e` reports as
+# failure for every input, including an unchanged inventory.
+topology_is_append_only() {
+  local old="$1" new="$2"
+  jq -n -e --argjson old "$old" --argjson new "$new" '
+    ($old.workers | type == "array") and
+    ($new.workers | length) >= ($old.workers | length) and
+    all(range(0; $old.workers | length); $new.workers[.] == $old.workers[.])
+  ' >/dev/null
+}
+
 if [[ "$MODE" == "validate" ]]; then
+  extended="$(jq -c '.workers += [{name: "self-test", url: "http://127.0.0.1:1"}]' <<<"$SERVER_CONFIG")"
+  reordered="$(jq -c '.workers |= reverse' <<<"$SERVER_CONFIG")"
+  topology_is_append_only "$SERVER_CONFIG" "$SERVER_CONFIG" || { echo "append-only check rejects an unchanged inventory" >&2; exit 1; }
+  topology_is_append_only "$SERVER_CONFIG" "$extended" || { echo "append-only check rejects an appended worker" >&2; exit 1; }
+  if topology_is_append_only "$SERVER_CONFIG" "$reordered"; then echo "append-only check accepts a reordered inventory" >&2; exit 1; fi
   echo "$SERVER_CONFIG"
   exit 0
 fi
@@ -133,11 +151,7 @@ if [[ -r /etc/memo-pir/workers.json ]]; then
 fi
 REMOTE
 )"
-if [[ -n "$existing_config" ]] && ! jq -e --argjson old "$existing_config" --argjson new "$SERVER_CONFIG" '
-  ($old.workers | type == "array") and
-  ($new.workers | length) >= ($old.workers | length) and
-  all(range(0; $old.workers | length); $new.workers[.] == $old.workers[.])
-' >/dev/null; then
+if [[ -n "$existing_config" ]] && ! topology_is_append_only "$existing_config" "$SERVER_CONFIG"; then
   echo "worker topology is not append-only; refusing deployment" >&2
   exit 1
 fi
