@@ -45,6 +45,7 @@ jobs:
               - 'proto/**'
               - '.github/workflows/ci.yml'
             memo_deploy:
+              - '.github/actionlint.yaml'
               - 'scripts/deploy-memo-pir.sh'
               - '.github/workflows/deploy-memo-pir.yml'
               - 'infra/digitalocean/memo-poc/deploy/memo-pir-*.service'

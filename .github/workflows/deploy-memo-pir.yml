@@ -130,7 +130,9 @@ jobs:
   deploy:
     name: Deploy coordinated fleet
     needs: [resolve, build]
-    runs-on: ubuntu-latest
+    # This repository is public, so no pull-request job may use this runner.
+    # Only the default-branch workflow_run/manual deployment path reaches it.
+    runs-on: [self-hosted, Linux, X64, memo-pir-deploy]
     timeout-minutes: 60
     environment:
       name: memo-pir-mainnet-poc
@@ -207,3 +209,11 @@ jobs:
             echo "- Endpoint: $PUBLIC_URL"
             echo "- Event: $GITHUB_EVENT_NAME"
           } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Remove SSH material
+        if: always()
+        run: |
+          rm -f \
+            "$RUNNER_TEMP/memo-pir-ssh/key" \
+            "$RUNNER_TEMP/memo-pir-ssh/known_hosts"
+          rmdir "$RUNNER_TEMP/memo-pir-ssh" 2>/dev/null || true
