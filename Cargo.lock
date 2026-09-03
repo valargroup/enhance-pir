@@ -2087,6 +2087,7 @@ dependencies = [
  "hex",
  "inspiring 0.1.0 (git+https://github.com/valargroup/ipir-sp.git?rev=e875404cef33661906ab60af236dfb327e6b28b1)",
  "ipir-sp 0.1.0 (git+https://github.com/valargroup/ipir-sp.git?rev=e875404cef33661906ab60af236dfb327e6b28b1)",
+ "pir-types",
  "prometheus",
  "rand 0.8.5",
  "reqwest",
@@ -2431,6 +2432,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]

@@ -1,5 +1,5 @@
 use clap::{Parser, ValueEnum};
-use memo_pir::coordinator::{router, CoordinatorPhase, CoordinatorState, WorkerTarget};
+use memo_pir::coordinator::{router, CoordinatorPhase, CoordinatorState, TableSetup, WorkerTarget};
 use memo_pir::store::RecordJournal;
 use memo_pir::types::{DatabaseId, ACTION_LAYOUT, ACTIVATION_HEIGHT, CONFIRMATIONS};
 use memo_pir::worker::WorkerState;
@@ -140,7 +140,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }]
         }
     };
-    let state = CoordinatorState::new(workers)?;
+    let state = CoordinatorState::new(vec![TableSetup {
+        table: DatabaseId::Action,
+        pool: workers,
+    }])?;
     let ingest_state = state.clone();
     let ingest_cli = cli.clone();
     tokio::spawn(async move {

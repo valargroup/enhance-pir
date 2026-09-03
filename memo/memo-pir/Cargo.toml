@@ -21,6 +21,7 @@ path = "src/bin/client.rs"
 
 [dependencies]
 axum = "0.7"
+pir-types = { path = "../../shared/pir-types" }
 arc-swap = "1"
 clap = { version = "4", features = ["derive"] }
 hex = "0.4"

@@ -6,6 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 
+mod tables;
+pub use tables::*;
+
 /// Blocks behind the tip at which the PIR server anchors its database state.
 /// Shared by both nullifier and witness PIR servers. Deep enough (10) to survive
 /// typical reorgs while still being fresh enough for practical spending.
