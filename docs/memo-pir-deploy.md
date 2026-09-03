@@ -1,14 +1,20 @@
-# Memo PIR fleet deployment
+# PIR fleet deployment
 
-The `Deploy memo PIR fleet` workflow deploys the full-pool mainnet POC after the
-repository's `CI` workflow succeeds on `main`. It is independent of the legacy
-single-host `Deploy spend-server` workflow.
+The `Deploy PIR fleet` workflow (`.github/workflows/deploy-pir-fleet.yml`)
+deploys the production fleet after the repository's `CI` workflow succeeds on
+`main`. The fleet serves the ACTION table only (`--tables action` in
+`infra/digitalocean/production/deploy/memo-pir-server.service`); the
+coordinator still journals every table so the set can be widened without a
+re-ingest. The legacy single-host `Deploy spend-server` workflow and its
+Terraform root are gone (see "Retired" below).
 
 ## Deployment environment
 
-Create a GitHub Environment named `memo-pir-mainnet-poc`, restrict it to the
-`main` branch, and do not add a required-reviewer rule. Configure these
-environment variables:
+Create a GitHub Environment named `production`, restrict it to the `main`
+branch, and do not add a required-reviewer rule. (The environment was called
+`memo-pir-mainnet-poc` while the fleet was a proof of concept; recreate the
+variables and secrets below under the new name, then delete the old
+environment.) Configure these environment variables:
 
 | Variable | Meaning |
 | --- | --- |
@@ -67,7 +73,7 @@ operator-controlled channel. The workflow deliberately never calls
 Store a dedicated fleet SSH private key as `MEMO_DEPLOY_SSH_KEY` in the
 Valargroup Infisical production environment, project `spendability-pir-deploy`,
 path `/memo-pir`. Mirror the same value into the protected
-`memo-pir-mainnet-poc` GitHub Environment secret. Do not reuse an operator's
+`production` GitHub Environment secret. Do not reuse an operator's
 personal key. Authorize only its public half on the configured hosts.
 
 Infisical remains the rotation source of truth; GitHub holds the runtime copy
@@ -79,12 +85,12 @@ run a manual preflight, and then remove the previous public key from the hosts.
 
 The coordinator also runs `pir-apm` (`deploy/pir-apm`), an APM dashboard and
 Slack alerting sidecar that scrapes the coordinator's loopback `/metrics`,
-`/memo/health`, and `/ready`. The deploy installs the binary at
+`/v1/health`, and `/ready`. The deploy installs the binary at
 `/usr/local/bin/pir-apm`, its unit, and `/etc/default/pir-apm`, then enables and
 restarts the service.
 
 The same deploy now owns `/etc/caddy/Caddyfile` on the coordinator. The
-committed template `infra/digitalocean/memo-poc/deploy/Caddyfile` is rendered
+committed template `infra/digitalocean/production/deploy/Caddyfile` is rendered
 with the host of `MEMO_PUBLIC_URL`, validated with `caddy validate`, installed,
 and reloaded. It proxies `/apm/*` to the sidecar, returns 404 for `/metrics` and
 `/ready`, and sends everything else to the coordinator. A preflight run prints
@@ -111,9 +117,11 @@ Success requires all of the following:
 2. the coordinator reaches `serving` within 45 minutes;
 3. public metadata remains mainnet/Ironwood and does not regress in height or
    tree size;
-4. `memo-pir-cli dummy` completes a private query through the public endpoint;
-5. the coordinator's loopback `/ready` returns 200; and
-6. `<MEMO_PUBLIC_URL>/apm/` renders the dashboard while `<MEMO_PUBLIC_URL>/metrics`
+4. `GET /v1/generation` lists exactly the configured tables (`action` in
+   production);
+5. `memo-pir-cli dummy` completes a private query through the public endpoint;
+6. the coordinator's loopback `/ready` returns 200; and
+7. `<MEMO_PUBLIC_URL>/apm/` renders the dashboard while `<MEMO_PUBLIC_URL>/metrics`
    returns 404.
 
 Each activation saves the prior binaries and service configuration under
@@ -130,3 +138,34 @@ Use `workflow_dispatch` with a full commit SHA that is reachable from `main` and
 already has a successful `CI` run. Leave `preflight_only` enabled to verify SSH,
 host architecture, disk space, topology, uploads, and checksums without stopping
 services. Disable it only to redeploy that exact tested revision.
+
+## Retired
+
+The single-host nullifier/witness server (`combined-server`, host
+`spendability-pir-01`) is no longer deployed. Removed from the repository:
+`.github/workflows/deploy.yml`, `.github/workflows/release.yml`,
+`docs/deploy-setup.md`, the `docs/*.service` and `docs/Caddyfile` templates, and
+the `infra/digitalocean` single-host Terraform root. Remaining operator steps,
+each done by hand and confirmed:
+
+1. Delete the `DEPLOY_HOST`, `DEPLOY_USER`, and `DEPLOY_SSH_KEY` repository
+   secrets.
+2. Confirm Vizor's PIR endpoint configuration names only this fleet.
+3. Destroy the `spendability-pir-01` droplet and its firewall in the
+   DigitalOcean project.
+4. Update the `ai-runbook` rules and skills that describe PIR operations
+   (separate pull request in that repository).
+
+Tagged releases went away with `release.yml`: the fleet deploys the exact
+commit that passed `CI` on `main`. A release workflow returns when a staging
+environment needs to promote a tested artifact to production.
+
+## Staging
+
+Not built. Production is the only environment. Adding staging means a second
+Terraform root (`infra/digitalocean/staging`) with its own VPC, a `staging`
+GitHub Environment with the same variable set and a `stage.` hostname, a
+`target_environment` input on the deploy workflow, and a re-ingest of the pool
+on the new coordinator (about 70 minutes at the current pool size). Nothing in
+the service or the deploy script assumes a single environment; the script
+already takes every host and URL from the environment.

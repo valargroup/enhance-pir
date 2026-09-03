@@ -1,4 +1,4 @@
-name: Deploy memo PIR fleet
+name: Deploy PIR fleet
 
 on:
   workflow_run:
@@ -21,7 +21,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: memo-pir-mainnet-poc
+  group: production
   cancel-in-progress: false
 
 jobs:
@@ -115,10 +115,10 @@ jobs:
           install -m 0755 target/release/memo-pir-worker artifact/
           install -m 0755 target/release/memo-pir-cli artifact/
           install -m 0755 target/release/pir-apm artifact/
-          cp infra/digitalocean/memo-poc/deploy/memo-pir-server.service artifact/
-          cp infra/digitalocean/memo-poc/deploy/memo-pir-worker.service artifact/
-          cp infra/digitalocean/memo-poc/deploy/pir-apm.service artifact/
-          cp infra/digitalocean/memo-poc/deploy/Caddyfile artifact/
+          cp infra/digitalocean/production/deploy/memo-pir-server.service artifact/
+          cp infra/digitalocean/production/deploy/memo-pir-worker.service artifact/
+          cp infra/digitalocean/production/deploy/pir-apm.service artifact/
+          cp infra/digitalocean/production/deploy/Caddyfile artifact/
           printf '%s\n' "$RELEASE_SHA" >artifact/revision
           # Explicit list: a glob would silently skip a newly added file.
           (cd artifact && sha256sum \
@@ -142,7 +142,7 @@ jobs:
     runs-on: [self-hosted, Linux, X64, memo-pir-deploy]
     timeout-minutes: 60
     environment:
-      name: memo-pir-mainnet-poc
+      name: production
       url: ${{ vars.MEMO_PUBLIC_URL }}
     permissions:
       actions: read
@@ -197,7 +197,7 @@ jobs:
           MEMO_WORKER_SERVICE_FILE: ${{ github.workspace }}/artifact/memo-pir-worker.service
           MEMO_APM_SERVICE_FILE: ${{ github.workspace }}/artifact/pir-apm.service
           MEMO_CADDYFILE: ${{ github.workspace }}/artifact/Caddyfile
-          MEMO_APM_ENVIRONMENT: memo-pir-mainnet-poc
+          MEMO_APM_ENVIRONMENT: production
           # Optional. Without it the sidecar logs alerts to the journal only.
           PIR_APM_SLACK_WEBHOOK_URL: ${{ secrets.PIR_APM_SLACK_WEBHOOK_URL }}
           PREFLIGHT_ONLY: ${{ inputs.preflight_only }}

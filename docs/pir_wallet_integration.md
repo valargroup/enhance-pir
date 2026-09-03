@@ -1,5 +1,11 @@
 # PIR Wallet Integration Architecture
 
+> **Legacy.** This describes the wallet integration of the nullifier and witness
+> PIR servers in `nullifier/` and `witness/`, which are no longer deployed. The
+> shipped integration is memo retrieval over the ACTION table, specified in
+> [`vizor_tx_enhancement.md`](vizor_tx_enhancement.md) §9. Kept for the
+> spendability-gate and change-discovery reasoning.
+
 This document describes the wallet-side integration of two PIR
 (Private Information Retrieval) subsystems for the Zcash iOS wallet:
 
@@ -11,7 +17,7 @@ This document describes the wallet-side integration of two PIR
 PIR is a **startup-only canonical-note accelerator**, not an alternative note-discovery pipeline.
 
 For server-side architecture (tree decomposition, YPIR parameters, ingestion
-pipelines), see [note-witness/README.md](../note-witness/README.md).
+pipelines), see [note-witness/README.md](../witness/README.md).
 
 ## Goals
 

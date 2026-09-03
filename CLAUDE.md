@@ -1,8 +1,12 @@
 # spendability-pir — working notes for agents
 
-Rust workspace, 16 crates: two PIR subsystems (`nullifier/`, `witness/`) plus a
-`combined-server/` that ships both, the `memo/` PIR fleet, and `deploy/pir-apm`
-(the memo coordinator's monitoring sidecar; hermetic unit tests only).
+Rust workspace, 16 crates. The product is the `memo/` PIR fleet (coordinator,
+workers, ingest; deployed by `.github/workflows/deploy-pir-fleet.yml`) and
+`deploy/pir-apm` (its monitoring sidecar; hermetic unit tests only). The
+`nullifier/` and `witness/` subsystems and the `combined-server/` that shipped
+them are **legacy**: no longer deployed, kept as libraries (`memo-pir` uses
+`commitment-tree-db`) until they are removed. See `docs/pir_deployment_architecture.md`
+for the scope.
 Toolchain is pinned to 1.91.0 by `rust-toolchain.toml`. `protoc` must be on
 PATH — `shared/chain-ingest` has a `tonic-build` build script.
 
@@ -73,7 +77,7 @@ Gate it, and add a row above.
 | Feature | Crates | Meaning |
 |---|---|---|
 | `ypir` | servers | Compiles the YPIR backend |
-| `ipir` | servers, clients | Compiles the IPIR+SP backend — **what production ships** (see `deploy.yml`, `release.yml`) |
+| `ipir` | servers, clients | Compiles the IPIR+SP backend for the legacy servers; `memo-pir` always builds with iPIR+SP |
 | `nullifier` / `witness` | `combined-server` | Which subsystem to include; both on by default |
 | `live` | `spend-client` | Manual tests against a running server (`PIR_SERVER_URL`) |
 

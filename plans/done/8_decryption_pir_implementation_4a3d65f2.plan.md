@@ -46,6 +46,12 @@ isProject: false
 
 # Decryption PIR Implementation
 
+> **Closed 2026-09-03.** Subsumed by the ACTION record in
+> [`docs/pir_deployment_architecture.md`](../../docs/pir_deployment_architecture.md) §3.1:
+> the `DecryptionLeaf` fields (`nf`, `ephemeral_key`, ciphertext) and `cmx` all live in
+> the deployed 824-byte action record, and change discovery from it is implemented in
+> the wallet's DAG-sync pass. The separate `decryption-*` crates were never created.
+
 ## Context
 
 The change note discovery pipeline currently works as:
