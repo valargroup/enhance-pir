@@ -9,6 +9,7 @@ project:
   `/srv/zakura`, running Zakura (archive), ingest, the coordinator, Caddy, and
   the `pir-apm` sidecar;
 - one logical shard group with two `s-4vcpu-8gb` private PIR replicas; and
+- the unproxied Cloudflare DNS record `enhance-pir.valargroup.dev`; and
 - a dedicated VPC and firewalls. Only the coordinator may reach worker port
   8091. SSH is restricted to `allowed_ssh_cidrs`.
 
@@ -42,8 +43,11 @@ Supply the API token at runtime. Never commit it or a populated tfvars file:
 
 ```bash
 infisical run --projectId=40862c6d-a089-4355-b405-0477be0ee3b1 --env=prod --path=/ -- \
-  sh -c 'export TF_VAR_digitalocean_token="$DO_TOKEN_NEW_ORG"; terraform init && terraform plan'
+  sh -c 'export TF_VAR_digitalocean_token="$DO_TOKEN_NEW_ORG" TF_VAR_cloudflare_api_token="$CF_VALARGROUP_DOT_DEV_TOKEN"; terraform init && terraform plan'
 ```
+
+The Cloudflare record remains DNS-only so Caddy can obtain and renew the
+origin certificate directly.
 
 For the first topology migration, do not apply the expansion and existing
 worker resize together. Create `digitalocean_droplet.worker[1]` first, deploy

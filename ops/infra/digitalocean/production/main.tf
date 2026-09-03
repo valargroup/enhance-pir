@@ -1,5 +1,6 @@
 locals {
   coordinator_name = "spendability-memo-pir-coordinator-01"
+  public_hostname  = "enhance-pir.valargroup.dev"
   # Group order is stable shard placement. Replica membership may change
   # without moving shards; append groups before the next six-shard boundary.
   worker_groups = [
@@ -171,6 +172,16 @@ resource "digitalocean_project_resources" "enhance" {
     [digitalocean_droplet.coordinator.urn, digitalocean_volume.zakura.urn],
     [for worker in digitalocean_droplet.worker : worker.urn],
   )
+}
+
+resource "cloudflare_dns_record" "enhance" {
+  zone_id = var.cloudflare_zone_id
+  name    = local.public_hostname
+  type    = "A"
+  content = var.coordinator_dns_ipv4
+  ttl     = 300
+  proxied = false
+  comment = "Enhance PIR production coordinator; managed by Terraform"
 }
 
 # Keep the existing production resources while renaming Terraform addresses.

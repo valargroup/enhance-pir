@@ -2,6 +2,10 @@ output "coordinator_public_ipv4" {
   value = digitalocean_droplet.coordinator.ipv4_address
 }
 
+output "public_url" {
+  value = "https://${local.public_hostname}"
+}
+
 output "coordinator_private_ipv4" {
   value = digitalocean_droplet.coordinator.ipv4_address_private
 }

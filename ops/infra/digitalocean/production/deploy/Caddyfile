@@ -1,6 +1,12 @@
 # Rendered by scripts/deploy-enhance-pir.sh: ENHANCE_PUBLIC_HOST is replaced with the
 # host of ENHANCE_PUBLIC_URL before the file is validated and installed.
 ENHANCE_PUBLIC_HOST {
+	tls {
+		issuer acme {
+			dir https://acme-v02.api.letsencrypt.org/directory
+		}
+	}
+
 	# Operator-only surfaces stay on loopback; the pir-apm sidecar scrapes
 	# them locally.
 	handle /metrics {
