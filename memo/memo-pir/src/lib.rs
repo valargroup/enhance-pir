@@ -7,6 +7,7 @@
 pub mod client;
 pub mod coordinator;
 pub mod ipir;
+pub mod metrics;
 pub mod store;
 pub mod types;
 pub mod wire;

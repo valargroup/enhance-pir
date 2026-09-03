@@ -56,6 +56,36 @@ fi
 
 SERVER_CONFIG="$(jq -c '{workers: map({name, url: (.service_url | rtrimstr("/"))})}' <<<"$MEMO_WORKERS_JSON")"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MEMO_CADDYFILE="${MEMO_CADDYFILE:-$SCRIPT_DIR/../infra/digitalocean/memo-poc/deploy/Caddyfile}"
+MEMO_APM_ENVIRONMENT="${MEMO_APM_ENVIRONMENT:-memo-pir-mainnet-poc}"
+PUBLIC_HOST="${MEMO_PUBLIC_URL#https://}"
+PUBLIC_HOST="${PUBLIC_HOST%%/*}"
+PUBLIC_HOST="${PUBLIC_HOST%%:*}"
+
+# The committed Caddyfile is a template keyed on MEMO_PUBLIC_HOST so the public
+# hostname lives in one place (the GitHub Environment) rather than in git.
+render_caddyfile() {
+  local template="$1" output="$2"
+  if [[ ! -r "$template" ]]; then
+    echo "Caddyfile template is unreadable: $template" >&2
+    exit 2
+  fi
+  if ! grep -q '^MEMO_PUBLIC_HOST {' "$template"; then
+    echo "Caddyfile template must start its site block with 'MEMO_PUBLIC_HOST {'" >&2
+    exit 2
+  fi
+  sed "s/MEMO_PUBLIC_HOST/$PUBLIC_HOST/g" "$template" >"$output"
+  if ! grep -q "^$PUBLIC_HOST {" "$output"; then
+    echo "rendered Caddyfile does not serve $PUBLIC_HOST" >&2
+    exit 2
+  fi
+  if grep -q 'MEMO_PUBLIC_HOST' "$output"; then
+    echo "rendered Caddyfile still contains the MEMO_PUBLIC_HOST placeholder" >&2
+    exit 2
+  fi
+}
+
 # Sealed shard ownership is a function of worker order, so an existing
 # inventory may only ever be extended at the end. `-n` matters: without it jq
 # waits for stdin and, given none, produces no result, which `-e` reports as
@@ -75,24 +105,35 @@ if [[ "$MODE" == "validate" ]]; then
   topology_is_append_only "$SERVER_CONFIG" "$SERVER_CONFIG" || { echo "append-only check rejects an unchanged inventory" >&2; exit 1; }
   topology_is_append_only "$SERVER_CONFIG" "$extended" || { echo "append-only check rejects an appended worker" >&2; exit 1; }
   if topology_is_append_only "$SERVER_CONFIG" "$reordered"; then echo "append-only check accepts a reordered inventory" >&2; exit 1; fi
+  rendered="$(mktemp)"
+  render_caddyfile "$MEMO_CADDYFILE" "$rendered"
+  grep -q 'handle_path /apm\*' "$rendered" || { echo "Caddyfile does not route /apm to the sidecar" >&2; exit 1; }
+  grep -q 'handle /metrics' "$rendered" || { echo "Caddyfile does not block /metrics" >&2; exit 1; }
+  rm -f "$rendered"
   echo "$SERVER_CONFIG"
   exit 0
 fi
 
 for name in MEMO_RELEASE_SHA MEMO_ARTIFACT_DIR MEMO_SSH_KEY_PATH MEMO_KNOWN_HOSTS_PATH \
-  MEMO_SERVER_SERVICE_FILE MEMO_WORKER_SERVICE_FILE; do
+  MEMO_SERVER_SERVICE_FILE MEMO_WORKER_SERVICE_FILE MEMO_APM_SERVICE_FILE; do
   require_env "$name"
 done
 if [[ ! "$MEMO_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
   echo "MEMO_RELEASE_SHA must be a full Git commit SHA" >&2
   exit 2
 fi
-for file in memo-pir-server memo-pir-worker memo-pir-cli; do
+for file in memo-pir-server memo-pir-worker memo-pir-cli pir-apm; do
   if [[ ! -x "$MEMO_ARTIFACT_DIR/$file" ]]; then
     echo "missing executable deployment artifact: $file" >&2
     exit 2
   fi
 done
+# The Slack webhook is optional: without it the sidecar logs alerts to the
+# journal. When present it must be a plain URL so it cannot break the env file.
+if [[ -n "${PIR_APM_SLACK_WEBHOOK_URL:-}" && ! "$PIR_APM_SLACK_WEBHOOK_URL" =~ ^https://[A-Za-z0-9./_-]+$ ]]; then
+  echo "PIR_APM_SLACK_WEBHOOK_URL is set but is not a plain https URL" >&2
+  exit 2
+fi
 if [[ ! -r "$MEMO_SSH_KEY_PATH" || ! -r "$MEMO_KNOWN_HOSTS_PATH" ]]; then
   echo "SSH key or known-hosts file is unreadable" >&2
   exit 2
@@ -138,8 +179,17 @@ available_kb="$(df -Pk /opt | awk 'NR == 2 {print $4}')"
 REMOTE
 }
 
+preflight_coordinator_extras() {
+  remote "$MEMO_COORDINATOR_HOST" bash -s <<'REMOTE'
+set -euo pipefail
+command -v caddy >/dev/null
+systemctl is-enabled --quiet caddy
+REMOTE
+}
+
 echo "Preflighting coordinator and ${#WORKER_HOSTS[@]} workers"
 preflight_host "$MEMO_COORDINATOR_HOST"
+preflight_coordinator_extras
 for host in "${WORKER_HOSTS[@]}"; do
   preflight_host "$host"
 done
@@ -157,28 +207,71 @@ if [[ -n "$existing_config" ]] && ! topology_is_append_only "$existing_config" "
 fi
 
 server_config_file="$(mktemp)"
+caddyfile_rendered="$(mktemp)"
+apm_env_file="$(mktemp)"
 cleanup() {
-  rm -f "$server_config_file"
+  rm -f "$server_config_file" "$caddyfile_rendered" "$apm_env_file"
 }
 trap cleanup EXIT
 printf '%s\n' "$SERVER_CONFIG" >"$server_config_file"
+render_caddyfile "$MEMO_CADDYFILE" "$caddyfile_rendered"
+# mktemp creates the file 0600; the webhook value is never echoed anywhere else.
+{
+  echo "PIR_APM_SCRAPE_URL=http://127.0.0.1:8080"
+  echo "PIR_APM_LISTEN=127.0.0.1:3002"
+  echo "PIR_APM_METRICS_PATH=/metrics"
+  echo "PIR_APM_HEALTH_PATH=/memo/health"
+  echo "PIR_APM_READY_PATH=/ready"
+  echo "PIR_APM_METRIC_PREFIX=memo"
+  echo "PIR_APM_ENDPOINTS=metadata,params,public_params,query"
+  echo "PIR_APM_PROCESSING_ENDPOINTS=query"
+  echo "PIR_APM_LATENCY_P99_SECONDS=1.0"
+  echo "PIR_APM_LATENCY_P99_OVERRIDES=query=5.0,public_params=2.0"
+  echo "PIR_APM_TITLE=Memo PIR APM"
+  echo "PIR_APM_ENVIRONMENT=$MEMO_APM_ENVIRONMENT"
+  echo "PIR_APM_DATA_DIR=/srv/zakura/memo-data"
+  if [[ -n "${PIR_APM_SLACK_WEBHOOK_URL:-}" ]]; then
+    echo "PIR_APM_SLACK_WEBHOOK_URL=$PIR_APM_SLACK_WEBHOOK_URL"
+  fi
+} >"$apm_env_file"
 
 stage_file() {
   local source="$1"
   local host="$2"
   local name="$3"
+  local mode="${4:-0644}"
   local digest
   digest="$(sha256sum "$source" | awk '{print $1}')"
   copy_to "$source" "$host" "$REMOTE_STAGE/$name"
-  remote "$host" bash -s -- "$REMOTE_STAGE/$name" "$digest" <<'REMOTE'
+  remote "$host" bash -s -- "$REMOTE_STAGE/$name" "$digest" "$mode" <<'REMOTE'
 set -euo pipefail
 printf '%s  %s\n' "$2" "$1" | sha256sum --check --status
+chmod "$3" "$1"
 REMOTE
 }
 
 stage_file "$MEMO_ARTIFACT_DIR/memo-pir-server" "$MEMO_COORDINATOR_HOST" memo-pir-server
 stage_file "$server_config_file" "$MEMO_COORDINATOR_HOST" workers.json
 stage_file "$MEMO_SERVER_SERVICE_FILE" "$MEMO_COORDINATOR_HOST" memo-pir-server.service
+stage_file "$MEMO_ARTIFACT_DIR/pir-apm" "$MEMO_COORDINATOR_HOST" pir-apm
+stage_file "$MEMO_APM_SERVICE_FILE" "$MEMO_COORDINATOR_HOST" pir-apm.service
+stage_file "$apm_env_file" "$MEMO_COORDINATOR_HOST" pir-apm.env 0600
+stage_file "$caddyfile_rendered" "$MEMO_COORDINATOR_HOST" Caddyfile
+
+# Validate the staged Caddyfile before anything is installed, and show how it
+# differs from the live one so a preflight run makes the upcoming change visible.
+remote "$MEMO_COORDINATOR_HOST" bash -s -- "$REMOTE_STAGE" <<'REMOTE'
+set -euo pipefail
+stage="$1"
+as_root() { if [[ "$(id -u)" -eq 0 ]]; then "$@"; else sudo -n "$@"; fi; }
+as_root caddy validate --config "$stage/Caddyfile" --adapter caddyfile >/dev/null
+if as_root test -r /etc/caddy/Caddyfile; then
+  echo "Caddyfile changes (live -> staged):"
+  as_root diff -u /etc/caddy/Caddyfile "$stage/Caddyfile" || true
+else
+  echo "No live Caddyfile; the staged one will be installed"
+fi
+REMOTE
 for host in "${WORKER_HOSTS[@]}"; do
   stage_file "$MEMO_ARTIFACT_DIR/memo-pir-worker" "$host" memo-pir-worker
   stage_file "$MEMO_WORKER_SERVICE_FILE" "$host" memo-pir-worker.service
@@ -196,8 +289,12 @@ show_logs() {
   remote "$MEMO_COORDINATOR_HOST" bash -s <<'REMOTE' || true
 if [[ "$(id -u)" -eq 0 ]]; then
   journalctl -u memo-pir-server --no-pager -n 80
+  journalctl -u pir-apm --no-pager -n 40
+  journalctl -u caddy --no-pager -n 20
 else
   sudo -n journalctl -u memo-pir-server --no-pager -n 80
+  sudo -n journalctl -u pir-apm --no-pager -n 40
+  sudo -n journalctl -u caddy --no-pager -n 20
 fi
 REMOTE
   for host in "${WORKER_HOSTS[@]}"; do
@@ -249,8 +346,26 @@ if [[ -r "$rollback/workers.json" ]]; then
   as_root install -d -m 0755 /etc/memo-pir
   as_root install -m 0644 "$rollback/workers.json" /etc/memo-pir/workers.json
 fi
+# Sidecar and reverse proxy. A first deploy has no previous sidecar to restore,
+# so disable it rather than leave it paging against a server without /metrics.
+if [[ -x "$rollback/pir-apm" ]]; then
+  as_root install -m 0755 "$rollback/pir-apm" /usr/local/bin/pir-apm
+  [[ -r "$rollback/pir-apm.service" ]] && as_root install -m 0644 "$rollback/pir-apm.service" /etc/systemd/system/pir-apm.service
+  if as_root test -r "$rollback/pir-apm.env"; then
+    as_root install -m 0600 -o root -g root "$rollback/pir-apm.env" /etc/default/pir-apm
+  fi
+else
+  as_root systemctl disable --now pir-apm 2>/dev/null || true
+fi
+if as_root test -r "$rollback/Caddyfile"; then
+  as_root install -m 0644 -o root -g root "$rollback/Caddyfile" /etc/caddy/Caddyfile
+  as_root systemctl reload caddy || true
+fi
 as_root systemctl daemon-reload
 as_root systemctl restart memo-pir-server
+if [[ -x "$rollback/pir-apm" ]]; then
+  as_root systemctl restart pir-apm || true
+fi
 REMOTE
 }
 
@@ -309,6 +424,33 @@ as_root install -m 0644 "$stage/memo-pir-server.service" /etc/systemd/system/mem
 as_root systemctl daemon-reload
 as_root systemctl restart memo-pir-server
 printf '%s\n' "$sha" | as_root tee /opt/memo-pir/current-coordinator-release >/dev/null
+
+# pir-apm sidecar: same save-then-replace pattern as the server binary.
+[[ -x /usr/local/bin/pir-apm ]] && as_root cp -L /usr/local/bin/pir-apm "$rollback/pir-apm"
+[[ -r /etc/systemd/system/pir-apm.service ]] && as_root cp /etc/systemd/system/pir-apm.service "$rollback/pir-apm.service"
+if as_root test -r /etc/default/pir-apm; then
+  as_root install -m 0600 -o root -g root /etc/default/pir-apm "$rollback/pir-apm.env"
+fi
+if as_root test -r /etc/caddy/Caddyfile; then
+  as_root install -m 0644 -o root -g root /etc/caddy/Caddyfile "$rollback/Caddyfile"
+fi
+as_root install -m 0755 "$stage/pir-apm" "$release/pir-apm"
+as_root install -m 0755 "$release/pir-apm" /usr/local/bin/pir-apm.next
+as_root mv -f /usr/local/bin/pir-apm.next /usr/local/bin/pir-apm
+as_root install -m 0644 "$stage/pir-apm.service" /etc/systemd/system/pir-apm.service
+as_root install -m 0600 -o root -g root "$stage/pir-apm.env" /etc/default/pir-apm
+as_root caddy validate --config "$stage/Caddyfile" --adapter caddyfile >/dev/null
+as_root install -m 0644 -o root -g root "$stage/Caddyfile" /etc/caddy/Caddyfile
+as_root systemctl daemon-reload
+as_root systemctl enable pir-apm
+as_root systemctl restart pir-apm
+as_root systemctl reload caddy
+for _ in $(seq 1 10); do
+  if curl --fail --silent http://127.0.0.1:3002/healthz >/dev/null; then break; fi
+  sleep 1
+done
+curl --fail --silent http://127.0.0.1:3002/healthz >/dev/null
+as_root systemctl is-active --quiet pir-apm
 REMOTE
 }
 
@@ -380,6 +522,18 @@ if [[ "$rollout_ok" -eq 1 && -n "$old_metadata" ]]; then
 fi
 if [[ "$rollout_ok" -eq 1 ]]; then
   "$MEMO_ARTIFACT_DIR/memo-pir-cli" --server "$MEMO_PUBLIC_URL" dummy || rollout_ok=0
+fi
+# Readiness gate and sidecar exposure: /ready is loopback-only, /apm/ is public,
+# and the raw /metrics exposition must stay behind Caddy's 404.
+if [[ "$rollout_ok" -eq 1 ]]; then
+  remote "$MEMO_COORDINATOR_HOST" "curl --fail --silent http://127.0.0.1:8080/ready >/dev/null" || rollout_ok=0
+fi
+if [[ "$rollout_ok" -eq 1 ]]; then
+  curl --fail --silent --show-error "$MEMO_PUBLIC_URL/apm/" | grep -q '<title>' || rollout_ok=0
+fi
+if [[ "$rollout_ok" -eq 1 ]]; then
+  metrics_code="$(curl --silent --output /dev/null --write-out '%{http_code}' "$MEMO_PUBLIC_URL/metrics" || true)"
+  [[ "$metrics_code" == "404" ]] || rollout_ok=0
 fi
 
 if [[ "$rollout_ok" -ne 1 ]]; then

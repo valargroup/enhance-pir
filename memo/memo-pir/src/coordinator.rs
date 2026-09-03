@@ -1,4 +1,5 @@
 use crate::ipir::global_parameters;
+use crate::metrics;
 use crate::store::MemoStore;
 use crate::types::{
     logical_rows_for, worker_index_for_shard, Coverage, MemoSnapshotMetadata, ShardDescriptor,
@@ -132,6 +133,23 @@ impl CoordinatorState {
 
     pub async fn set_phase(&self, phase: CoordinatorPhase) {
         *self.phase.write().await = phase;
+    }
+
+    /// Point-in-time gauges for `/metrics`. Reads only aggregate state.
+    pub async fn observe(&self) -> metrics::Observation {
+        let phase = self.phase.read().await.clone();
+        let live = self.live.load();
+        let metadata = live.as_ref().map(|snapshot| &snapshot.metadata);
+        metrics::Observation {
+            phase: Some(phase),
+            anchor_height: metadata.map_or(0, |m| m.anchor_height),
+            generation: metadata.map_or(0, |m| m.generation),
+            ironwood_tree_size: metadata.map_or(0, |m| m.ironwood_tree_size),
+            used_rows: metadata.map_or(0, |m| m.used_rows),
+            shards: metadata.map_or(0, |m| m.shards.len() as u64),
+            workers: self.workers.len() as u64,
+            query_slots_available: self.query_slots.available_permits() as u64,
+        }
     }
 
     pub fn metadata(&self) -> Option<MemoSnapshotMetadata> {
@@ -554,8 +572,37 @@ pub fn router(state: CoordinatorState) -> Router {
         .route("/memo/params", get(params))
         .route("/memo/public-params", get(public_params))
         .route("/memo/query", post(query))
+        .route("/metrics", get(handle_metrics))
+        .route("/ready", get(ready))
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
+        .layer(axum::middleware::from_fn(metrics::track_request))
         .with_state(state)
+}
+
+/// `GET /metrics`: Prometheus text exposition for the local `pir-apm` sidecar.
+/// Refreshes the snapshot gauges from live coordinator state on every scrape.
+/// Caddy blocks this path publicly; it is loopback-only by policy.
+async fn handle_metrics(State(state): State<CoordinatorState>) -> Response {
+    metrics::record_observation(&state.observe().await);
+    let (status, content_type, body) = metrics::encode();
+    (
+        status,
+        [(axum::http::header::CONTENT_TYPE, content_type)],
+        body,
+    )
+        .into_response()
+}
+
+/// `GET /ready`: 200 only while the coordinator is serving a live snapshot.
+/// Deploy tooling and the sidecar use this as the readiness gate; `/memo/health`
+/// stays the richer JSON view.
+async fn ready(State(state): State<CoordinatorState>) -> Response {
+    let phase = state.phase.read().await.clone();
+    if matches!(phase, CoordinatorPhase::Serving) && state.live.load().is_some() {
+        (StatusCode::OK, "ready\n").into_response()
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, "not ready\n").into_response()
+    }
 }
 
 async fn health(State(state): State<CoordinatorState>) -> Response {
@@ -607,6 +654,8 @@ async fn query(State(state): State<CoordinatorState>, body: Bytes) -> Response {
     let Ok(_permit) = state.query_slots.clone().try_acquire_owned() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
+    // The body is fully received by now, so this measures server work only.
+    let _processing = metrics::start_processing("query");
     match state.answer_query(&body).await {
         Ok(response) => response.into_response(),
         Err(error) => {

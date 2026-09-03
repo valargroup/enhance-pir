@@ -341,7 +341,10 @@ port, one path and a fixed four-host topology (`docs/runbooks/ci-setup.md` there
 - `publish-generation.yml`: manual for staging and rollback; automatic from ingest in
   steady state.
 - Observability: the `pir-apm` sidecar pattern and a Sentry generation-staleness watchdog.
-  Metrics stay aggregate and never carry anything derived from a query.
+  Metrics stay aggregate and never carry anything derived from a query. The memo POC
+  already ships this: `memo-pir-server` exposes `/metrics` (prefix `memo_`, with
+  `memo_snapshot_generation` as the served-generation gauge) and `/ready`, and
+  `deploy/pir-apm` runs on the coordinator with its dashboard at `/apm/`.
 - GitHub Environments `staging` and `production`. DNS `pir.<domain>` and
   `stage.pir.<domain>`. Terraform under `infra/digitalocean/<env>` with isolated state,
   replacing the `memo-poc` root.

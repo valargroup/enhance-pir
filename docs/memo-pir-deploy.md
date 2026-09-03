@@ -25,11 +25,16 @@ private VPC addresses, so fleet SSH does not need to be exposed to GitHub's
 public runner address ranges. Do not use the deployment runner from a
 `pull_request`-triggered workflow; this repository is public.
 
-Configure this GitHub Environment secret:
+Configure these GitHub Environment secrets:
 
 | Secret | Meaning |
 | --- | --- |
 | `MEMO_DEPLOY_SSH_KEY` | Dedicated SSH private key authorized on every fleet host |
+| `PIR_APM_SLACK_WEBHOOK_URL` | Optional. Slack incoming webhook for `pir-apm` alerts; without it the sidecar logs alerts to the journal |
+
+`PIR_APM_SLACK_WEBHOOK_URL` lives in the same Infisical project and path as the
+deployment key (see below). The deploy never prints it; it is written only to
+`/etc/default/pir-apm` (root, mode 0600) on the coordinator.
 
 The worker inventory has this shape:
 
@@ -70,25 +75,50 @@ used by Actions. To rotate the key, create and store a replacement in Infisical,
 authorize its public half on every host, update the GitHub Environment secret,
 run a manual preflight, and then remove the previous public key from the hosts.
 
+## Monitoring sidecar and reverse proxy
+
+The coordinator also runs `pir-apm` (`deploy/pir-apm`), an APM dashboard and
+Slack alerting sidecar that scrapes the coordinator's loopback `/metrics`,
+`/memo/health`, and `/ready`. The deploy installs the binary at
+`/usr/local/bin/pir-apm`, its unit, and `/etc/default/pir-apm`, then enables and
+restarts the service.
+
+The same deploy now owns `/etc/caddy/Caddyfile` on the coordinator. The
+committed template `infra/digitalocean/memo-poc/deploy/Caddyfile` is rendered
+with the host of `MEMO_PUBLIC_URL`, validated with `caddy validate`, installed,
+and reloaded. It proxies `/apm/*` to the sidecar, returns 404 for `/metrics` and
+`/ready`, and sends everything else to the coordinator. A preflight run prints
+the diff between the live and staged Caddyfile without installing it.
+
+After a deploy the dashboard is at `<MEMO_PUBLIC_URL>/apm/`. It is
+unauthenticated by design and shows only aggregate metrics; see
+`deploy/pir-apm/README.md` for the alert catalogue and manual test commands.
+
 ## Rollout and rollback
 
-The workflow builds `memo-pir-server`, `memo-pir-worker`, and `memo-pir-cli` at
-the exact successful CI revision. It uploads and checksum-verifies everything
-before changing a service. The coordinator is then stopped, workers are updated
-and checked, and the coordinator is updated with `/etc/memo-pir/workers.json`.
+The workflow builds `memo-pir-server`, `memo-pir-worker`, `memo-pir-cli`, and
+`pir-apm` at the exact successful CI revision. It uploads and checksum-verifies
+everything before changing a service. The coordinator is then stopped, workers
+are updated and checked, and the coordinator is updated with
+`/etc/memo-pir/workers.json`, followed by the sidecar and Caddyfile.
 
 Success requires all of the following:
 
 1. every worker returns `status: ok` from its loopback health endpoint;
 2. the coordinator reaches `serving` within 45 minutes;
 3. public metadata remains mainnet/Ironwood and does not regress in height or
-   tree size; and
-4. `memo-pir-cli dummy` completes a private query through the public endpoint.
+   tree size;
+4. `memo-pir-cli dummy` completes a private query through the public endpoint;
+5. the coordinator's loopback `/ready` returns 200; and
+6. `<MEMO_PUBLIC_URL>/apm/` renders the dashboard while `<MEMO_PUBLIC_URL>/metrics`
+   returns 404.
 
 Each activation saves the prior binaries and service configuration under
-`/opt/memo-pir/rollback`. A failed rollout restores every host already changed,
-restarts the prior coordinator, prints bounded service logs, and leaves the
-workflow failed. Persistent Zakura, memo-journal, and PIR-artifact directories
+`/opt/memo-pir/rollback`, including the previous `pir-apm` binary, unit,
+environment file, and Caddyfile. A failed rollout restores every host already
+changed, restarts the prior coordinator and sidecar (or disables the sidecar if
+this was its first install), reloads the previous Caddyfile, prints bounded
+service logs, and leaves the workflow failed. Persistent Zakura, memo-journal, and PIR-artifact directories
 are never replaced.
 
 ## Manual preflight and redeployment
