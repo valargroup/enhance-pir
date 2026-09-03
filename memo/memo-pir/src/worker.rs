@@ -354,3 +354,50 @@ async fn evaluate(State(state): State<WorkerState>, body: Bytes) -> Response {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::wire::ShardQuery;
+
+    #[tokio::test]
+    async fn evaluation_requires_an_active_generation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = WorkerState::new(dir.path().to_path_buf()).expect("worker");
+        let error = state
+            .evaluate_local(EvaluateRequest {
+                generation: 7,
+                shards: vec![ShardQuery {
+                    shard_id: 0,
+                    coefficients: vec![0; SHARD_ROWS],
+                }],
+            })
+            .await
+            .expect_err("nothing is active");
+        assert!(error.contains("generation mismatch"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn activation_requires_prepared_shards() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = WorkerState::new(dir.path().to_path_buf()).expect("worker");
+        assert!(state
+            .activate_local(ActivateRequest {
+                generation: 1,
+                shards: vec![],
+            })
+            .await
+            .is_err());
+        let error = state
+            .activate_local(ActivateRequest {
+                generation: 1,
+                shards: vec![ActivateShard {
+                    shard_id: 3,
+                    rows_sha256: "00".repeat(32),
+                }],
+            })
+            .await
+            .expect_err("shard 3 was never prepared");
+        assert!(error.contains("not prepared"), "{error}");
+    }
+}

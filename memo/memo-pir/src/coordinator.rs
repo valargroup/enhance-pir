@@ -36,7 +36,7 @@ use tokio::sync::{RwLock, Semaphore};
 /// `SHA-256("zcash/ironwood-memo-pir/setup-seed/v1")`.
 pub const MEMO_SETUP_SEED: u64 = 0xaf1a_e284_ec07_131a;
 
-pub(crate) fn memo_setup_seed_bytes() -> [u8; 32] {
+pub fn memo_setup_seed_bytes() -> [u8; 32] {
     let mut seed = [0; 32];
     seed[..8].copy_from_slice(&MEMO_SETUP_SEED.to_le_bytes());
     seed
@@ -156,6 +156,19 @@ impl CoordinatorState {
         self.live
             .load_full()
             .map(|snapshot| snapshot.metadata.clone())
+    }
+
+    /// Scheme parameters of the live snapshot, as served by `/memo/params`.
+    pub fn params(&self) -> Option<YpirSchemeParams> {
+        self.live.load_full().map(|snapshot| snapshot.ypir.clone())
+    }
+
+    /// Published packing material of the live snapshot, as served by
+    /// `/memo/public-params`.
+    pub fn public_params(&self) -> Option<Vec<u8>> {
+        self.live
+            .load_full()
+            .map(|snapshot| snapshot.public_params.clone())
     }
 
     pub async fn publish_from_store(
@@ -459,7 +472,10 @@ impl CoordinatorState {
         }
     }
 
-    async fn answer_query(&self, body: &[u8]) -> Result<Vec<u8>, String> {
+    /// Answers one opaque client query against the live snapshot. Exposed so
+    /// in-process tests can drive the coordinator without HTTP; the `/memo/query`
+    /// handler is a thin wrapper that adds admission control and metrics.
+    pub async fn answer_query(&self, body: &[u8]) -> Result<Vec<u8>, String> {
         let live = self
             .live
             .load_full()

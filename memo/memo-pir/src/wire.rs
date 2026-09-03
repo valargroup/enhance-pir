@@ -234,4 +234,65 @@ mod tests {
         malformed.push(0);
         assert!(decode_evaluate_request(&malformed).is_err());
     }
+
+    #[test]
+    fn evaluate_request_rejects_bad_magic_truncation_and_shard_count() {
+        let request = EvaluateRequest {
+            generation: 1,
+            shards: vec![ShardQuery {
+                shard_id: 0,
+                coefficients: vec![5; 4],
+            }],
+        };
+        let bytes = encode_evaluate_request(&request);
+        let mut wrong_magic = bytes.clone();
+        wrong_magic[..4].copy_from_slice(b"MPQ2");
+        assert!(decode_evaluate_request(&wrong_magic).is_err());
+        assert!(decode_evaluate_request(&bytes[..bytes.len() - 1]).is_err());
+
+        let mut zero_shards = bytes.clone();
+        zero_shards[12..16].copy_from_slice(&0u32.to_le_bytes());
+        assert!(decode_evaluate_request(&zero_shards).is_err());
+        let mut too_many = bytes;
+        too_many[12..16].copy_from_slice(&(MAX_SHARDS_PER_WORKER as u32 + 1).to_le_bytes());
+        assert!(decode_evaluate_request(&too_many).is_err());
+    }
+
+    #[test]
+    fn evaluate_response_round_trips_and_rejects_malformed_input() {
+        let bytes = encode_evaluate_response(42, &[7, 8, 9]);
+        let (generation, values) = decode_evaluate_response(&bytes).expect("decode");
+        assert_eq!(generation, 42);
+        assert_eq!(values, vec![7, 8, 9]);
+        assert!(decode_evaluate_response(&bytes[..bytes.len() - 1]).is_err());
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(decode_evaluate_response(&trailing).is_err());
+        let mut wrong_magic = bytes;
+        wrong_magic[..4].copy_from_slice(b"MPQ1");
+        assert!(decode_evaluate_response(&wrong_magic).is_err());
+    }
+
+    #[test]
+    fn crs_hint_round_trips_and_is_shape_strict() {
+        let degree = 4;
+        let blocks = vec![
+            CrsBlock {
+                rows: (0..degree).map(|r| vec![r as u64; degree]).collect(),
+            },
+            CrsBlock {
+                rows: (0..degree).map(|r| vec![10 + r as u64; degree]).collect(),
+            },
+        ];
+        let bytes = encode_crs_blocks(&blocks);
+        let decoded = decode_crs_blocks(&bytes, 2, degree).expect("decode");
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded[1].rows[3], vec![13; degree]);
+        assert!(decode_crs_blocks(&bytes, 1, degree).is_err());
+        assert!(decode_crs_blocks(&bytes, 2, degree + 1).is_err());
+        assert!(decode_crs_blocks(&bytes[..bytes.len() - 8], 2, degree).is_err());
+        let mut trailing = bytes;
+        trailing.push(0);
+        assert!(decode_crs_blocks(&trailing, 2, degree).is_err());
+    }
 }

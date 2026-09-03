@@ -171,7 +171,9 @@ jobs:
       - uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - run: cargo test -p memo-pir -p pir-apm
+      # Release: the round-trip tests preprocess full 8,192-row shards, which is
+      # minutes of NTT work in a debug build.
+      - run: cargo test -p memo-pir -p pir-apm --release
 
   test-tree-correctness:
     name: Test (tree correctness)
@@ -301,7 +303,7 @@ jobs:
   notify-slack:
     name: Slack Notification
     if: ${{ always() && github.ref == 'refs/heads/main' && github.event_name == 'push' && contains(join(needs.*.result, ','), 'failure') }}
-    needs: [lint, test-nullifier, test-witness, test-tree-correctness, test-pir-round-trip, test-ypir, test-ipir]
+    needs: [lint, test-nullifier, test-witness, test-memo, test-tree-correctness, test-pir-round-trip, test-ypir, test-ipir]
     runs-on: ubuntu-latest
     steps:
       - name: Notify Slack on failure
@@ -328,7 +330,7 @@ jobs:
                 },
                 {
                   "type": "section",
-                  "text": { "type": "mrkdwn", "text": "*Job Results:*\nLint: `${{ needs.lint.result }}` | Nullifier: `${{ needs.test-nullifier.result }}` | Witness: `${{ needs.test-witness.result }}` | Tree: `${{ needs.test-tree-correctness.result }}` | PIR: `${{ needs.test-pir-round-trip.result }}` | YPIR: `${{ needs.test-ypir.result }}` | IPIR: `${{ needs.test-ipir.result }}`" }
+                  "text": { "type": "mrkdwn", "text": "*Job Results:*\nLint: `${{ needs.lint.result }}` | Nullifier: `${{ needs.test-nullifier.result }}` | Witness: `${{ needs.test-witness.result }}` | Memo: `${{ needs.test-memo.result }}` | Tree: `${{ needs.test-tree-correctness.result }}` | PIR: `${{ needs.test-pir-round-trip.result }}` | YPIR: `${{ needs.test-ypir.result }}` | IPIR: `${{ needs.test-ipir.result }}`" }
                 }
               ]
             }
