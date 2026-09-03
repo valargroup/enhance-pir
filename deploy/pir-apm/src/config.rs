@@ -193,12 +193,35 @@ mod tests {
     }
 
     #[test]
+    fn production_env_block_parses() {
+        // Mirrors the /etc/default/pir-apm block written by deploy-memo-pir.sh.
+        let config = Config::from_map(&vars(&[
+            ("PIR_APM_HEALTH_PATH", "/v1/health"),
+            ("PIR_APM_ENDPOINTS", "health,metadata,generation,params,public_params,query"),
+            ("PIR_APM_INFORMATIONAL_ENDPOINTS", "health"),
+            ("PIR_APM_PROCESSING_ENDPOINTS", "query,witness_query,nf_cold_query,nf_warm_query"),
+            ("PIR_APM_LATENCY_P99_SECONDS", "1.0"),
+            (
+                "PIR_APM_LATENCY_P99_OVERRIDES",
+                "query=5.0,witness_query=5.0,nf_cold_query=5.0,nf_warm_query=5.0,public_params=2.0,witness_public_params=2.0,nf_cold_public_params=2.0,nf_warm_public_params=2.0",
+            ),
+        ]))
+        .unwrap();
+        assert_eq!(
+            config.schema.latency_budget("nf_cold_public_params"),
+            Some(2.0)
+        );
+        assert!(config.schema.uses_processing("witness_query"));
+    }
+
+    #[test]
     fn rejects_bad_values() {
         assert!(Config::from_map(&vars(&[("PIR_APM_INTERVAL_SECONDS", "0")])).is_err());
         assert!(Config::from_map(&vars(&[("PIR_APM_LISTEN", "nope")])).is_err());
         assert!(Config::from_map(&vars(&[("PIR_APM_READY_PATH", "ready")])).is_err());
         assert!(Config::from_map(&vars(&[("PIR_APM_LATENCY_P99_OVERRIDES", "query")])).is_err());
-        assert!(Config::from_map(&vars(&[("PIR_APM_LATENCY_P99_OVERRIDES", "nope=1")])).is_err());
+        assert!(Config::from_map(&vars(&[("PIR_APM_LATENCY_P99_OVERRIDES", "Bad=1")])).is_err());
+        assert!(Config::from_map(&vars(&[("PIR_APM_LATENCY_P99_OVERRIDES", "nope=1")])).is_ok());
         assert!(Config::from_map(&vars(&[("PIR_APM_PROCESSING_ENDPOINTS", "no pe")])).is_err());
         assert!(Config::from_map(&vars(&[("PIR_APM_INFORMATIONAL_ENDPOINTS", "Bad")])).is_err());
         assert!(Config::from_map(&vars(&[("PIR_APM_ENDPOINTS", "Bad Name")])).is_err());

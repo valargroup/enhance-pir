@@ -69,10 +69,13 @@ impl Schema {
                 return Err(format!("endpoint {endpoint:?} must match [a-z0-9_]+"));
             }
         }
+        // Overrides may name endpoints that only appear once a table ships,
+        // since endpoint labels are discovered from the exposition; only the
+        // name shape and the budget value are checked.
         for (endpoint, budget) in &latency_overrides {
-            if !seen.contains(endpoint.as_str()) {
+            if !is_identifier(endpoint) {
                 return Err(format!(
-                    "latency override for {endpoint:?} names an unknown endpoint"
+                    "latency override for {endpoint:?} must match [a-z0-9_]+"
                 ));
             }
             if !(budget.is_finite() && *budget > 0.0) {
@@ -234,6 +237,8 @@ mod tests {
             BTreeMap::new()
         )
         .is_err());
+        // An override for an endpoint that is not configured is fine (it may
+        // be discovered later); a malformed name is not.
         assert!(Schema::new(
             "ok",
             endpoints.clone(),
@@ -241,6 +246,15 @@ mod tests {
             BTreeSet::new(),
             1.0,
             BTreeMap::from([("b".to_string(), 1.0)])
+        )
+        .is_ok());
+        assert!(Schema::new(
+            "ok",
+            endpoints.clone(),
+            BTreeSet::new(),
+            BTreeSet::new(),
+            1.0,
+            BTreeMap::from([("Bad Name".to_string(), 1.0)])
         )
         .is_err());
         assert!(Schema::new(
