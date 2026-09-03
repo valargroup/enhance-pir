@@ -6,6 +6,7 @@
 /.protoc
 monitor.log
 monitor.sh
+/load-test-summary.json
 
 # Terraform local state and secrets
 **/.terraform/
