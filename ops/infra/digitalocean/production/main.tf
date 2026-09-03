@@ -1,5 +1,5 @@
 locals {
-  coordinator_name = "spendability-memo-pir-coordinator-01"
+  coordinator_name = "enhance-pir-coordinator-01"
   public_hostname  = "enhance-pir.valargroup.dev"
   # Group order is stable shard placement. Replica membership may change
   # without moving shards; append groups before the next six-shard boundary.
@@ -7,8 +7,8 @@ locals {
     {
       name = "shard-group-01"
       replicas = [
-        "spendability-memo-pir-worker-01",
-        "spendability-memo-pir-worker-02",
+        "enhance-pir-worker-01",
+        "enhance-pir-worker-02",
       ]
     },
   ]
@@ -17,17 +17,25 @@ locals {
 }
 
 resource "digitalocean_vpc" "enhance" {
-  name     = "spendability-memo-pir-poc"
+  name     = "enhance-pir-production"
   region   = var.region
   ip_range = "10.142.0.0/24"
 }
 
 resource "digitalocean_tag" "coordinator" {
-  name = "spendability-memo-pir-coordinator"
+  name = "enhance-pir-coordinator"
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "digitalocean_tag" "worker" {
-  name = "spendability-memo-pir-worker"
+  name = "enhance-pir-worker"
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "digitalocean_droplet" "coordinator" {
@@ -45,6 +53,10 @@ resource "digitalocean_droplet" "coordinator" {
   user_data = templatefile("${path.module}/cloud-init-coordinator.yaml.tftpl", {
     packages = jsonencode(concat(local.common_packages, ["xfsprogs"]))
   })
+
+  lifecycle {
+    ignore_changes = [user_data]
+  }
 }
 
 resource "digitalocean_droplet" "worker" {
@@ -71,6 +83,13 @@ resource "digitalocean_volume" "zakura" {
   size                    = 1024
   initial_filesystem_type = "xfs"
   description             = "Zakura archive and canonical Ironwood Enhance records"
+
+  # DigitalOcean cannot rename a volume in place. Keep the historical provider
+  # name so this production data volume is never replaced for branding alone.
+  lifecycle {
+    prevent_destroy = true
+    ignore_changes  = [name, description]
+  }
 }
 
 resource "digitalocean_volume_attachment" "zakura" {
@@ -79,7 +98,7 @@ resource "digitalocean_volume_attachment" "zakura" {
 }
 
 resource "digitalocean_firewall" "coordinator" {
-  name = "spendability-memo-pir-coordinator"
+  name = "enhance-pir-coordinator"
   tags = [digitalocean_tag.coordinator.name]
 
   dynamic "inbound_rule" {
@@ -126,7 +145,7 @@ resource "digitalocean_firewall" "coordinator" {
 }
 
 resource "digitalocean_firewall" "worker" {
-  name = "spendability-memo-pir-workers"
+  name = "enhance-pir-workers"
   tags = [digitalocean_tag.worker.name]
 
   inbound_rule {

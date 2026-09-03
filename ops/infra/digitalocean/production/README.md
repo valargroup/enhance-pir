@@ -1,9 +1,7 @@
 # Ironwood PIR production infrastructure
 
-This Terraform root is the production fleet for the ACTION PIR table. It was
-the memo POC (`memo-poc`) and the topology is unchanged; only the name and the
-scope statement moved. It manages, in the `spendability-pir` DigitalOcean
-project:
+This Terraform root manages the Enhance PIR production fleet in the
+`enhance-pir` DigitalOcean project:
 
 - one `m-8vcpu-64gb-intel` coordinator with a 1 TiB XFS volume at
   `/srv/zakura`, running Zakura (archive), ingest, the coordinator, Caddy, and
@@ -43,18 +41,17 @@ Supply the API token at runtime. Never commit it or a populated tfvars file:
 
 ```bash
 infisical run --projectId=40862c6d-a089-4355-b405-0477be0ee3b1 --env=prod --path=/ -- \
-  sh -c 'export TF_VAR_digitalocean_token="$DO_TOKEN_NEW_ORG" TF_VAR_cloudflare_api_token="$CF_VALARGROUP_DOT_DEV_TOKEN"; terraform init && terraform plan'
+  sh -c 'export TF_VAR_digitalocean_token="$DO_TOKEN_NEW_ORG" TF_VAR_cloudflare_api_token="$CF_API_TOKEN"; terraform init && terraform plan'
 ```
 
 The Cloudflare record remains DNS-only so Caddy can obtain and renew the
 origin certificate directly.
 
-For the first topology migration, do not apply the expansion and existing
-worker resize together. Create `digitalocean_droplet.worker[1]` first, deploy
-the grouped inventory, and verify that `shard-group-01` reports two ready
-replicas. Only then apply the remaining plan, which resizes or replaces
-`worker[0]` while its peer serves the group. Review the saved plan at each
-step; a production apply remains a separate, operator-confirmed action.
+Always save and inspect the production plan before applying it. Renaming the
+fleet must not replace the coordinator, workers, VPC, volume, or attachment.
+The tag resources are the only expected replacements because DigitalOcean tag
+names are immutable. The Zakura volume keeps its historical provider name and
+has `prevent_destroy` because DigitalOcean cannot rename it in place.
 
 ## Capacity
 
@@ -72,10 +69,5 @@ and swap disabled. The bundled
 `s-4vcpu-8gb` size is the closest currently available AMS3 shape to the desired
 4-vCPU/4-GiB worker and leaves additional host memory headroom.
 
-## Legacy host
-
-`spendability-pir-01` (the single-host nullifier/witness server, formerly
-managed by `infra/digitalocean/main.tf` and deployed by `deploy.yml`) is
-retired. Its Terraform root was removed from the repository; destroying the
-droplet is a manual, confirmed operator step once Vizor points only at this
-fleet.
+The public origin and dashboard are served at
+`https://enhance-pir.valargroup.dev`.

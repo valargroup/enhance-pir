@@ -3,7 +3,7 @@
 # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (see README.md).
 terraform {
   backend "s3" {
-    bucket                      = "spendability-pir-terraform"
+    bucket                      = "enhance-pir-terraform"
     key                         = "production/terraform.tfstate"
     region                      = "us-east-1" # ignored by Spaces, required by the backend
     endpoints                   = { s3 = "https://ams3.digitaloceanspaces.com" }

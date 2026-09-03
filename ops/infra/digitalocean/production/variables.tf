@@ -23,7 +23,7 @@ variable "coordinator_dns_ipv4" {
 }
 
 variable "project_id" {
-  description = "Existing spendability-pir DigitalOcean project ID."
+  description = "Existing enhance-pir DigitalOcean project ID."
   type        = string
   default     = "85639967-fecb-4c8d-88be-c0e3dee3f86c"
 }

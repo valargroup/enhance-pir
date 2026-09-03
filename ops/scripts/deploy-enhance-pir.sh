@@ -334,11 +334,8 @@ set -euo pipefail
 as_root() { if [[ "$(id -u)" -eq 0 ]]; then "$@"; else sudo -n "$@"; fi; }
 if [[ "$1" == "stop" ]]; then
   as_root systemctl stop enhance-pir-server 2>/dev/null || true
-  as_root systemctl stop memo-pir-server 2>/dev/null || true
-elif as_root systemctl cat enhance-pir-server >/dev/null 2>&1; then
-  as_root systemctl "$1" enhance-pir-server
 else
-  as_root systemctl "$1" memo-pir-server
+  as_root systemctl "$1" enhance-pir-server
 fi
 REMOTE
 }
@@ -350,21 +347,11 @@ set -euo pipefail
 as_root() { if [[ "$(id -u)" -eq 0 ]]; then "$@"; else sudo -n "$@"; fi; }
 rollback=/opt/enhance-pir/rollback
 as_root systemctl stop enhance-pir-worker 2>/dev/null || true
-if [[ -x "$rollback/enhance-pir-worker" ]]; then
-  as_root install -m 0755 "$rollback/enhance-pir-worker" /usr/local/bin/enhance-pir-worker
-  [[ -r "$rollback/enhance-pir-worker.service" ]] && as_root install -m 0644 "$rollback/enhance-pir-worker.service" /etc/systemd/system/enhance-pir-worker.service
-else
-  [[ -x "$rollback/memo-pir-worker" ]] && as_root install -m 0755 "$rollback/memo-pir-worker" /usr/local/bin/memo-pir-worker
-  [[ -r "$rollback/memo-pir-worker.service" ]] && as_root install -m 0644 "$rollback/memo-pir-worker.service" /etc/systemd/system/memo-pir-worker.service
-fi
+[[ -x "$rollback/enhance-pir-worker" ]] || exit 1
+as_root install -m 0755 "$rollback/enhance-pir-worker" /usr/local/bin/enhance-pir-worker
+[[ -r "$rollback/enhance-pir-worker.service" ]] && as_root install -m 0644 "$rollback/enhance-pir-worker.service" /etc/systemd/system/enhance-pir-worker.service
 as_root systemctl daemon-reload
-if [[ -x "$rollback/enhance-pir-worker" ]]; then
-  as_root systemctl disable --now memo-pir-worker 2>/dev/null || true
-  as_root systemctl enable --now enhance-pir-worker
-else
-  as_root systemctl disable --now enhance-pir-worker 2>/dev/null || true
-  as_root systemctl enable --now memo-pir-worker
-fi
+as_root systemctl enable --now enhance-pir-worker
 REMOTE
 }
 
@@ -396,16 +383,8 @@ if as_root test -r "$rollback/Caddyfile"; then
   as_root systemctl reload caddy || true
 fi
 as_root systemctl daemon-reload
-if [[ -x "$rollback/enhance-pir-server" ]]; then
-  as_root systemctl disable --now memo-pir-server 2>/dev/null || true
-  as_root systemctl enable --now enhance-pir-server
-else
-  [[ -x "$rollback/memo-pir-server" ]] && as_root install -m 0755 "$rollback/memo-pir-server" /usr/local/bin/memo-pir-server
-  [[ -r "$rollback/memo-pir-server.service" ]] && as_root install -m 0644 "$rollback/memo-pir-server.service" /etc/systemd/system/memo-pir-server.service
-  as_root systemctl daemon-reload
-  as_root systemctl disable --now enhance-pir-server 2>/dev/null || true
-  as_root systemctl enable --now memo-pir-server
-fi
+[[ -x "$rollback/enhance-pir-server" ]] || exit 1
+as_root systemctl enable --now enhance-pir-server
 if [[ -x "$rollback/pir-apm" ]]; then
   as_root systemctl restart pir-apm || true
 fi
@@ -437,10 +416,7 @@ as_root install -d -m 0755 "$release" "$rollback"
 as_root install -m 0755 "$stage/enhance-pir-worker" "$release/enhance-pir-worker"
 [[ -x /usr/local/bin/enhance-pir-worker ]] && as_root cp -L /usr/local/bin/enhance-pir-worker "$rollback/enhance-pir-worker"
 [[ -r /etc/systemd/system/enhance-pir-worker.service ]] && as_root cp /etc/systemd/system/enhance-pir-worker.service "$rollback/enhance-pir-worker.service"
-[[ -x /usr/local/bin/memo-pir-worker ]] && as_root cp -L /usr/local/bin/memo-pir-worker "$rollback/memo-pir-worker"
-[[ -r /etc/systemd/system/memo-pir-worker.service ]] && as_root cp /etc/systemd/system/memo-pir-worker.service "$rollback/memo-pir-worker.service"
 as_root systemctl stop enhance-pir-worker 2>/dev/null || true
-as_root systemctl disable --now memo-pir-worker 2>/dev/null || true
 as_root install -m 0755 "$release/enhance-pir-worker" /usr/local/bin/enhance-pir-worker.next
 as_root mv -f /usr/local/bin/enhance-pir-worker.next /usr/local/bin/enhance-pir-worker
 as_root install -m 0644 "$stage/enhance-pir-worker.service" /etc/systemd/system/enhance-pir-worker.service
@@ -462,15 +438,12 @@ as_root install -d -m 0755 "$release" "$rollback" /etc/enhance-pir
 as_root install -m 0755 "$stage/enhance-pir-server" "$release/enhance-pir-server"
 [[ -x /usr/local/bin/enhance-pir-server ]] && as_root cp -L /usr/local/bin/enhance-pir-server "$rollback/enhance-pir-server"
 [[ -r /etc/systemd/system/enhance-pir-server.service ]] && as_root cp /etc/systemd/system/enhance-pir-server.service "$rollback/enhance-pir-server.service"
-[[ -x /usr/local/bin/memo-pir-server ]] && as_root cp -L /usr/local/bin/memo-pir-server "$rollback/memo-pir-server"
-[[ -r /etc/systemd/system/memo-pir-server.service ]] && as_root cp /etc/systemd/system/memo-pir-server.service "$rollback/memo-pir-server.service"
 [[ -r /etc/enhance-pir/workers.json ]] && as_root cp /etc/enhance-pir/workers.json "$rollback/workers.json"
 as_root install -m 0755 "$release/enhance-pir-server" /usr/local/bin/enhance-pir-server.next
 as_root mv -f /usr/local/bin/enhance-pir-server.next /usr/local/bin/enhance-pir-server
 as_root install -m 0644 "$stage/workers.json" /etc/enhance-pir/workers.json
 as_root install -m 0644 "$stage/enhance-pir-server.service" /etc/systemd/system/enhance-pir-server.service
 as_root systemctl daemon-reload
-as_root systemctl disable --now memo-pir-server 2>/dev/null || true
 as_root systemctl enable --now enhance-pir-server
 printf '%s\n' "$sha" | as_root tee /opt/enhance-pir/current-coordinator-release >/dev/null
 

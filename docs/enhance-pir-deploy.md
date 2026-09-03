@@ -40,10 +40,10 @@ that exceeds the limit is restarted by systemd; its peer continues serving the
 group while it rebuilds on the next publication.
 
 Current runtime paths are `/etc/enhance-pir`, `/opt/enhance-pir`,
-`/srv/zakura/enhance-data`, and `/srv/enhance-pir/artifacts`. Existing
-DigitalOcean resource names retain their historical names to avoid unintended
-Terraform replacement; application binaries, services, paths, and API names
-use Enhance.
+`/srv/zakura/enhance-data`, and `/srv/enhance-pir/artifacts`. Active
+DigitalOcean resources use Enhance names. The attached Zakura data volume is
+the sole exception: DigitalOcean cannot rename it in place, so Terraform keeps
+its historical provider name and protects it from replacement.
 
 The deploy verifies `GET /v1/health`, retrieves
 `GET /v1/enhance/generation`, and completes a dummy query through the public

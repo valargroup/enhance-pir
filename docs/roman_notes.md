@@ -143,6 +143,6 @@ Controller fans-out
    * https://github.com/zakura-core/wallet-libraries/pull/14
    * https://github.com/chainapsis/vizor-wallet/tree/roman/ironwood-memo-pir-dag-archive
 
-- Memo PIR
+- Enhance PIR
    * https://github.com/zakura-core/wallet-libraries/pull/13
    * https://github.com/chainapsis/vizor-wallet/pull/601

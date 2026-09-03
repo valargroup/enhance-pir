@@ -82,8 +82,8 @@ jobs:
           retention-days: 14
       - name: Prepare ephemeral SSH material
         env:
-          DEPLOY_SSH_KEY: ${{ secrets.MEMO_DEPLOY_SSH_KEY }}
-          KNOWN_HOSTS: ${{ vars.MEMO_SSH_KNOWN_HOSTS }}
+          DEPLOY_SSH_KEY: ${{ secrets.ENHANCE_DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ vars.ENHANCE_SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           : "${DEPLOY_SSH_KEY:?production deployment SSH key is empty}"
@@ -93,10 +93,10 @@ jobs:
           chmod 0600 "$RUNNER_TEMP/enhance-pir-ssh/key" "$RUNNER_TEMP/enhance-pir-ssh/known_hosts"
       - name: Deploy and verify
         env:
-          ENHANCE_COORDINATOR_HOST: ${{ vars.MEMO_COORDINATOR_HOST }}
-          ENHANCE_DEPLOY_USER: ${{ vars.MEMO_DEPLOY_USER }}
-          ENHANCE_PUBLIC_URL: ${{ vars.MEMO_PUBLIC_URL }}
-          ENHANCE_WORKERS_JSON: ${{ vars.MEMO_WORKERS_JSON }}
+          ENHANCE_COORDINATOR_HOST: ${{ vars.ENHANCE_COORDINATOR_HOST }}
+          ENHANCE_DEPLOY_USER: ${{ vars.ENHANCE_DEPLOY_USER }}
+          ENHANCE_PUBLIC_URL: ${{ vars.ENHANCE_PUBLIC_URL }}
+          ENHANCE_WORKERS_JSON: ${{ vars.ENHANCE_WORKERS_JSON }}
           ENHANCE_RELEASE_SHA: ${{ inputs.ref }}
           ENHANCE_ARTIFACT_DIR: ${{ github.workspace }}/artifact
           ENHANCE_SSH_KEY_PATH: ${{ runner.temp }}/enhance-pir-ssh/key
@@ -116,7 +116,7 @@ jobs:
             echo '## Enhance PIR production deployment'
             echo
             echo '- Revision: ${{ inputs.ref }}'
-            echo '- Endpoint: ${{ vars.MEMO_PUBLIC_URL }}'
+            echo '- Endpoint: ${{ vars.ENHANCE_PUBLIC_URL }}'
           } >>"$GITHUB_STEP_SUMMARY"
       - name: Remove SSH material
         if: always()
