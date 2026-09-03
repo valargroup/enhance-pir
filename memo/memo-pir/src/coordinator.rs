@@ -136,12 +136,62 @@ impl CoordinatorState {
         *self.phase.write().await = phase;
     }
 
-    /// Point-in-time gauges for `/metrics`. Reads only aggregate state.
+    /// Point-in-time gauges for `/metrics`. Reads only aggregate state and
+    /// probes each remote worker's health with a short timeout so a dead
+    /// worker shows up on the dashboard without slowing the scrape down.
     pub async fn observe(&self) -> metrics::Observation {
         let phase = self.phase.read().await.clone();
         let live = self.live.load();
         let metadata = live.as_ref().map(|snapshot| &snapshot.metadata);
+        let mut probes = tokio::task::JoinSet::new();
+        for (index, worker) in self.workers.iter().enumerate() {
+            let assigned: Vec<&ShardDescriptor> = metadata
+                .map(|m| {
+                    m.shards
+                        .iter()
+                        .filter(|shard| shard.worker == worker.name())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut observation = metrics::WorkerObservation {
+                name: worker.name().to_string(),
+                assigned_shards: assigned.len() as u64,
+                populated_positions: assigned.iter().map(|s| s.populated_positions).sum(),
+                ..Default::default()
+            };
+            let probe = match worker {
+                WorkerTarget::Embedded { .. } => None,
+                WorkerTarget::Remote { base_url, .. } => {
+                    Some((self.http.clone(), base_url.clone()))
+                }
+            };
+            probes.spawn(async move {
+                match probe {
+                    None => observation.up = true,
+                    Some((client, base_url)) => {
+                        let (up, generation, active_shards) =
+                            probe_worker_health(&client, &base_url).await;
+                        observation.up = up;
+                        observation.generation = generation;
+                        observation.active_shards = active_shards;
+                    }
+                }
+                (index, observation)
+            });
+        }
+        let mut worker_details: Vec<(usize, metrics::WorkerObservation)> = Vec::new();
+        while let Some(result) = probes.join_next().await {
+            if let Ok(entry) = result {
+                worker_details.push(entry);
+            }
+        }
+        worker_details.sort_by_key(|(index, _)| *index);
+        let worker_details = worker_details
+            .into_iter()
+            .map(|(_, observation)| observation)
+            .collect();
         metrics::Observation {
+            worker_details,
             phase: Some(phase),
             anchor_height: metadata.map_or(0, |m| m.anchor_height),
             generation: metadata.map_or(0, |m| m.generation),
@@ -595,6 +645,32 @@ pub fn router(state: CoordinatorState) -> Router {
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
         .layer(axum::middleware::from_fn(metrics::track_request))
         .with_state(state)
+}
+
+/// Ask a worker for `/internal/health`, returning (up, generation, active shards).
+/// Any error, non-2xx, or malformed body counts as down.
+async fn probe_worker_health(client: &reqwest::Client, base_url: &str) -> (bool, u64, u64) {
+    let response = client
+        .get(format!("{base_url}/internal/health"))
+        .timeout(Duration::from_secs(2))
+        .send()
+        .await;
+    let Ok(response) = response else {
+        return (false, 0, 0);
+    };
+    if !response.status().is_success() {
+        return (false, 0, 0);
+    }
+    let Ok(body) = response.json::<serde_json::Value>().await else {
+        return (false, 0, 0);
+    };
+    let up = body.get("status").and_then(|v| v.as_str()) == Some("ok");
+    let generation = body.get("generation").and_then(|v| v.as_u64()).unwrap_or(0);
+    let active = body
+        .get("active_shards")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    (up, generation, active)
 }
 
 /// `GET /metrics`: Prometheus text exposition for the local `pir-apm` sidecar.

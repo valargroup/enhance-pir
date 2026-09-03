@@ -45,6 +45,15 @@ struct Metrics {
     snapshot_shards: IntGauge,
     snapshot_workers: IntGauge,
     snapshot_query_slots_available: IntGauge,
+    worker_up: IntGaugeVec,
+    worker_generation: IntGaugeVec,
+    worker_active_shards: IntGaugeVec,
+    worker_assigned_shards: IntGaugeVec,
+    worker_populated_positions: IntGaugeVec,
+}
+
+fn worker_gauge(name: &str, help: &str) -> IntGaugeVec {
+    IntGaugeVec::new(Opts::new(name, help), &["worker"]).expect("valid metric")
 }
 
 fn gauge(name: &str, help: &str) -> IntGauge {
@@ -139,6 +148,29 @@ fn build_metrics() -> Metrics {
         "Free concurrent query slots; queries are shed with 503 when this reaches 0.",
     );
 
+    // Per-worker fleet view. The `worker` label is the operator-assigned
+    // inventory name, so cardinality is bounded by the worker count.
+    let worker_up = worker_gauge(
+        "memo_worker_up",
+        "1 if the worker answered its health probe on the last scrape, else 0.",
+    );
+    let worker_generation = worker_gauge(
+        "memo_worker_generation",
+        "Generation the worker reports as active (0 if unknown).",
+    );
+    let worker_active_shards = worker_gauge(
+        "memo_worker_active_shards",
+        "Shards the worker reports as active in its current generation.",
+    );
+    let worker_assigned_shards = worker_gauge(
+        "memo_worker_assigned_shards",
+        "Shards the served snapshot assigns to this worker.",
+    );
+    let worker_populated_positions = worker_gauge(
+        "memo_worker_populated_positions",
+        "Ironwood positions held by the shards assigned to this worker.",
+    );
+
     for collector in [
         Box::new(http_requests.clone()) as Box<dyn prometheus::core::Collector>,
         Box::new(http_request_duration.clone()),
@@ -155,6 +187,11 @@ fn build_metrics() -> Metrics {
         Box::new(snapshot_shards.clone()),
         Box::new(snapshot_workers.clone()),
         Box::new(snapshot_query_slots_available.clone()),
+        Box::new(worker_up.clone()),
+        Box::new(worker_generation.clone()),
+        Box::new(worker_active_shards.clone()),
+        Box::new(worker_assigned_shards.clone()),
+        Box::new(worker_populated_positions.clone()),
     ] {
         registry.register(collector).expect("register collector");
     }
@@ -182,6 +219,11 @@ fn build_metrics() -> Metrics {
         snapshot_shards,
         snapshot_workers,
         snapshot_query_slots_available,
+        worker_up,
+        worker_generation,
+        worker_active_shards,
+        worker_assigned_shards,
+        worker_populated_positions,
     }
 }
 
@@ -271,6 +313,18 @@ pub async fn track_request(
 /// Point-in-time view of the coordinator used to populate the snapshot gauges.
 /// Built by the coordinator right before each exposition so the ingest path
 /// never has to remember to update a gauge.
+/// What the coordinator knows about one worker at scrape time.
+#[derive(Clone, Debug, Default)]
+pub struct WorkerObservation {
+    pub name: String,
+    /// `None` when the probe failed or timed out.
+    pub up: bool,
+    pub generation: u64,
+    pub active_shards: u64,
+    pub assigned_shards: u64,
+    pub populated_positions: u64,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Observation {
     pub phase: Option<CoordinatorPhase>,
@@ -281,6 +335,7 @@ pub struct Observation {
     pub shards: u64,
     pub workers: u64,
     pub query_slots_available: u64,
+    pub worker_details: Vec<WorkerObservation>,
 }
 
 fn clamp(value: u64) -> i64 {
@@ -313,6 +368,24 @@ pub fn record_observation(observation: &Observation) {
     m.snapshot_workers.set(clamp(observation.workers));
     m.snapshot_query_slots_available
         .set(clamp(observation.query_slots_available));
+    for worker in &observation.worker_details {
+        let label = [worker.name.as_str()];
+        m.worker_up
+            .with_label_values(&label)
+            .set(i64::from(worker.up));
+        m.worker_generation
+            .with_label_values(&label)
+            .set(clamp(worker.generation));
+        m.worker_active_shards
+            .with_label_values(&label)
+            .set(clamp(worker.active_shards));
+        m.worker_assigned_shards
+            .with_label_values(&label)
+            .set(clamp(worker.assigned_shards));
+        m.worker_populated_positions
+            .with_label_values(&label)
+            .set(clamp(worker.populated_positions));
+    }
 }
 
 /// Render the registry as Prometheus text exposition.
@@ -464,6 +537,21 @@ mod tests {
             shards: 3,
             workers: 2,
             query_slots_available: 2,
+            worker_details: vec![
+                WorkerObservation {
+                    name: "worker-1".into(),
+                    up: true,
+                    generation: 3_000_000,
+                    active_shards: 2,
+                    assigned_shards: 2,
+                    populated_positions: 100,
+                },
+                WorkerObservation {
+                    name: "worker-2".into(),
+                    up: false,
+                    ..Default::default()
+                },
+            ],
         });
         assert_eq!(m.snapshot_phase_code.get(), 2);
         assert_eq!(m.snapshot_sync_current_height.get(), 0);
@@ -473,5 +561,8 @@ mod tests {
         let (_, _, body) = encode();
         assert!(body.contains("memo_snapshot_phase_code 2"));
         assert!(body.contains("memo_snapshot_shards 3"));
+        assert!(body.contains("memo_worker_up{worker=\"worker-1\"} 1"));
+        assert!(body.contains("memo_worker_up{worker=\"worker-2\"} 0"));
+        assert!(body.contains("memo_worker_assigned_shards{worker=\"worker-1\"} 2"));
     }
 }
