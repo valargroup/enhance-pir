@@ -1,0 +1,42 @@
+[package]
+name = "enhance-pir-server"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "enhance_pir_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "enhance-pir-server"
+path = "src/bin/server.rs"
+
+[[bin]]
+name = "enhance-pir-worker"
+path = "src/bin/worker.rs"
+
+[dependencies]
+axum = "0.7"
+enhance-pir = { path = "../../pir/enhance" }
+arc-swap = "1"
+clap = { version = "4", features = ["derive"] }
+hex = "0.4"
+inspiring = { git = "https://github.com/valargroup/ipir-sp.git", rev = "e875404cef33661906ab60af236dfb327e6b28b1" }
+ipir-sp = { git = "https://github.com/valargroup/ipir-sp.git", rev = "e875404cef33661906ab60af236dfb327e6b28b1" }
+prometheus = { version = "0.13", default-features = false, features = ["process"] }
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sysinfo = "0.36"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.5", features = ["limit", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+zakura-chain = { git = "https://github.com/zakura-core/zakura.git", rev = "1faf150fc3648aae22c55a6b30f8f5a9b9ce934e" }
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }

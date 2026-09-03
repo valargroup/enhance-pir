@@ -1,26 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "shared/pir-types",
-    "shared/chain-ingest",
-    "nullifier/spend-types",
-    "nullifier/hashtable-pir",
-    "nullifier/nf-ingest",
-    "nullifier/spend-server",
-    "nullifier/spend-client",
-    "witness/witness-types",
-    "witness/commitment-ingest",
-    "witness/commitment-tree-db",
-    "witness/witness-server",
-    "witness/decryption-types",
-    "witness/witness-client",
-    "memo/memo-pir",
-    "combined-server",
-    "deploy/pir-apm",
+    "pir/enhance",
+    "server/enhance-pir-server",
+    "server/pir-apm",
 ]
-
-[patch.crates-io]
-valar-spiral-rs = { git = "https://github.com/valargroup/spiral-rs.git", branch = "valar/avoid-avx512" }
+exclude = ["demos/legacy-spendability"]
 
 # spiral-rs's Barrett reduction is intentionally wrapping: `barrett_raw_u128`
 # computes `zy * cr1 + tmp3 + carry` and relies on it wrapping modulo 2^64. That
