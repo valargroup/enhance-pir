@@ -43,6 +43,11 @@ A five-minute, eight-worker production test completed 6,512 encrypted queries
 with no errors at 21.71 requests/second. End-to-end latency was 322.6 ms p50,
 483.3 ms p95, and 1.75 s p99.
 
+At the current 32,768-row by 4,096-column configuration, each query uploads
+258,056 bytes (252.0 KiB) and downloads 10,256 bytes (10.0 KiB), or 262.0 KiB
+combined. At 21.71 requests/second, that is 5.60 MB/s upload plus 0.22 MB/s
+download (46.6 Mbit/s combined), excluding HTTP and TLS overhead.
+
 Live production health, request latency, throughput, fleet topology, and
 capacity are available on the [Enhance PIR APM dashboard](https://enhance-pir.valargroup.dev/apm/).
 
