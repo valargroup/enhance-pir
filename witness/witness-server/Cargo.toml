@@ -30,8 +30,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2"
 ypir = { package = "valar-ypir", git = "https://github.com/valargroup/ypir.git", branch = "valar/artifact", default-features = false, features = ["server"], optional = true }
 spiral-rs = { package = "valar-spiral-rs", git = "https://github.com/valargroup/spiral-rs.git", branch = "valar/avoid-avx512", optional = true }
-ipir-sp = { git = "https://github.com/valargroup/ipir-sp.git", rev = "2bc1075aa72895fbaa99c83e964567aae317ea61", optional = true }
-inspiring = { git = "https://github.com/valargroup/ipir-sp.git", rev = "2bc1075aa72895fbaa99c83e964567aae317ea61", optional = true }
+ipir-sp = { git = "https://github.com/valargroup/ipir-sp.git", rev = "e875404cef33661906ab60af236dfb327e6b28b1", optional = true }
+inspiring = { git = "https://github.com/valargroup/ipir-sp.git", rev = "e875404cef33661906ab60af236dfb327e6b28b1", optional = true }
 
 [dev-dependencies]
 witness-client = { path = "../witness-client" }

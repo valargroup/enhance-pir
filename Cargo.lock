@@ -1802,18 +1802,6 @@ dependencies = [
 [[package]]
 name = "inspiring"
 version = "0.1.0"
-source = "git+https://github.com/valargroup/ipir-sp.git?rev=2bc1075aa72895fbaa99c83e964567aae317ea61#2bc1075aa72895fbaa99c83e964567aae317ea61"
-dependencies = [
- "rand 0.8.5",
- "rand_chacha 0.3.1",
- "rayon",
- "thiserror 1.0.69",
- "valar-spiral-rs 0.5.2",
-]
-
-[[package]]
-name = "inspiring"
-version = "0.1.0"
 source = "git+https://github.com/valargroup/ipir-sp.git?rev=e875404cef33661906ab60af236dfb327e6b28b1#e875404cef33661906ab60af236dfb327e6b28b1"
 dependencies = [
  "rand 0.8.5",
@@ -1826,32 +1814,12 @@ dependencies = [
 [[package]]
 name = "ipir-sp"
 version = "0.1.0"
-source = "git+https://github.com/valargroup/ipir-sp.git?rev=2bc1075aa72895fbaa99c83e964567aae317ea61#2bc1075aa72895fbaa99c83e964567aae317ea61"
-dependencies = [
- "clap",
- "env_logger",
- "fastrand",
- "inspiring 0.1.0 (git+https://github.com/valargroup/ipir-sp.git?rev=2bc1075aa72895fbaa99c83e964567aae317ea61)",
- "log",
- "rand 0.8.5",
- "rand_chacha 0.3.1",
- "rayon",
- "serde",
- "serde_json",
- "sha1",
- "simplepir-kernel 0.1.0 (git+https://github.com/valargroup/ipir-sp.git?rev=2bc1075aa72895fbaa99c83e964567aae317ea61)",
- "valar-spiral-rs 0.5.2",
-]
-
-[[package]]
-name = "ipir-sp"
-version = "0.1.0"
 source = "git+https://github.com/valargroup/ipir-sp.git?rev=e875404cef33661906ab60af236dfb327e6b28b1#e875404cef33661906ab60af236dfb327e6b28b1"
 dependencies = [
  "clap",
  "env_logger",
  "fastrand",
- "inspiring 0.1.0 (git+https://github.com/valargroup/ipir-sp.git?rev=e875404cef33661906ab60af236dfb327e6b28b1)",
+ "inspiring",
  "log",
  "rand 0.8.5",
  "rand_chacha 0.3.1",
@@ -1859,7 +1827,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
- "simplepir-kernel 0.1.0 (git+https://github.com/valargroup/ipir-sp.git?rev=e875404cef33661906ab60af236dfb327e6b28b1)",
+ "simplepir-kernel",
  "valar-spiral-rs 0.5.2",
 ]
 
@@ -2085,8 +2053,9 @@ dependencies = [
  "axum",
  "clap",
  "hex",
- "inspiring 0.1.0 (git+https://github.com/valargroup/ipir-sp.git?rev=e875404cef33661906ab60af236dfb327e6b28b1)",
- "ipir-sp 0.1.0 (git+https://github.com/valargroup/ipir-sp.git?rev=e875404cef33661906ab60af236dfb327e6b28b1)",
+ "inspiring",
+ "ipir-sp",
+ "pir-types",
  "prometheus",
  "rand 0.8.5",
  "reqwest",
@@ -2431,6 +2400,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -3401,19 +3371,9 @@ dependencies = [
 [[package]]
 name = "simplepir-kernel"
 version = "0.1.0"
-source = "git+https://github.com/valargroup/ipir-sp.git?rev=2bc1075aa72895fbaa99c83e964567aae317ea61#2bc1075aa72895fbaa99c83e964567aae317ea61"
-dependencies = [
- "inspiring 0.1.0 (git+https://github.com/valargroup/ipir-sp.git?rev=2bc1075aa72895fbaa99c83e964567aae317ea61)",
- "rayon",
- "valar-spiral-rs 0.5.2",
-]
-
-[[package]]
-name = "simplepir-kernel"
-version = "0.1.0"
 source = "git+https://github.com/valargroup/ipir-sp.git?rev=e875404cef33661906ab60af236dfb327e6b28b1#e875404cef33661906ab60af236dfb327e6b28b1"
 dependencies = [
- "inspiring 0.1.0 (git+https://github.com/valargroup/ipir-sp.git?rev=e875404cef33661906ab60af236dfb327e6b28b1)",
+ "inspiring",
  "rayon",
  "valar-spiral-rs 0.5.2",
 ]
@@ -3456,8 +3416,8 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "hashtable-pir",
- "inspiring 0.1.0 (git+https://github.com/valargroup/ipir-sp.git?rev=2bc1075aa72895fbaa99c83e964567aae317ea61)",
- "ipir-sp 0.1.0 (git+https://github.com/valargroup/ipir-sp.git?rev=2bc1075aa72895fbaa99c83e964567aae317ea61)",
+ "inspiring",
+ "ipir-sp",
  "nf-ingest",
  "reqwest",
  "serde_json",
@@ -3480,8 +3440,8 @@ dependencies = [
  "axum",
  "clap",
  "hashtable-pir",
- "inspiring 0.1.0 (git+https://github.com/valargroup/ipir-sp.git?rev=2bc1075aa72895fbaa99c83e964567aae317ea61)",
- "ipir-sp 0.1.0 (git+https://github.com/valargroup/ipir-sp.git?rev=2bc1075aa72895fbaa99c83e964567aae317ea61)",
+ "inspiring",
+ "ipir-sp",
  "nf-ingest",
  "pir-types",
  "reqwest",
@@ -4849,8 +4809,8 @@ dependencies = [
  "commitment-tree-db",
  "hex",
  "incrementalmerkletree",
- "inspiring 0.1.0 (git+https://github.com/valargroup/ipir-sp.git?rev=2bc1075aa72895fbaa99c83e964567aae317ea61)",
- "ipir-sp 0.1.0 (git+https://github.com/valargroup/ipir-sp.git?rev=2bc1075aa72895fbaa99c83e964567aae317ea61)",
+ "inspiring",
+ "ipir-sp",
  "pir-types",
  "reqwest",
  "serde",
@@ -4876,8 +4836,8 @@ dependencies = [
  "commitment-ingest",
  "commitment-tree-db",
  "hex",
- "inspiring 0.1.0 (git+https://github.com/valargroup/ipir-sp.git?rev=2bc1075aa72895fbaa99c83e964567aae317ea61)",
- "ipir-sp 0.1.0 (git+https://github.com/valargroup/ipir-sp.git?rev=2bc1075aa72895fbaa99c83e964567aae317ea61)",
+ "inspiring",
+ "ipir-sp",
  "pir-types",
  "reqwest",
  "serde",

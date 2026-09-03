@@ -27,6 +27,7 @@ use prometheus::{
 };
 
 use crate::coordinator::CoordinatorPhase;
+use crate::types::DatabaseId;
 
 struct Metrics {
     registry: Registry,
@@ -232,18 +233,62 @@ fn metrics() -> &'static Metrics {
     INSTANCE.get_or_init(build_metrics)
 }
 
+/// Endpoint label for a table's query route. The ACTION table keeps the bare
+/// `query` label the sidecar already knows; other tables are prefixed.
+pub fn query_endpoint(table: DatabaseId) -> &'static str {
+    match table {
+        DatabaseId::Action => "query",
+        DatabaseId::Witness => "witness_query",
+        DatabaseId::NfCold => "nf_cold_query",
+        DatabaseId::NfWarm => "nf_warm_query",
+    }
+}
+
+fn table_endpoint(table: DatabaseId, endpoint: &str) -> Option<&'static str> {
+    Some(match (table, endpoint) {
+        (DatabaseId::Action, "params") => "params",
+        (DatabaseId::Action, "public-params") => "public_params",
+        (DatabaseId::Action, "query") => "query",
+        (DatabaseId::Witness, "params") => "witness_params",
+        (DatabaseId::Witness, "public-params") => "witness_public_params",
+        (DatabaseId::Witness, "query") => "witness_query",
+        (DatabaseId::NfCold, "params") => "nf_cold_params",
+        (DatabaseId::NfCold, "public-params") => "nf_cold_public_params",
+        (DatabaseId::NfCold, "query") => "nf_cold_query",
+        (DatabaseId::NfWarm, "params") => "nf_warm_params",
+        (DatabaseId::NfWarm, "public-params") => "nf_warm_public_params",
+        (DatabaseId::NfWarm, "query") => "nf_warm_query",
+        _ => return None,
+    })
+}
+
 /// Fixed client routes that are tracked. Anything else — including `/metrics`
 /// and `/ready` themselves — is deliberately untracked so label cardinality is
-/// bounded and no caller-controlled path ever becomes a label.
+/// bounded and no caller-controlled path ever becomes a label: every label
+/// returned here is a literal from a closed set.
 pub fn allowlisted_endpoint(method: &axum::http::Method, path: &str) -> Option<&'static str> {
+    use axum::http::Method;
     match (method, path) {
-        (&axum::http::Method::GET, "/memo/health") => Some("health"),
-        (&axum::http::Method::GET, "/memo/metadata") => Some("metadata"),
-        (&axum::http::Method::GET, "/memo/params") => Some("params"),
-        (&axum::http::Method::GET, "/memo/public-params") => Some("public_params"),
-        (&axum::http::Method::POST, "/memo/query") => Some("query"),
-        _ => None,
+        (&Method::GET, "/memo/health") | (&Method::GET, "/v1/health") => return Some("health"),
+        (&Method::GET, "/memo/metadata") => return Some("metadata"),
+        (&Method::GET, "/v1/generation") => return Some("generation"),
+        (&Method::GET, "/memo/params") => return Some("params"),
+        (&Method::GET, "/memo/public-params") => return Some("public_params"),
+        (&Method::POST, "/memo/query") => return Some("query"),
+        _ => {}
     }
+    let rest = path.strip_prefix("/v1/")?;
+    let (table, endpoint) = rest.split_once('/')?;
+    let table: DatabaseId = table.parse().ok()?;
+    let expected = if endpoint == "query" {
+        &Method::POST
+    } else {
+        &Method::GET
+    };
+    if method != expected {
+        return None;
+    }
+    table_endpoint(table, endpoint)
 }
 
 struct GaugeGuard(IntGauge);
@@ -439,6 +484,28 @@ mod tests {
             Some("query")
         );
         assert_eq!(allowlisted_endpoint(&Method::GET, "/memo/query"), None);
+        assert_eq!(
+            allowlisted_endpoint(&Method::GET, "/v1/generation"),
+            Some("generation")
+        );
+        assert_eq!(
+            allowlisted_endpoint(&Method::POST, "/v1/action/query"),
+            Some("query")
+        );
+        assert_eq!(
+            allowlisted_endpoint(&Method::GET, "/v1/nf-cold/public-params"),
+            Some("nf_cold_public_params")
+        );
+        assert_eq!(allowlisted_endpoint(&Method::GET, "/v1/action/query"), None);
+        assert_eq!(allowlisted_endpoint(&Method::POST, "/v1/memo/query"), None);
+        assert_eq!(
+            allowlisted_endpoint(&Method::GET, "/v1/action/secret"),
+            None
+        );
+        assert_eq!(
+            allowlisted_endpoint(&Method::GET, "/v1/action/../query"),
+            None
+        );
         assert_eq!(allowlisted_endpoint(&Method::GET, "/metrics"), None);
         assert_eq!(allowlisted_endpoint(&Method::GET, "/ready"), None);
         assert_eq!(

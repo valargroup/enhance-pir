@@ -1,4 +1,4 @@
-use crate::types::{ActionRecord, RECORD_BYTES, ROW_BYTES, SHARD_POSITIONS, SHARD_ROWS};
+use crate::types::{DatabaseId, DatabaseLayout};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
@@ -27,76 +27,80 @@ pub struct BlockEntry {
     pub action_count: u64,
 }
 
+fn default_table() -> String {
+    // Journals written before tables were named are ACTION journals.
+    DatabaseId::Action.as_str().to_string()
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct StoreManifest {
     version: u16,
-    base_position: u64,
+    #[serde(default = "default_table")]
+    table: String,
     tree_size: u64,
     blocks: Vec<BlockEntry>,
 }
 
-pub struct MemoStore {
+/// Append-only journal of fixed-size records for one table, indexed by
+/// commitment-tree position from zero. Position to offset is
+/// `position * layout.record_bytes`.
+pub struct RecordJournal {
     dir: PathBuf,
     records_path: PathBuf,
+    table: DatabaseId,
+    layout: DatabaseLayout,
     manifest: StoreManifest,
 }
 
-impl MemoStore {
-    pub fn open(path: impl AsRef<Path>, base_position: u64) -> Result<Self, StoreError> {
-        if !base_position.is_multiple_of(SHARD_POSITIONS as u64) {
-            return Err(StoreError::Invariant(format!(
-                "base position {base_position} is not shard aligned"
-            )));
-        }
+impl RecordJournal {
+    pub fn open(
+        path: impl AsRef<Path>,
+        table: DatabaseId,
+        layout: DatabaseLayout,
+    ) -> Result<Self, StoreError> {
         let dir = path.as_ref().to_path_buf();
         fs::create_dir_all(&dir)?;
         let records_path = dir.join("records.bin");
         let manifest_path = dir.join("manifest.json");
+        let fresh = || StoreManifest {
+            version: STORE_VERSION,
+            table: table.as_str().to_string(),
+            tree_size: 0,
+            blocks: Vec::new(),
+        };
         let manifest = if manifest_path.exists() {
             let bytes = fs::read(&manifest_path)?;
             let parsed: StoreManifest = serde_json::from_slice(&bytes)?;
-            if parsed.version != STORE_VERSION {
-                // An older journal holds a different record layout and cannot be
-                // converted (the new fields are not in it). Set it aside rather than
-                // refuse to start: the archive node re-derives everything, and a
-                // restart must not need an operator on the host.
-                let superseded = dir.join(format!("superseded-v{}", parsed.version));
+            if parsed.version != STORE_VERSION || parsed.table != table.as_str() {
+                // An older or foreign journal holds a different record layout and
+                // cannot be converted. Set it aside rather than refuse to start: the
+                // archive node re-derives everything, and a restart must not need an
+                // operator on the host.
+                let superseded =
+                    dir.join(format!("superseded-v{}-{}", parsed.version, parsed.table));
                 fs::create_dir_all(&superseded)?;
                 fs::rename(&records_path, superseded.join("records.bin"))?;
                 fs::rename(&manifest_path, superseded.join("manifest.json"))?;
                 File::open(&dir)?.sync_all()?;
                 tracing::warn!(
                     found = parsed.version,
+                    found_table = %parsed.table,
                     expected = STORE_VERSION,
+                    table = %table,
                     path = %superseded.display(),
                     "set aside an incompatible journal; re-ingesting from activation"
                 );
-                StoreManifest {
-                    version: STORE_VERSION,
-                    base_position,
-                    tree_size: base_position,
-                    blocks: Vec::new(),
-                }
-            } else if !parsed.base_position.is_multiple_of(SHARD_POSITIONS as u64) {
-                return Err(StoreError::Invariant(
-                    "store base position is not shard aligned".to_string(),
-                ));
+                fresh()
             } else {
                 parsed
             }
         } else {
-            StoreManifest {
-                version: STORE_VERSION,
-                base_position,
-                tree_size: base_position,
-                blocks: Vec::new(),
-            }
+            fresh()
         };
 
         let expected_len = manifest
             .tree_size
-            .checked_sub(manifest.base_position)
-            .and_then(|positions| positions.checked_mul(RECORD_BYTES as u64))
+            .checked_mul(layout.record_bytes as u64)
             .ok_or_else(|| StoreError::Invariant("record length overflow".to_string()))?;
         let records = OpenOptions::new()
             .create(true)
@@ -114,6 +118,8 @@ impl MemoStore {
         let store = Self {
             dir,
             records_path,
+            table,
+            layout,
             manifest,
         };
         if !store.manifest_path().exists() {
@@ -122,8 +128,12 @@ impl MemoStore {
         Ok(store)
     }
 
-    pub fn base_position(&self) -> u64 {
-        self.manifest.base_position
+    pub fn table(&self) -> DatabaseId {
+        self.table
+    }
+
+    pub fn layout(&self) -> &DatabaseLayout {
+        &self.layout
     }
 
     pub fn tree_size(&self) -> u64 {
@@ -138,11 +148,11 @@ impl MemoStore {
         &self.manifest.blocks
     }
 
-    pub fn append_block(
+    pub fn append_block<R: AsRef<[u8]>>(
         &mut self,
         height: u64,
         hash: String,
-        records: &[ActionRecord],
+        records: &[R],
     ) -> Result<(), StoreError> {
         if let Some(previous) = self.last_block() {
             if height != previous.height + 1 {
@@ -152,11 +162,21 @@ impl MemoStore {
                 )));
             }
         }
+        if let Some(bad) = records
+            .iter()
+            .find(|record| record.as_ref().len() != self.layout.record_bytes)
+        {
+            return Err(StoreError::Invariant(format!(
+                "record has {} bytes, layout needs {}",
+                bad.as_ref().len(),
+                self.layout.record_bytes
+            )));
+        }
 
         let first_position = self.manifest.tree_size;
         let mut file = OpenOptions::new().append(true).open(&self.records_path)?;
         for record in records {
-            file.write_all(record.as_bytes())?;
+            file.write_all(record.as_ref())?;
         }
         file.sync_all()?;
 
@@ -174,18 +194,20 @@ impl MemoStore {
         self.persist_manifest()
     }
 
+    /// Shards with at least one populated position, from shard zero.
     pub fn shard_ids(&self) -> std::ops::RangeInclusive<u64> {
-        let first = self.manifest.base_position / SHARD_POSITIONS as u64;
         let last_position = self.manifest.tree_size.saturating_sub(1);
-        let last = last_position.max(self.manifest.base_position) / SHARD_POSITIONS as u64;
-        first..=last
+        0..=last_position / self.layout.shard_positions() as u64
     }
 
+    /// The full padded shard: populated records in order, then zero bytes up
+    /// to `layout.shard_bytes()`. Deterministic, so its digest is stable.
     pub fn read_shard_rows(&self, shard_id: u64) -> Result<Vec<u8>, StoreError> {
+        let shard_positions = self.layout.shard_positions() as u64;
         let shard_start = shard_id
-            .checked_mul(SHARD_POSITIONS as u64)
+            .checked_mul(shard_positions)
             .ok_or_else(|| StoreError::Invariant("shard position overflow".to_string()))?;
-        if shard_start < self.manifest.base_position || shard_start >= self.manifest.tree_size {
+        if shard_start >= self.manifest.tree_size {
             return Err(StoreError::Invariant(format!(
                 "shard {shard_id} is outside stored coverage"
             )));
@@ -194,30 +216,22 @@ impl MemoStore {
             .manifest
             .tree_size
             .saturating_sub(shard_start)
-            .min(SHARD_POSITIONS as u64) as usize;
-        let mut rows = vec![0u8; SHARD_ROWS * ROW_BYTES];
+            .min(shard_positions) as usize;
+        let record_bytes = self.layout.record_bytes;
+        let mut rows = vec![0u8; self.layout.shard_bytes()];
         let mut file = File::open(&self.records_path)?;
-        let source_position = shard_start - self.manifest.base_position;
-        file.seek(SeekFrom::Start(source_position * RECORD_BYTES as u64))?;
-        file.read_exact(&mut rows[..available_positions * RECORD_BYTES])?;
+        file.seek(SeekFrom::Start(shard_start * record_bytes as u64))?;
+        file.read_exact(&mut rows[..available_positions * record_bytes])?;
         Ok(rows)
     }
 
     pub fn populated_positions_in_shard(&self, shard_id: u64) -> u64 {
-        let start = shard_id.saturating_mul(SHARD_POSITIONS as u64);
+        let shard_positions = self.layout.shard_positions() as u64;
+        let start = shard_id.saturating_mul(shard_positions);
         self.manifest
             .tree_size
             .saturating_sub(start)
-            .min(SHARD_POSITIONS as u64)
-    }
-
-    pub fn effective_height_for_position(&self, position: u64) -> Option<u64> {
-        self.manifest
-            .blocks
-            .iter()
-            .find(|block| position < block.first_position + block.action_count)
-            .map(|block| block.height)
-            .or_else(|| self.manifest.blocks.first().map(|block| block.height))
+            .min(shard_positions)
     }
 
     pub fn rows_digest(rows: &[u8]) -> String {
@@ -244,30 +258,46 @@ impl MemoStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{ActionRecord, ACTION_LAYOUT, RECORD_BYTES};
 
     fn record(byte: u8) -> ActionRecord {
         ActionRecord([byte; RECORD_BYTES])
     }
 
+    fn open(dir: &Path) -> RecordJournal {
+        RecordJournal::open(dir, DatabaseId::Action, ACTION_LAYOUT).expect("open")
+    }
+
     #[test]
     fn append_restart_and_padding_are_deterministic() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut store = MemoStore::open(dir.path(), 0).expect("open");
+        let mut store = open(dir.path());
         store
             .append_block(10, "aa".to_string(), &[record(1), record(2)])
             .expect("append");
         drop(store);
 
-        let store = MemoStore::open(dir.path(), 0).expect("reopen");
+        let store = open(dir.path());
         assert_eq!(store.tree_size(), 2);
+        assert_eq!(store.shard_ids(), 0..=0);
         let shard = store.read_shard_rows(0).expect("shard");
+        assert_eq!(shard.len(), ACTION_LAYOUT.shard_bytes());
         assert_eq!(&shard[..RECORD_BYTES], &[1; RECORD_BYTES]);
         assert_eq!(&shard[RECORD_BYTES..2 * RECORD_BYTES], &[2; RECORD_BYTES]);
         assert!(shard[2 * RECORD_BYTES..].iter().all(|byte| *byte == 0));
     }
 
     #[test]
-    fn older_journal_versions_are_set_aside_and_restarted_empty() {
+    fn records_must_match_the_layout() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut store = open(dir.path());
+        let short = vec![0u8; RECORD_BYTES - 1];
+        assert!(store.append_block(10, "aa".to_string(), &[short]).is_err());
+        assert_eq!(store.tree_size(), 0);
+    }
+
+    #[test]
+    fn older_or_foreign_journals_are_set_aside_and_restarted_empty() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             dir.path().join("manifest.json"),
@@ -276,23 +306,38 @@ mod tests {
         .expect("write manifest");
         std::fs::write(dir.path().join("records.bin"), vec![7u8; 2 * 612]).expect("write records");
 
-        let store = MemoStore::open(dir.path(), 0).expect("open");
+        let store = open(dir.path());
         assert_eq!(store.tree_size(), 0);
         assert!(store.last_block().is_none());
         assert_eq!(
-            std::fs::read(dir.path().join("superseded-v1/records.bin")).expect("kept"),
+            std::fs::read(dir.path().join("superseded-v1-action/records.bin")).expect("kept"),
             vec![7u8; 2 * 612]
         );
-        assert!(dir.path().join("superseded-v1/manifest.json").exists());
         let manifest: serde_json::Value =
             serde_json::from_slice(&std::fs::read(dir.path().join("manifest.json")).expect("new"))
                 .expect("json");
         assert_eq!(manifest["version"], 2);
+        assert_eq!(manifest["table"], "action");
+
+        // A current-version journal of another table is also foreign.
+        drop(store);
+        let foreign = RecordJournal::open(dir.path(), DatabaseId::Witness, ACTION_LAYOUT)
+            .expect("open as another table");
+        assert_eq!(foreign.tree_size(), 0);
+        assert!(dir.path().join("superseded-v2-action").exists());
     }
 
     #[test]
-    fn base_position_must_be_shard_aligned() {
+    fn journals_without_a_table_name_are_action_journals() {
         let dir = tempfile::tempdir().expect("tempdir");
-        assert!(MemoStore::open(dir.path(), 1).is_err());
+        std::fs::write(
+            dir.path().join("manifest.json"),
+            br#"{"version":2,"base_position":0,"tree_size":1,"blocks":[{"height":5,"hash":"aa","first_position":0,"action_count":1}]}"#,
+        )
+        .expect("write manifest");
+        std::fs::write(dir.path().join("records.bin"), vec![9u8; RECORD_BYTES]).expect("records");
+        let store = open(dir.path());
+        assert_eq!(store.tree_size(), 1);
+        assert_eq!(store.last_block().map(|block| block.height), Some(5));
     }
 }

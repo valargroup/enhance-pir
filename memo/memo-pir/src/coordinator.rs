@@ -1,19 +1,18 @@
-use crate::ipir::global_parameters;
+use crate::ipir::{global_parameters, shard_parameters};
 use crate::metrics;
-use crate::store::MemoStore;
+use crate::store::RecordJournal;
 use crate::types::{
-    logical_rows_for, worker_index_for_shard, Coverage, MemoSnapshotMetadata, ShardDescriptor,
-    ACTION_LAYOUT, NETWORK, POOL, RECORDS_PER_ROW, RECORD_BYTES, ROW_BYTES, SCHEMA_VERSION,
-    SHARD_POSITIONS, SHARD_ROWS,
+    worker_index_for_shard, DatabaseId, GenerationManifest, MemoSnapshotMetadata, ShardDescriptor,
+    TableManifest, MANIFEST_SCHEMA_VERSION, NETWORK, POOL, PROTOCOL_REVISION,
 };
 use crate::wire::{
     decode_crs_blocks, decode_evaluate_response, encode_evaluate_request, EvaluateRequest,
     ShardQuery,
 };
-use crate::worker::{ActivateRequest, ActivateShard, WorkerState};
-use arc_swap::ArcSwapOption;
+use crate::worker::{ActivateRequest, ActivateShard, WorkerState, RETAINED_GENERATIONS};
+use arc_swap::ArcSwap;
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
@@ -32,15 +31,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{RwLock, Semaphore};
 
-/// First eight bytes, little-endian, of
-/// `SHA-256("zcash/ironwood-memo-pir/setup-seed/v1")`.
-pub const MEMO_SETUP_SEED: u64 = 0xaf1a_e284_ec07_131a;
+pub use crate::types::MEMO_SETUP_SEED;
 
+/// The ACTION table's expanded setup seed.
 pub fn memo_setup_seed_bytes() -> [u8; 32] {
-    let mut seed = [0; 32];
-    seed[..8].copy_from_slice(&MEMO_SETUP_SEED.to_le_bytes());
-    seed
+    crate::types::setup_seed_bytes(MEMO_SETUP_SEED)
 }
+
+/// Default concurrent queries admitted per table pool.
+pub const DEFAULT_QUERY_SLOTS: usize = 2;
 
 #[derive(Clone)]
 pub enum WorkerTarget {
@@ -56,8 +55,24 @@ impl WorkerTarget {
     }
 }
 
-pub struct LiveSnapshot {
-    pub metadata: MemoSnapshotMetadata,
+/// One table the coordinator serves and the ordered worker pool that owns its
+/// shards. Pools may share physical hosts; ownership is per pool.
+#[derive(Clone)]
+pub struct TableSetup {
+    pub table: DatabaseId,
+    pub pool: Vec<WorkerTarget>,
+}
+
+struct TableState {
+    setup: TableSetup,
+    rlwe: &'static RlweParams,
+    hint_cache: RwLock<HashMap<String, Arc<Vec<CrsBlock>>>>,
+    query_slots: Arc<Semaphore>,
+}
+
+/// One table as published in one generation: what a query is answered with.
+pub struct TableSnapshot {
+    pub manifest: TableManifest,
     pub ypir: YpirSchemeParams,
     pub preprocessed: Vec<QueryPackPreprocessed<'static>>,
     pub top_key_images: TopKeyImages<'static>,
@@ -65,15 +80,21 @@ pub struct LiveSnapshot {
     pub public_params_epoch: [u8; 8],
 }
 
+/// Every table at one anchor. Immutable once published.
+pub struct GenerationSnapshot {
+    pub manifest: GenerationManifest,
+    pub tables: BTreeMap<DatabaseId, Arc<TableSnapshot>>,
+}
+
+/// Retained generations, newest first.
+type Generations = Vec<Arc<GenerationSnapshot>>;
+
 #[derive(Clone)]
 pub struct CoordinatorState {
-    rlwe: &'static RlweParams,
-    workers: Arc<Vec<WorkerTarget>>,
+    tables: Arc<BTreeMap<DatabaseId, TableState>>,
     http: reqwest::Client,
-    live: Arc<ArcSwapOption<LiveSnapshot>>,
+    live: Arc<ArcSwap<Generations>>,
     phase: Arc<RwLock<CoordinatorPhase>>,
-    hint_cache: Arc<RwLock<HashMap<String, Arc<Vec<CrsBlock>>>>>,
-    query_slots: Arc<Semaphore>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -93,42 +114,78 @@ pub enum CoordinatorPhase {
 }
 
 #[derive(Serialize)]
-struct HealthResponse {
+struct LegacyHealthResponse {
     phase: CoordinatorPhase,
     anchor_height: Option<u64>,
     ironwood_tree_size: Option<u64>,
     workers: usize,
 }
 
+#[derive(Serialize)]
+struct TableHealth {
+    shards: usize,
+    workers: usize,
+}
+
+#[derive(Serialize)]
+struct HealthResponse {
+    phase: CoordinatorPhase,
+    generation: Option<u64>,
+    retained_generations: usize,
+    anchor_height: Option<u64>,
+    ironwood_tree_size: Option<u64>,
+    tables: BTreeMap<DatabaseId, TableHealth>,
+}
+
 impl CoordinatorState {
-    pub fn new(workers: Vec<WorkerTarget>) -> Result<Self, String> {
-        if workers.is_empty() {
-            return Err("at least one PIR worker is required".to_string());
+    pub fn new(setups: Vec<TableSetup>) -> Result<Self, String> {
+        Self::with_query_slots(setups, DEFAULT_QUERY_SLOTS)
+    }
+
+    pub fn with_query_slots(setups: Vec<TableSetup>, query_slots: usize) -> Result<Self, String> {
+        if setups.is_empty() {
+            return Err("at least one PIR table is required".to_string());
         }
-        let mut names: Vec<_> = workers.iter().map(|worker| worker.name()).collect();
-        names.sort_unstable();
-        if names.windows(2).any(|pair| pair[0] == pair[1]) {
-            return Err("worker names must be unique".to_string());
+        let mut tables = BTreeMap::new();
+        for setup in setups {
+            if setup.pool.is_empty() {
+                return Err(format!("table {} needs at least one worker", setup.table));
+            }
+            let mut names: Vec<_> = setup.pool.iter().map(|worker| worker.name()).collect();
+            names.sort_unstable();
+            if names.windows(2).any(|pair| pair[0] == pair[1]) {
+                return Err(format!(
+                    "worker names in the {} pool must be unique",
+                    setup.table
+                ));
+            }
+            if tables.contains_key(&setup.table) {
+                return Err(format!("table {} is configured twice", setup.table));
+            }
+            let (rlwe, _) = shard_parameters(&setup.table.layout()).map_err(|e| e.to_string())?;
+            tables.insert(
+                setup.table,
+                TableState {
+                    setup,
+                    rlwe: Box::leak(Box::new(rlwe)),
+                    hint_cache: RwLock::new(HashMap::new()),
+                    query_slots: Arc::new(Semaphore::new(query_slots.max(1))),
+                },
+            );
         }
-        let (rlwe, _) =
-            global_parameters(SHARD_ROWS as u64, &ACTION_LAYOUT).map_err(|e| e.to_string())?;
-        let rlwe = Box::leak(Box::new(rlwe));
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(120))
             .build()
             .map_err(|e| e.to_string())?;
         Ok(Self {
-            rlwe,
-            workers: Arc::new(workers),
+            tables: Arc::new(tables),
             http,
-            live: Arc::new(ArcSwapOption::empty()),
+            live: Arc::new(ArcSwap::from_pointee(Vec::new())),
             phase: Arc::new(RwLock::new(CoordinatorPhase::Syncing {
                 current_height: 0,
                 target_height: 0,
             })),
-            hint_cache: Arc::new(RwLock::new(HashMap::new())),
-            query_slots: Arc::new(Semaphore::new(2)),
         })
     }
 
@@ -136,19 +193,83 @@ impl CoordinatorState {
         *self.phase.write().await = phase;
     }
 
-    /// Point-in-time gauges for `/metrics`. Reads only aggregate state and
-    /// probes each remote worker's health with a short timeout so a dead
-    /// worker shows up on the dashboard without slowing the scrape down.
+    pub fn tables(&self) -> impl Iterator<Item = DatabaseId> + '_ {
+        self.tables.keys().copied()
+    }
+
+    fn table(&self, table: DatabaseId) -> Result<&TableState, String> {
+        self.tables
+            .get(&table)
+            .ok_or_else(|| format!("table {table} is not served"))
+    }
+
+    /// The newest retained generation.
+    pub fn newest(&self) -> Option<Arc<GenerationSnapshot>> {
+        self.live.load().first().cloned()
+    }
+
+    /// The retained generation with this id, if still answerable.
+    pub fn generation(&self, generation: u64) -> Option<Arc<GenerationSnapshot>> {
+        self.live
+            .load()
+            .iter()
+            .find(|snapshot| snapshot.manifest.generation == generation)
+            .cloned()
+    }
+
+    pub fn manifest(&self) -> Option<GenerationManifest> {
+        self.newest().map(|snapshot| snapshot.manifest.clone())
+    }
+
+    /// Legacy ACTION-only view of the newest generation (`/memo/metadata`).
+    pub fn metadata(&self) -> Option<MemoSnapshotMetadata> {
+        self.newest()
+            .and_then(|snapshot| MemoSnapshotMetadata::from_manifest(&snapshot.manifest))
+    }
+
+    /// Scheme parameters of a table in the newest generation.
+    pub fn params(&self, table: DatabaseId) -> Option<YpirSchemeParams> {
+        self.newest()?
+            .tables
+            .get(&table)
+            .map(|snapshot| snapshot.ypir.clone())
+    }
+
+    /// Published packing material of a table in the newest generation.
+    pub fn public_params(&self, table: DatabaseId) -> Option<Vec<u8>> {
+        self.newest()?
+            .tables
+            .get(&table)
+            .map(|snapshot| snapshot.public_params.clone())
+    }
+
+    /// Every distinct worker across all pools, in first-seen pool order.
+    fn workers(&self) -> Vec<WorkerTarget> {
+        let mut seen = std::collections::HashSet::new();
+        self.tables
+            .values()
+            .flat_map(|table| table.setup.pool.iter())
+            .filter(|worker| seen.insert(worker.name().to_string()))
+            .cloned()
+            .collect()
+    }
+
+    /// Point-in-time gauges for `/metrics`. Reads only aggregate state; the
+    /// row and shard gauges describe the ACTION table. Probes each remote
+    /// worker's health with a short timeout so a dead worker shows up on the
+    /// dashboard without slowing the scrape down.
     pub async fn observe(&self) -> metrics::Observation {
         let phase = self.phase.read().await.clone();
-        let live = self.live.load();
-        let metadata = live.as_ref().map(|snapshot| &snapshot.metadata);
+        let newest = self.newest();
+        let manifest = newest.as_ref().map(|snapshot| &snapshot.manifest);
+        let action = manifest.and_then(|manifest| manifest.tables.get(&DatabaseId::Action));
         let mut probes = tokio::task::JoinSet::new();
-        for (index, worker) in self.workers.iter().enumerate() {
-            let assigned: Vec<&ShardDescriptor> = metadata
+        for (index, worker) in self.workers().into_iter().enumerate() {
+            let assigned: Vec<&ShardDescriptor> = manifest
                 .map(|m| {
-                    m.shards
-                        .iter()
+                    m.tables
+                        .values()
+                        .flat_map(|table| table.shards.iter())
                         .filter(|shard| shard.worker == worker.name())
                         .collect()
                 })
@@ -159,7 +280,7 @@ impl CoordinatorState {
                 populated_positions: assigned.iter().map(|s| s.populated_positions).sum(),
                 ..Default::default()
             };
-            let probe = match worker {
+            let probe = match &worker {
                 WorkerTarget::Embedded { .. } => None,
                 WorkerTarget::Remote { base_url, .. } => {
                     Some((self.http.clone(), base_url.clone()))
@@ -193,95 +314,163 @@ impl CoordinatorState {
         metrics::Observation {
             worker_details,
             phase: Some(phase),
-            anchor_height: metadata.map_or(0, |m| m.anchor_height),
-            generation: metadata.map_or(0, |m| m.generation),
-            ironwood_tree_size: metadata.map_or(0, |m| m.ironwood_tree_size),
-            used_rows: metadata.map_or(0, |m| m.used_rows),
-            shards: metadata.map_or(0, |m| m.shards.len() as u64),
-            workers: self.workers.len() as u64,
-            query_slots_available: self.query_slots.available_permits() as u64,
+            anchor_height: manifest.map_or(0, |m| m.anchor_height),
+            generation: manifest.map_or(0, |m| m.generation),
+            ironwood_tree_size: manifest.map_or(0, |m| m.ironwood_tree_size),
+            used_rows: action.map_or(0, |t| t.used_rows),
+            shards: action.map_or(0, |t| t.shards.len() as u64),
+            workers: self
+                .tables
+                .get(&DatabaseId::Action)
+                .map_or(0, |table| table.setup.pool.len() as u64),
+            query_slots_available: self
+                .tables
+                .get(&DatabaseId::Action)
+                .map_or(0, |table| table.query_slots.available_permits() as u64),
         }
     }
 
-    pub fn metadata(&self) -> Option<MemoSnapshotMetadata> {
-        self.live
-            .load_full()
-            .map(|snapshot| snapshot.metadata.clone())
-    }
-
-    /// Scheme parameters of the live snapshot, as served by `/memo/params`.
-    pub fn params(&self) -> Option<YpirSchemeParams> {
-        self.live.load_full().map(|snapshot| snapshot.ypir.clone())
-    }
-
-    /// Published packing material of the live snapshot, as served by
-    /// `/memo/public-params`.
-    pub fn public_params(&self) -> Option<Vec<u8>> {
-        self.live
-            .load_full()
-            .map(|snapshot| snapshot.public_params.clone())
-    }
-
+    /// Publishes one generation from the ACTION journal alone.
     pub async fn publish_from_store(
         &self,
-        store: &MemoStore,
-        coverage: Coverage,
+        store: &RecordJournal,
         anchor_height: u64,
         anchor_hash: String,
     ) -> Result<(), String> {
-        if store.tree_size() <= store.base_position() {
-            return Err("cannot publish an empty memo database".to_string());
+        self.publish(&[store], anchor_height, anchor_hash).await
+    }
+
+    /// Builds every table's snapshot from its journal, activates every worker
+    /// once with all of its tables, then swaps in the new generation while
+    /// keeping the previous one answerable.
+    pub async fn publish(
+        &self,
+        journals: &[&RecordJournal],
+        anchor_height: u64,
+        anchor_hash: String,
+    ) -> Result<(), String> {
+        if journals.is_empty() {
+            return Err("nothing to publish".to_string());
         }
         self.set_phase(CoordinatorPhase::Building { anchor_height })
             .await;
-        let global_used_rows = store.tree_size().div_ceil(RECORDS_PER_ROW as u64);
-        let logical_rows = logical_rows_for(global_used_rows);
-        let (global_rlwe, ypir) =
-            global_parameters(logical_rows, &ACTION_LAYOUT).map_err(|e| e.to_string())?;
-        if global_rlwe.d != self.rlwe.d || global_rlwe.q != self.rlwe.q {
-            return Err("global RLWE parameters changed unexpectedly".to_string());
+        let generation = anchor_height;
+        let ironwood_tree_size = journals
+            .iter()
+            .find(|journal| journal.table() == DatabaseId::Action)
+            .map(|journal| journal.tree_size())
+            .or_else(|| {
+                self.newest()
+                    .map(|snapshot| snapshot.manifest.ironwood_tree_size)
+            })
+            .unwrap_or(0);
+
+        let mut assignments: BTreeMap<
+            String,
+            (WorkerTarget, BTreeMap<DatabaseId, Vec<ActivateShard>>),
+        > = BTreeMap::new();
+        let mut snapshots = BTreeMap::new();
+        let mut manifests = BTreeMap::new();
+        for journal in journals {
+            let table = journal.table();
+            let snapshot = self.build_table(journal, &mut assignments).await?;
+            manifests.insert(table, snapshot.manifest.clone());
+            snapshots.insert(table, Arc::new(snapshot));
         }
 
-        let generation = anchor_height;
-        let first_covered_shard = coverage.covered_position_start() / SHARD_POSITIONS as u64;
-        let shard_ids: Vec<_> = store
-            .shard_ids()
-            .filter(|shard_id| *shard_id >= first_covered_shard)
-            .collect();
-        let mut descriptors = Vec::with_capacity(shard_ids.len());
-        let mut assignments: BTreeMap<String, Vec<ActivateShard>> = BTreeMap::new();
-        let mut combined_crs: Option<Vec<CrsBlock>> = None;
+        for (_, (worker, tables)) in assignments {
+            self.activate_worker(&worker, ActivateRequest { generation, tables })
+                .await?;
+        }
 
-        for shard_id in shard_ids {
-            let worker_index =
-                worker_index_for_shard(shard_id, self.workers.len()).ok_or_else(|| {
-                    format!(
-                        "shard {shard_id} exceeds the capacity of {} workers",
-                        self.workers.len()
-                    )
-                })?;
-            let worker = self.workers.get(worker_index).ok_or_else(|| {
+        let manifest = GenerationManifest {
+            schema_version: MANIFEST_SCHEMA_VERSION,
+            protocol_revision: PROTOCOL_REVISION.to_string(),
+            network: NETWORK.to_string(),
+            pool: POOL.to_string(),
+            anchor_height,
+            anchor_block_hash: anchor_hash,
+            ironwood_tree_size,
+            generation,
+            tables: manifests,
+        };
+        let snapshot = Arc::new(GenerationSnapshot {
+            manifest,
+            tables: snapshots,
+        });
+        let mut retained: Generations = Vec::with_capacity(RETAINED_GENERATIONS);
+        retained.push(snapshot);
+        for previous in self.live.load().iter() {
+            if retained.len() >= RETAINED_GENERATIONS {
+                break;
+            }
+            if previous.manifest.generation != generation {
+                retained.push(previous.clone());
+            }
+        }
+        self.live.store(Arc::new(retained));
+        self.set_phase(CoordinatorPhase::Serving).await;
+        Ok(())
+    }
+
+    /// Prepares every shard of one table on its pool and sums the CRS hints.
+    /// Records each worker's assignment for the single activation call.
+    async fn build_table(
+        &self,
+        journal: &RecordJournal,
+        assignments: &mut BTreeMap<
+            String,
+            (WorkerTarget, BTreeMap<DatabaseId, Vec<ActivateShard>>),
+        >,
+    ) -> Result<TableSnapshot, String> {
+        let table = journal.table();
+        let state = self.table(table)?;
+        let layout = *journal.layout();
+        if layout != table.layout() {
+            return Err(format!(
+                "journal layout for {table} does not match the protocol"
+            ));
+        }
+        if journal.tree_size() == 0 {
+            return Err(format!("cannot publish an empty {table} table"));
+        }
+        let used_rows = layout.used_rows_for(journal.tree_size());
+        let logical_rows = layout.logical_rows_for(used_rows);
+        let (global_rlwe, ypir) =
+            global_parameters(logical_rows, &layout).map_err(|e| e.to_string())?;
+        if global_rlwe.d != state.rlwe.d || global_rlwe.q != state.rlwe.q {
+            return Err(format!(
+                "{table}: global RLWE parameters changed unexpectedly"
+            ));
+        }
+        let rlwe = state.rlwe;
+        let pool = &state.setup.pool;
+
+        let mut descriptors = Vec::new();
+        let mut combined_crs: Option<Vec<CrsBlock>> = None;
+        for shard_id in journal.shard_ids() {
+            let worker_index = worker_index_for_shard(shard_id, pool).ok_or_else(|| {
                 format!(
-                    "shard {shard_id} needs worker {}, but only {} workers are configured",
-                    worker_index + 1,
-                    self.workers.len()
+                    "{table} shard {shard_id} exceeds the capacity of {} workers",
+                    pool.len()
                 )
             })?;
-            let rows = store.read_shard_rows(shard_id).map_err(|e| e.to_string())?;
-            let digest = MemoStore::rows_digest(&rows);
-            let query_row_start = shard_id as usize * SHARD_ROWS;
+            let worker = &pool[worker_index];
+            let rows = journal
+                .read_shard_rows(shard_id)
+                .map_err(|e| e.to_string())?;
+            let digest = RecordJournal::rows_digest(&rows);
+            let query_row_start = shard_id as usize * layout.shard_rows;
             let cache_key = format!("{}:{shard_id}:{query_row_start}:{digest}", worker.name());
-            let cached_hint = {
-                let cache = self.hint_cache.read().await;
-                cache.get(&cache_key).cloned()
-            };
+            let cached_hint = state.hint_cache.read().await.get(&cache_key).cloned();
             let hint = if let Some(hint) = cached_hint {
-                self.ensure_worker(worker, shard_id, query_row_start, digest.clone())
+                self.ensure_worker(worker, table, shard_id, query_row_start, digest.clone())
                     .await?;
                 hint
             } else {
                 self.prepare_worker(
                     worker,
+                    table,
                     shard_id,
                     query_row_start,
                     logical_rows,
@@ -289,96 +478,83 @@ impl CoordinatorState {
                     rows,
                 )
                 .await?;
-                let hint = self.fetch_hint(worker, shard_id).await?;
+                let hint = self.fetch_hint(worker, table, shard_id).await?;
                 let hint = Arc::new(
-                    decode_crs_blocks(&hint, ypir.db_cols / self.rlwe.d, self.rlwe.d)
+                    decode_crs_blocks(&hint, ypir.db_cols / rlwe.d, rlwe.d)
                         .map_err(|e| e.to_string())?,
                 );
-                let mut cache = self.hint_cache.write().await;
+                let mut cache = state.hint_cache.write().await;
                 let shard_prefix = format!("{}:{shard_id}:", worker.name());
                 cache.retain(|key, _| !key.starts_with(&shard_prefix));
                 cache.insert(cache_key, hint.clone());
                 hint
             };
             if let Some(accumulator) = &mut combined_crs {
-                add_crs_blocks_assign_mod(accumulator, &hint, self.rlwe)
-                    .map_err(|e| e.to_string())?;
+                add_crs_blocks_assign_mod(accumulator, &hint, rlwe).map_err(|e| e.to_string())?;
             } else {
                 combined_crs = Some((*hint).clone());
             }
             assignments
                 .entry(worker.name().to_string())
+                .or_insert_with(|| (worker.clone(), BTreeMap::new()))
+                .1
+                .entry(table)
                 .or_default()
                 .push(ActivateShard {
                     shard_id,
                     rows_sha256: digest.clone(),
                 });
+            let populated = journal.populated_positions_in_shard(shard_id);
             descriptors.push(ShardDescriptor {
                 shard_id,
-                global_row_start: shard_id * SHARD_ROWS as u64,
-                populated_positions: store.populated_positions_in_shard(shard_id),
+                global_row_start: shard_id * layout.shard_rows as u64,
+                populated_positions: populated,
                 rows_sha256: digest,
-                sealed: store.populated_positions_in_shard(shard_id) == SHARD_POSITIONS as u64,
+                sealed: populated == layout.shard_positions() as u64,
                 worker: worker.name().to_string(),
             });
         }
 
-        for worker in self.workers.iter() {
-            if let Some(shards) = assignments.remove(worker.name()) {
-                self.activate_worker(worker, ActivateRequest { generation, shards })
-                    .await?;
-            }
-        }
-
         let combined_crs = combined_crs.ok_or_else(|| "no CRS contributions".to_string())?;
         let preprocessed =
-            build_pack_preprocessed_blocks(self.rlwe, &combined_crs).map_err(|e| e.to_string())?;
-        let top_key_images = TopKeyImages::build(self.rlwe);
-        let public_params = published_c1_rows(&preprocessed, self.rlwe.q);
+            build_pack_preprocessed_blocks(rlwe, &combined_crs).map_err(|e| e.to_string())?;
+        let top_key_images = TopKeyImages::build(rlwe);
+        let public_params = published_c1_rows(&preprocessed, rlwe.q);
         let public_digest = Sha256::digest(&public_params);
         let mut epoch = [0; 8];
         epoch.copy_from_slice(&public_digest[..8]);
-        let parameter_id = format!(
-            "ipir-sp-e875404-d{}-p{}-rows{}-cols{}",
-            self.rlwe.d, ypir.p, ypir.db_rows, ypir.db_cols
-        );
-        let metadata = MemoSnapshotMetadata {
-            schema_version: SCHEMA_VERSION,
-            network: NETWORK.to_string(),
-            pool: POOL.to_string(),
-            anchor_height,
-            anchor_block_hash: anchor_hash,
-            ironwood_tree_size: store.tree_size(),
-            coverage,
-            record_bytes: RECORD_BYTES as u32,
-            records_per_row: RECORDS_PER_ROW as u32,
-            row_bytes: ROW_BYTES as u32,
-            shard_rows: SHARD_ROWS as u32,
-            used_rows: global_used_rows,
+        let manifest = TableManifest {
+            record_bytes: layout.record_bytes as u32,
+            records_per_row: layout.records_per_row as u32,
+            row_bytes: layout.row_bytes() as u32,
+            shard_rows: layout.shard_rows as u32,
+            positions: journal.tree_size(),
+            used_rows,
             logical_rows,
-            first_global_row: store.base_position() / RECORDS_PER_ROW as u64,
-            generation,
-            parameter_id,
-            setup_seed: MEMO_SETUP_SEED,
+            parameter_id: format!(
+                "{PROTOCOL_REVISION}-{table}-d{}-p{}-rows{}-cols{}",
+                rlwe.d, ypir.p, ypir.db_rows, ypir.db_cols
+            ),
+            setup_seed: table.setup_seed(),
             public_params_epoch: hex::encode(epoch),
             public_params_sha256: hex::encode(public_digest),
             shards: descriptors,
         };
-        self.live.store(Some(Arc::new(LiveSnapshot {
-            metadata,
+        Ok(TableSnapshot {
+            manifest,
             ypir,
             preprocessed,
             top_key_images,
             public_params,
             public_params_epoch: epoch,
-        })));
-        self.set_phase(CoordinatorPhase::Serving).await;
-        Ok(())
+        })
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn prepare_worker(
         &self,
         worker: &WorkerTarget,
+        table: DatabaseId,
         shard_id: u64,
         query_row_start: usize,
         logical_rows: u64,
@@ -387,13 +563,20 @@ impl CoordinatorState {
     ) -> Result<(), String> {
         match worker {
             WorkerTarget::Embedded { state, .. } => state
-                .prepare_local(shard_id, query_row_start, logical_rows, rows_sha256, rows)
+                .prepare_local(
+                    table,
+                    shard_id,
+                    query_row_start,
+                    logical_rows,
+                    rows_sha256,
+                    rows,
+                )
                 .await
                 .map(|_| ()),
             WorkerTarget::Remote { base_url, .. } => {
                 let response = self
                     .http
-                    .put(format!("{base_url}/internal/shards/{shard_id}"))
+                    .put(format!("{base_url}/internal/{table}/shards/{shard_id}"))
                     .query(&[
                         ("query_row_start", query_row_start.to_string()),
                         ("logical_rows", logical_rows.to_string()),
@@ -417,6 +600,7 @@ impl CoordinatorState {
     async fn ensure_worker(
         &self,
         worker: &WorkerTarget,
+        table: DatabaseId,
         shard_id: u64,
         query_row_start: usize,
         rows_sha256: String,
@@ -424,13 +608,15 @@ impl CoordinatorState {
         match worker {
             WorkerTarget::Embedded { state, .. } => {
                 state
-                    .ensure_local(shard_id, query_row_start, rows_sha256)
+                    .ensure_local(table, shard_id, query_row_start, rows_sha256)
                     .await
             }
             WorkerTarget::Remote { base_url, .. } => {
                 let response = self
                     .http
-                    .post(format!("{base_url}/internal/shards/{shard_id}/load"))
+                    .post(format!(
+                        "{base_url}/internal/{table}/shards/{shard_id}/load"
+                    ))
                     .query(&[
                         ("query_row_start", query_row_start.to_string()),
                         ("logical_rows", "0".to_string()),
@@ -450,13 +636,20 @@ impl CoordinatorState {
         }
     }
 
-    async fn fetch_hint(&self, worker: &WorkerTarget, shard_id: u64) -> Result<Vec<u8>, String> {
+    async fn fetch_hint(
+        &self,
+        worker: &WorkerTarget,
+        table: DatabaseId,
+        shard_id: u64,
+    ) -> Result<Vec<u8>, String> {
         match worker {
-            WorkerTarget::Embedded { state, .. } => state.crs_local(shard_id).await,
+            WorkerTarget::Embedded { state, .. } => state.crs_local(table, shard_id).await,
             WorkerTarget::Remote { base_url, .. } => {
                 let response = self
                     .http
-                    .get(format!("{base_url}/internal/shards/{shard_id}/hint"))
+                    .get(format!(
+                        "{base_url}/internal/{table}/shards/{shard_id}/hint"
+                    ))
                     .send()
                     .await
                     .map_err(|e| e.to_string())?;
@@ -497,15 +690,16 @@ impl CoordinatorState {
     async fn evaluate_worker(
         &self,
         worker: &WorkerTarget,
+        table: DatabaseId,
         request: EvaluateRequest,
     ) -> Result<Vec<u64>, String> {
         match worker {
-            WorkerTarget::Embedded { state, .. } => state.evaluate_local(request).await,
+            WorkerTarget::Embedded { state, .. } => state.evaluate_local(table, request).await,
             WorkerTarget::Remote { base_url, .. } => {
                 let generation = request.generation;
                 let response = self
                     .http
-                    .post(format!("{base_url}/internal/evaluate"))
+                    .post(format!("{base_url}/internal/{table}/evaluate"))
                     .body(encode_evaluate_request(&request))
                     .send()
                     .await
@@ -524,39 +718,42 @@ impl CoordinatorState {
         }
     }
 
-    /// Answers one opaque client query against the live snapshot. Exposed so
-    /// in-process tests can drive the coordinator without HTTP; the `/memo/query`
-    /// handler is a thin wrapper that adds admission control and metrics.
-    pub async fn answer_query(&self, body: &[u8]) -> Result<Vec<u8>, String> {
-        let live = self
-            .live
-            .load_full()
-            .ok_or_else(|| "no live snapshot".to_string())?;
+    /// Answers one opaque client query for `table` against whichever retained
+    /// generation the body names. Exposed so in-process tests can drive the
+    /// coordinator without HTTP; the query handlers add admission control and
+    /// metrics on top.
+    pub async fn answer_query(&self, table: DatabaseId, body: &[u8]) -> Result<Vec<u8>, String> {
+        let state = self.table(table)?;
+        let rlwe = state.rlwe;
         let generation_bytes: [u8; 8] = body
             .get(..8)
             .ok_or_else(|| "query is truncated".to_string())?
             .try_into()
             .expect("eight-byte generation");
         let generation = u64::from_le_bytes(generation_bytes);
-        if generation != live.metadata.generation {
-            return Err("query generation mismatch".to_string());
-        }
-        let packing_len = serialized_packing_keys_len(self.rlwe);
+        let snapshot = self
+            .generation(generation)
+            .ok_or_else(|| "query generation is not retained".to_string())?;
+        let live = snapshot
+            .tables
+            .get(&table)
+            .ok_or_else(|| format!("generation has no {table} table"))?;
+        let packing_len = serialized_packing_keys_len(rlwe);
         let switched_len = (live.ypir.db_rows * live.ypir.query_bits).div_ceil(8);
         if body.len() != 8 + packing_len + switched_len {
             return Err("query has the wrong fixed length".to_string());
         }
-        let packing_keys = deserialize_packing_keys(self.rlwe, &body[8..8 + packing_len])
+        let packing_keys =
+            deserialize_packing_keys(rlwe, &body[8..8 + packing_len]).map_err(|e| e.to_string())?;
+        let global_query = deserialize_first_dim_query(rlwe, &live.ypir, &body[8 + packing_len..])
             .map_err(|e| e.to_string())?;
-        let global_query =
-            deserialize_first_dim_query(self.rlwe, &live.ypir, &body[8 + packing_len..])
-                .map_err(|e| e.to_string())?;
 
+        let shard_rows = table.layout().shard_rows;
         let mut by_worker: BTreeMap<String, Vec<ShardQuery>> = BTreeMap::new();
-        for shard in &live.metadata.shards {
+        for shard in &live.manifest.shards {
             let start = shard.global_row_start as usize;
             let coefficients = global_query
-                .get(start..start + SHARD_ROWS)
+                .get(start..start + shard_rows)
                 .ok_or_else(|| "query does not cover a published shard".to_string())?
                 .to_vec();
             by_worker
@@ -569,15 +766,15 @@ impl CoordinatorState {
         }
 
         let mut tasks = tokio::task::JoinSet::new();
-        for worker in self.workers.iter() {
+        for worker in state.setup.pool.iter() {
             let Some(shards) = by_worker.remove(worker.name()) else {
                 continue;
             };
             let worker = worker.clone();
-            let state = self.clone();
+            let coordinator = self.clone();
             tasks.spawn(async move {
-                state
-                    .evaluate_worker(&worker, EvaluateRequest { generation, shards })
+                coordinator
+                    .evaluate_worker(&worker, table, EvaluateRequest { generation, shards })
                     .await
             });
         }
@@ -588,7 +785,7 @@ impl CoordinatorState {
         let mut partial_count = 0usize;
         while let Some(result) = tasks.join_next().await {
             let partial = result.map_err(|_| "worker evaluation task failed".to_string())??;
-            add_intermediate_assign_mod(&mut combined, &partial, self.rlwe.q)
+            add_intermediate_assign_mod(&mut combined, &partial, rlwe.q)
                 .map_err(|e| e.to_string())?;
             partial_count += 1;
         }
@@ -633,22 +830,39 @@ async fn read_worker_body(
     Ok(body)
 }
 
+/// Largest query body accepted on the query routes. A query grows with the
+/// logical row count; this bound covers every capacity the POC can reach
+/// before the request-size work in the deployment plan lands.
+const QUERY_BODY_LIMIT: usize = 64 * 1024 * 1024;
+
 pub fn router(state: CoordinatorState) -> Router {
+    let queries = Router::new()
+        .route("/v1/:table/query", post(query))
+        .route("/memo/query", post(legacy_query))
+        .layer(axum::extract::DefaultBodyLimit::max(QUERY_BODY_LIMIT));
     Router::new()
-        .route("/memo/health", get(health))
-        .route("/memo/metadata", get(metadata))
-        .route("/memo/params", get(params))
-        .route("/memo/public-params", get(public_params))
-        .route("/memo/query", post(query))
+        .route("/v1/health", get(health))
+        .route("/v1/generation", get(generation_manifest))
+        .route("/v1/:table/params", get(params))
+        .route("/v1/:table/public-params", get(public_params))
+        .route("/memo/health", get(legacy_health))
+        .route("/memo/metadata", get(legacy_metadata))
+        .route("/memo/params", get(legacy_params))
+        .route("/memo/public-params", get(legacy_public_params))
+        .merge(queries)
         .route("/metrics", get(handle_metrics))
         .route("/ready", get(ready))
-        .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
         .layer(axum::middleware::from_fn(metrics::track_request))
         .with_state(state)
 }
 
-/// Ask a worker for `/internal/health`, returning (up, generation, active shards).
-/// Any error, non-2xx, or malformed body counts as down.
+fn parse_table(name: &str) -> Result<DatabaseId, StatusCode> {
+    name.parse().map_err(|_| StatusCode::NOT_FOUND)
+}
+
+/// Ask a worker for `/internal/health`, returning (up, generation, active
+/// shards summed over its tables). Any error, non-2xx, or malformed body counts
+/// as down.
 async fn probe_worker_health(client: &reqwest::Client, base_url: &str) -> (bool, u64, u64) {
     let response = client
         .get(format!("{base_url}/internal/health"))
@@ -666,10 +880,13 @@ async fn probe_worker_health(client: &reqwest::Client, base_url: &str) -> (bool,
     };
     let up = body.get("status").and_then(|v| v.as_str()) == Some("ok");
     let generation = body.get("generation").and_then(|v| v.as_u64()).unwrap_or(0);
-    let active = body
-        .get("active_shards")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    let active = match body.get("active_shards") {
+        Some(serde_json::Value::Object(per_table)) => {
+            per_table.values().filter_map(|v| v.as_u64()).sum()
+        }
+        Some(value) => value.as_u64().unwrap_or(0),
+        None => 0,
+    };
     (up, generation, active)
 }
 
@@ -687,16 +904,14 @@ async fn handle_metrics(State(state): State<CoordinatorState>) -> Response {
         .into_response()
 }
 
-/// `GET /ready`: 200 while queries can be answered from a live snapshot.
+/// `GET /ready`: 200 while queries can be answered from a live generation.
 ///
 /// The previous generation keeps serving during a `building` rebuild, so
 /// readiness follows the live snapshot rather than the `serving` phase; only
-/// a failed ingest, or having nothing published yet, reports 503. Deploy
-/// tooling and the sidecar use this as the readiness gate; `/memo/health`
-/// stays the richer JSON view.
+/// a failed ingest, or having nothing published yet, reports 503.
 async fn ready(State(state): State<CoordinatorState>) -> Response {
     let phase = state.phase.read().await.clone();
-    if is_ready(&phase, state.live.load().is_some()) {
+    if is_ready(&phase, state.newest().is_some()) {
         (StatusCode::OK, "ready\n").into_response()
     } else {
         (StatusCode::SERVICE_UNAVAILABLE, "not ready\n").into_response()
@@ -713,7 +928,45 @@ fn is_ready(phase: &CoordinatorPhase, has_live_snapshot: bool) -> bool {
 
 async fn health(State(state): State<CoordinatorState>) -> Response {
     let phase = state.phase.read().await.clone();
-    let live = state.live.load();
+    let retained = state.live.load();
+    let newest = retained.first();
+    let status = if matches!(phase, CoordinatorPhase::Serving) {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    let tables = state
+        .tables
+        .iter()
+        .map(|(table, table_state)| {
+            (
+                *table,
+                TableHealth {
+                    shards: newest
+                        .and_then(|snapshot| snapshot.manifest.tables.get(table))
+                        .map_or(0, |manifest| manifest.shards.len()),
+                    workers: table_state.setup.pool.len(),
+                },
+            )
+        })
+        .collect();
+    (
+        status,
+        Json(HealthResponse {
+            phase,
+            generation: newest.map(|snapshot| snapshot.manifest.generation),
+            retained_generations: retained.len(),
+            anchor_height: newest.map(|snapshot| snapshot.manifest.anchor_height),
+            ironwood_tree_size: newest.map(|snapshot| snapshot.manifest.ironwood_tree_size),
+            tables,
+        }),
+    )
+        .into_response()
+}
+
+async fn legacy_health(State(state): State<CoordinatorState>) -> Response {
+    let phase = state.phase.read().await.clone();
+    let newest = state.newest();
     let status = if matches!(phase, CoordinatorPhase::Serving) {
         StatusCode::OK
     } else {
@@ -721,51 +974,105 @@ async fn health(State(state): State<CoordinatorState>) -> Response {
     };
     (
         status,
-        Json(HealthResponse {
+        Json(LegacyHealthResponse {
             phase,
-            anchor_height: live
+            anchor_height: newest
                 .as_ref()
-                .map(|snapshot| snapshot.metadata.anchor_height),
-            ironwood_tree_size: live
+                .map(|snapshot| snapshot.manifest.anchor_height),
+            ironwood_tree_size: newest
                 .as_ref()
-                .map(|snapshot| snapshot.metadata.ironwood_tree_size),
-            workers: state.workers.len(),
+                .map(|snapshot| snapshot.manifest.ironwood_tree_size),
+            workers: state
+                .tables
+                .get(&DatabaseId::Action)
+                .map_or(0, |table| table.setup.pool.len()),
         }),
     )
         .into_response()
 }
 
-async fn metadata(State(state): State<CoordinatorState>) -> Response {
-    match state.live.load().as_ref() {
-        Some(snapshot) => Json(snapshot.metadata.clone()).into_response(),
+async fn generation_manifest(State(state): State<CoordinatorState>) -> Response {
+    match state.manifest() {
+        Some(manifest) => Json(manifest).into_response(),
         None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
 
-async fn params(State(state): State<CoordinatorState>) -> Response {
-    match state.live.load().as_ref() {
-        Some(snapshot) => Json(snapshot.ypir.clone()).into_response(),
+async fn legacy_metadata(State(state): State<CoordinatorState>) -> Response {
+    match state.metadata() {
+        Some(metadata) => Json(metadata).into_response(),
         None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
 
-async fn public_params(State(state): State<CoordinatorState>) -> Response {
-    match state.live.load().as_ref() {
-        Some(snapshot) => snapshot.public_params.clone().into_response(),
+async fn params(State(state): State<CoordinatorState>, Path(table): Path<String>) -> Response {
+    let table = match parse_table(&table) {
+        Ok(table) => table,
+        Err(status) => return status.into_response(),
+    };
+    match state.params(table) {
+        Some(ypir) => Json(ypir).into_response(),
         None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
 
-async fn query(State(state): State<CoordinatorState>, body: Bytes) -> Response {
-    let Ok(_permit) = state.query_slots.clone().try_acquire_owned() else {
+async fn legacy_params(State(state): State<CoordinatorState>) -> Response {
+    match state.params(DatabaseId::Action) {
+        Some(ypir) => Json(ypir).into_response(),
+        None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+async fn public_params(
+    State(state): State<CoordinatorState>,
+    Path(table): Path<String>,
+) -> Response {
+    let table = match parse_table(&table) {
+        Ok(table) => table,
+        Err(status) => return status.into_response(),
+    };
+    match state.public_params(table) {
+        Some(bytes) => bytes.into_response(),
+        None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+async fn legacy_public_params(State(state): State<CoordinatorState>) -> Response {
+    match state.public_params(DatabaseId::Action) {
+        Some(bytes) => bytes.into_response(),
+        None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+async fn query(
+    State(state): State<CoordinatorState>,
+    Path(table): Path<String>,
+    body: Bytes,
+) -> Response {
+    let table = match parse_table(&table) {
+        Ok(table) => table,
+        Err(status) => return status.into_response(),
+    };
+    answer(&state, table, &body).await
+}
+
+async fn legacy_query(State(state): State<CoordinatorState>, body: Bytes) -> Response {
+    answer(&state, DatabaseId::Action, &body).await
+}
+
+async fn answer(state: &CoordinatorState, table: DatabaseId, body: &[u8]) -> Response {
+    let Ok(table_state) = state.table(table) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Ok(_permit) = table_state.query_slots.clone().try_acquire_owned() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     // The body is fully received by now, so this measures server work only.
-    let _processing = metrics::start_processing("query");
-    match state.answer_query(&body).await {
+    let _processing = metrics::start_processing(metrics::query_endpoint(table));
+    match state.answer_query(table, body).await {
         Ok(response) => response.into_response(),
         Err(error) => {
-            tracing::warn!(%error, "memo PIR query failed");
+            tracing::warn!(%error, %table, "PIR query failed");
             StatusCode::SERVICE_UNAVAILABLE.into_response()
         }
     }

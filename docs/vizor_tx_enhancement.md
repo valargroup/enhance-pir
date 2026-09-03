@@ -418,18 +418,25 @@ shard counts, and rejects trailing bytes. The coordinator caps worker bodies at 
 for a hint and 1 MiB for an evaluate reply, and rejects any reply whose generation
 differs from the request.
 
-Public endpoints:
+Public endpoints (one coordinator serves several tables; `{table}` is `action`,
+`witness`, `nf-cold`, or `nf-warm`):
 
 ```text
-GET  /memo/health          phase, anchor height, tree size, worker count
-GET  /memo/metadata        MemoSnapshotMetadata (see §7.4)
-GET  /memo/params          pinned iPIR scheme parameters
-GET  /memo/public-params   published c1 packing material
-POST /memo/query           opaque query -> opaque fixed-shape response
+GET  /v1/health                   phase, generation, per-table shard and worker counts
+GET  /v1/generation               GenerationManifest: every table at one anchor
+GET  /v1/{table}/params           pinned iPIR scheme parameters for the table
+GET  /v1/{table}/public-params    published c1 packing material for the table
+POST /v1/{table}/query            opaque query -> opaque fixed-shape response
 ```
 
-Private worker endpoints are `/internal/{health, shards/:id, shards/:id/load,
-shards/:id/hint, activate, evaluate}` and are not reachable from the internet (§7.1).
+The `/memo/{health, metadata, params, public-params, query}` routes remain as aliases
+for the `action` table, with `/memo/metadata` rendering the single-table schema-2
+shape, until every client reads the manifest. Two generations stay answerable at once,
+so a query built against the previous manifest survives a publish.
+
+Private worker endpoints are `/internal/{health, activate}` and
+`/internal/{table}/{shards/:id, shards/:id/load, shards/:id/hint, evaluate}`, and are
+not reachable from the internet (§7.1).
 
 **The privacy-relevant properties**: the client submits no shard or worker identifier;
 the coordinator alone slices; every published shard participates in every query; and any
@@ -538,11 +545,12 @@ Ironwood tree size, coverage, record and shard geometry, `used_rows`, `logical_r
 generation, `parameter_id`, `public_params_epoch` and digest, and a per-shard descriptor
 carrying `rows_sha256`, `sealed`, and the owning worker.
 
-Two modes exist. `distributed-full` requires at least two workers, starts at Ironwood
+Two modes exist. `distributed` requires at least two workers, starts at Ironwood
 activation (height 3,428,143), and refuses to publish unless the entire finalized pool is
-continuous and queryable. `embedded-windowed` runs one in-process worker over a bounded
-window; it is an explicitly non-production development mode, it advertises its exact
-coverage start in metadata, and it cannot satisfy the full-pool goal.
+continuous and queryable. `embedded` runs one in-process worker over the same full pool
+and exists for tests and local development only; the earlier windowed development mode,
+which advertised a bounded coverage window, was removed because every client rejects
+partial coverage.
 
 ---
 
