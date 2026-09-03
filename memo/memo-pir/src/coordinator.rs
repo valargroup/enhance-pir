@@ -818,7 +818,7 @@ impl CoordinatorState {
                         response.status()
                     ));
                 }
-                read_worker_body(response, 80 * 1024 * 1024).await
+                read_worker_body(response, worker_hint_limit()).await
             }
         }
     }
@@ -987,6 +987,20 @@ async fn read_worker_body(
         body.extend_from_slice(&chunk);
     }
     Ok(body)
+}
+
+/// Largest hint (CRS block) response accepted from a worker. A shard's hint
+/// grows with its row bytes: measured on the POC, the ACTION shard (54 MB of
+/// rows) yields a 67 MB hint and the WITNESS shard (67 MB) a 101 MB hint, so
+/// the bound is a multiple of the largest table's shard rather than a literal
+/// that silently stops covering a new table.
+fn worker_hint_limit() -> usize {
+    DatabaseId::ALL
+        .iter()
+        .map(|table| table.layout().shard_bytes())
+        .max()
+        .expect("at least one table")
+        * 4
 }
 
 /// Largest query body accepted on the query routes. A query grows with the
@@ -1300,6 +1314,19 @@ async fn answer(state: &CoordinatorState, table: DatabaseId, body: &[u8]) -> Res
 
 #[cfg(test)]
 mod tests {
+    /// Every table's hint (at most about 1.5x its shard bytes on the POC) must
+    /// fit the read limit with room to spare.
+    #[test]
+    fn worker_hint_limit_covers_every_table() {
+        for table in super::DatabaseId::ALL {
+            let shard_bytes = table.layout().shard_bytes();
+            assert!(
+                super::worker_hint_limit() >= shard_bytes * 2,
+                "{table}: hint limit too small for a {shard_bytes}-byte shard"
+            );
+        }
+    }
+
     use super::{is_ready, CoordinatorPhase};
 
     #[test]
