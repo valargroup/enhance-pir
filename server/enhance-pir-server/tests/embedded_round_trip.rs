@@ -2,9 +2,10 @@
 //! decoded record, with no HTTP. This is the safety net for the coordinator
 //! refactor: every assertion here is about bytes a client would see.
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use enhance_pir::client::{record_in_row, QuerySession};
 use enhance_pir::types::{
-    EnhanceGeneration, EnhanceRecord, EnhanceRecordParts, SHARD_POSITIONS, SHARD_ROWS,
+    EnhanceRecord, EnhanceRecordParts, EnhanceSession, SHARD_POSITIONS, SHARD_ROWS,
 };
 use enhance_pir_server::coordinator::{
     router, CoordinatorState, TableSetup, WorkerGroup, WorkerTarget,
@@ -75,14 +76,8 @@ fn replicated_coordinator(replicas: Vec<WorkerTarget>) -> CoordinatorState {
 }
 
 fn session(state: &CoordinatorState) -> QuerySession {
-    QuerySession::new(
-        state.metadata().expect("metadata"),
-        state.params(DatabaseId::Enhance).expect("params"),
-        &state
-            .public_params(DatabaseId::Enhance)
-            .expect("public params"),
-    )
-    .expect("session accepts its own snapshot")
+    QuerySession::from_session(state.session().expect("session"))
+        .expect("session accepts its own snapshot")
 }
 
 async fn fetch(state: &CoordinatorState, session: &QuerySession, position: u64) -> EnhanceRecord {
@@ -111,7 +106,7 @@ async fn publishes_two_shards_and_answers_boundary_positions() {
         .await
         .expect("publish");
 
-    let metadata = state.metadata().expect("metadata");
+    let metadata = state.session().expect("session").generation;
     assert_eq!(metadata.shards.len(), 2);
     assert!(metadata.shards[0].sealed);
     assert!(!metadata.shards[1].sealed);
@@ -208,7 +203,7 @@ async fn replicas_hold_the_same_assignment_and_produce_one_logical_answer() {
         .await
         .expect("publish with both replicas");
 
-    let metadata = state.metadata().expect("metadata");
+    let metadata = state.session().expect("session").generation;
     assert_eq!(metadata.shards[0].worker, "group-1");
     assert_eq!(replica_a.cached_shard_count().await, 1);
     assert_eq!(replica_b.cached_shard_count().await, 1);
@@ -378,6 +373,17 @@ async fn enhance_v1_routes_expose_only_the_current_generation() {
     let store = store_with(&dir.path().join("journal"), 120, 3_428_143);
     let worker = WorkerState::new(dir.path().join("worker")).expect("worker");
     let state = coordinator(&worker);
+    let unavailable = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/enhance/init")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
     state
         .publish_from_store(&store, 3_428_143, hash(3_428_143))
         .await
@@ -421,16 +427,29 @@ async fn enhance_v1_routes_expose_only_the_current_generation() {
         (status, body.to_vec())
     }
 
-    let (status, body) = get(&app, "/v1/enhance/generation").await;
+    let expected_session = state.session().expect("session");
+    let expected_public_params = BASE64_STANDARD
+        .decode(&expected_session.public_params_base64)
+        .unwrap();
+    let (status, body) = get(&app, "/v1/enhance/init").await;
     assert_eq!(status, StatusCode::OK);
-    let manifest: EnhanceGeneration = serde_json::from_slice(&body).unwrap();
+    let wire: EnhanceSession = serde_json::from_slice(&body).unwrap();
+    let manifest = &wire.generation;
     assert_eq!(manifest.schema_version, 5);
     assert_eq!(manifest.generation, 3_428_143);
     assert_eq!(manifest.record_bytes, 724);
     assert!(manifest.parameter_id.contains("-enhance-"));
+    assert_eq!(wire.params, expected_session.params);
+    let public_params = BASE64_STANDARD.decode(&wire.public_params_base64).unwrap();
+    assert_eq!(public_params.len(), 28_672);
+    assert_eq!(public_params, expected_public_params);
     assert_eq!(get(&app, "/v1/health").await.0, StatusCode::OK);
 
     for removed in [
+        "/v1/enhance/session",
+        "/v1/enhance/generation",
+        "/v1/enhance/params",
+        "/v1/enhance/public-params",
         "/v1/generation",
         "/memo/metadata",
         "/v1/action/params",

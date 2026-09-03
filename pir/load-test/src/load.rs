@@ -333,9 +333,10 @@ fn classify_error(error: &ClientError) -> &'static str {
         ClientError::Response(_) => "response",
         ClientError::Pir(_) => "pir",
         ClientError::Http(_) => "http",
-        ClientError::Json(_) | ClientError::Generation(_) | ClientError::OutsideCoverage(_) => {
-            "client"
-        }
+        ClientError::Json(_)
+        | ClientError::PublicParamsBase64(_)
+        | ClientError::Generation(_)
+        | ClientError::OutsideCoverage(_) => "client",
     }
 }
 

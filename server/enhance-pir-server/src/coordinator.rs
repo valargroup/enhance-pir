@@ -2,8 +2,8 @@ use crate::ipir::{global_parameters, shard_parameters};
 use crate::metrics;
 use crate::store::RecordJournal;
 use crate::types::{
-    group_index_for_shard, DatabaseId, DatabaseLayout, EnhanceGeneration, GenerationManifest,
-    ShardDescriptor, TableManifest, PROTOCOL_REVISION,
+    group_index_for_shard, DatabaseId, DatabaseLayout, GenerationManifest, ShardDescriptor,
+    TableManifest, PROTOCOL_REVISION,
 };
 use crate::wire::{
     decode_crs_blocks, decode_evaluate_response, encode_evaluate_request, EvaluateRequest,
@@ -17,6 +17,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use axum::Router;
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use enhance_pir::EnhanceSession;
 use inspiring::{QueryPackPreprocessed, RlweParams, TopKeyImages};
 use ipir_sp::serialize::{deserialize_packing_keys, serialized_packing_keys_len};
 use ipir_sp::server::{
@@ -347,49 +349,16 @@ impl CoordinatorState {
         self.newest().map(|snapshot| snapshot.manifest.clone())
     }
 
-    pub fn metadata(&self) -> Option<EnhanceGeneration> {
-        self.newest()
-            .and_then(|snapshot| snapshot.manifest.public())
-    }
-
-    /// The requested retained generation, or the newest when none is named.
-    /// Clients pin every fetch of a session to the manifest's generation so a
-    /// publish between two fetches cannot hand them mismatched material.
-    fn pinned(&self, generation: Option<u64>) -> Option<Arc<GenerationSnapshot>> {
-        match generation {
-            Some(generation) => self.generation(generation),
-            None => self.newest(),
-        }
-    }
-
-    /// Scheme parameters of a table in the newest generation.
-    pub fn params(&self, table: DatabaseId) -> Option<YpirSchemeParams> {
-        self.params_at(table, None)
-    }
-
-    /// Scheme parameters of a table in a retained generation.
-    pub fn params_at(
-        &self,
-        table: DatabaseId,
-        generation: Option<u64>,
-    ) -> Option<YpirSchemeParams> {
-        self.pinned(generation)?
-            .tables
-            .get(&table)
-            .map(|snapshot| snapshot.ypir.clone())
-    }
-
-    /// Published packing material of a table in the newest generation.
-    pub fn public_params(&self, table: DatabaseId) -> Option<Vec<u8>> {
-        self.public_params_at(table, None)
-    }
-
-    /// Published packing material of a table in a retained generation.
-    pub fn public_params_at(&self, table: DatabaseId, generation: Option<u64>) -> Option<Vec<u8>> {
-        self.pinned(generation)?
-            .tables
-            .get(&table)
-            .map(|snapshot| snapshot.public_params.clone())
+    /// All public material for the newest generation, captured from one
+    /// retained snapshot so a publication cannot mix setup epochs.
+    pub fn session(&self) -> Option<EnhanceSession> {
+        let snapshot = self.newest()?;
+        let table = snapshot.tables.get(&DatabaseId::Enhance)?;
+        Some(EnhanceSession {
+            generation: snapshot.manifest.public()?,
+            params: table.ypir.clone(),
+            public_params_base64: BASE64_STANDARD.encode(&table.public_params),
+        })
     }
 
     /// Every distinct replica across all pools, in first-seen group order.
@@ -1297,9 +1266,7 @@ pub fn router(state: CoordinatorState) -> Router {
         .layer(axum::extract::DefaultBodyLimit::max(QUERY_BODY_LIMIT));
     Router::new()
         .route("/v1/health", get(health))
-        .route("/v1/enhance/generation", get(generation_manifest))
-        .route("/v1/enhance/params", get(params))
-        .route("/v1/enhance/public-params", get(public_params))
+        .route("/v1/enhance/init", get(enhance_session))
         .merge(queries)
         .route("/metrics", get(handle_metrics))
         .route("/ready", get(ready))
@@ -1439,35 +1406,9 @@ async fn health(State(state): State<CoordinatorState>) -> Response {
         .into_response()
 }
 
-async fn generation_manifest(State(state): State<CoordinatorState>) -> Response {
-    match state.metadata() {
-        Some(manifest) => Json(manifest).into_response(),
-        None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
-    }
-}
-
-/// Optional `?generation=` on the per-generation public routes.
-#[derive(serde::Deserialize)]
-struct GenerationQuery {
-    generation: Option<u64>,
-}
-
-async fn params(
-    State(state): State<CoordinatorState>,
-    axum::extract::Query(pin): axum::extract::Query<GenerationQuery>,
-) -> Response {
-    match state.params_at(DatabaseId::Enhance, pin.generation) {
-        Some(ypir) => Json(ypir).into_response(),
-        None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
-    }
-}
-
-async fn public_params(
-    State(state): State<CoordinatorState>,
-    axum::extract::Query(pin): axum::extract::Query<GenerationQuery>,
-) -> Response {
-    match state.public_params_at(DatabaseId::Enhance, pin.generation) {
-        Some(bytes) => bytes.into_response(),
+async fn enhance_session(State(state): State<CoordinatorState>) -> Response {
+    match state.session() {
+        Some(session) => Json(session).into_response(),
         None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }

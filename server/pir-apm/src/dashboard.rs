@@ -1397,7 +1397,7 @@ mod tests {
         assert_eq!(latency_budget(&schema, "nope"), Some(1.0));
         assert!(latency_budget(&schema, "health").is_none());
         assert!(latency_budget(&schema, "query").is_none());
-        assert_eq!(latency_budget(&schema, "public_params"), Some(2.0));
+        assert_eq!(latency_budget(&schema, "init"), Some(2.0));
         assert!(!latency_cell(Some(99.0), None).contains("bad"));
     }
 

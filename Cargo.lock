@@ -859,6 +859,7 @@ checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
 name = "enhance-pir"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "clap",
  "hex",
  "ipir-sp",
@@ -892,6 +893,7 @@ version = "0.1.0"
 dependencies = [
  "arc-swap",
  "axum",
+ "base64",
  "clap",
  "enhance-pir",
  "hex",

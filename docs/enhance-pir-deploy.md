@@ -45,6 +45,8 @@ DigitalOcean resources use Enhance names. The attached Zakura data volume is
 the sole exception: DigitalOcean cannot rename it in place, so Terraform keeps
 its historical provider name and protects it from replacement.
 
-The deploy verifies `GET /v1/health`, retrieves
-`GET /v1/enhance/generation`, and completes a dummy query through the public
-origin before declaring the rollout successful.
+The deploy verifies `GET /v1/health`, retrieves and validates the atomic
+`GET /v1/enhance/init` response, and completes a dummy query through the
+public origin before declaring the rollout successful. It reads the former
+generation endpoint only when capturing rollback metadata from a legacy
+deployment.

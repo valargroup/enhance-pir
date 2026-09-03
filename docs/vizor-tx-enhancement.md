@@ -31,9 +31,7 @@ record width, row width, or setup seed.
 The client uses only:
 
 - `GET /v1/health`
-- `GET /v1/enhance/generation`
-- `GET /v1/enhance/params`
-- `GET /v1/enhance/public-params`
+- `GET /v1/enhance/init`
 - `POST /v1/enhance/query`
 
 This is a breaking replacement for the former memo/action API. There are no
