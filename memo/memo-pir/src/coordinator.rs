@@ -2,9 +2,9 @@ use crate::ipir::global_parameters;
 use crate::metrics;
 use crate::store::RecordJournal;
 use crate::types::{
-    logical_rows_for, worker_index_for_shard, Coverage, MemoSnapshotMetadata, ShardDescriptor,
-    ACTION_LAYOUT, NETWORK, POOL, RECORDS_PER_ROW, RECORD_BYTES, ROW_BYTES, SCHEMA_VERSION,
-    SHARD_POSITIONS, SHARD_ROWS,
+    logical_rows_for, worker_index_for_shard, Coverage, DatabaseId, MemoSnapshotMetadata,
+    ShardDescriptor, ACTION_LAYOUT, NETWORK, POOL, RECORDS_PER_ROW, RECORD_BYTES, ROW_BYTES,
+    SCHEMA_VERSION, SHARD_POSITIONS, SHARD_ROWS,
 };
 use crate::wire::{
     decode_crs_blocks, decode_evaluate_response, encode_evaluate_request, EvaluateRequest,
@@ -32,14 +32,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{RwLock, Semaphore};
 
-/// First eight bytes, little-endian, of
-/// `SHA-256("zcash/ironwood-memo-pir/setup-seed/v1")`.
-pub const MEMO_SETUP_SEED: u64 = 0xaf1a_e284_ec07_131a;
+pub use crate::types::MEMO_SETUP_SEED;
 
+/// The ACTION table's expanded setup seed.
 pub fn memo_setup_seed_bytes() -> [u8; 32] {
-    let mut seed = [0; 32];
-    seed[..8].copy_from_slice(&MEMO_SETUP_SEED.to_le_bytes());
-    seed
+    crate::types::setup_seed_bytes(MEMO_SETUP_SEED)
 }
 
 #[derive(Clone)]
@@ -265,7 +262,11 @@ impl CoordinatorState {
             let rows = store.read_shard_rows(shard_id).map_err(|e| e.to_string())?;
             let digest = RecordJournal::rows_digest(&rows);
             let query_row_start = shard_id as usize * SHARD_ROWS;
-            let cache_key = format!("{}:{shard_id}:{query_row_start}:{digest}", worker.name());
+            let cache_key = format!(
+                "{}:{}:{shard_id}:{query_row_start}:{digest}",
+                DatabaseId::Action,
+                worker.name()
+            );
             let cached_hint = {
                 let cache = self.hint_cache.read().await;
                 cache.get(&cache_key).cloned()
@@ -290,7 +291,7 @@ impl CoordinatorState {
                         .map_err(|e| e.to_string())?,
                 );
                 let mut cache = self.hint_cache.write().await;
-                let shard_prefix = format!("{}:{shard_id}:", worker.name());
+                let shard_prefix = format!("{}:{}:{shard_id}:", DatabaseId::Action, worker.name());
                 cache.retain(|key, _| !key.starts_with(&shard_prefix));
                 cache.insert(cache_key, hint.clone());
                 hint
@@ -320,7 +321,9 @@ impl CoordinatorState {
 
         for worker in self.workers.iter() {
             if let Some(shards) = assignments.remove(worker.name()) {
-                self.activate_worker(worker, ActivateRequest { generation, shards })
+                let mut tables = BTreeMap::new();
+                tables.insert(DatabaseId::Action, shards);
+                self.activate_worker(worker, ActivateRequest { generation, tables })
                     .await?;
             }
         }
@@ -382,13 +385,21 @@ impl CoordinatorState {
     ) -> Result<(), String> {
         match worker {
             WorkerTarget::Embedded { state, .. } => state
-                .prepare_local(shard_id, query_row_start, logical_rows, rows_sha256, rows)
+                .prepare_local(
+                    DatabaseId::Action,
+                    shard_id,
+                    query_row_start,
+                    logical_rows,
+                    rows_sha256,
+                    rows,
+                )
                 .await
                 .map(|_| ()),
             WorkerTarget::Remote { base_url, .. } => {
+                let table = DatabaseId::Action;
                 let response = self
                     .http
-                    .put(format!("{base_url}/internal/shards/{shard_id}"))
+                    .put(format!("{base_url}/internal/{table}/shards/{shard_id}"))
                     .query(&[
                         ("query_row_start", query_row_start.to_string()),
                         ("logical_rows", logical_rows.to_string()),
@@ -419,13 +430,16 @@ impl CoordinatorState {
         match worker {
             WorkerTarget::Embedded { state, .. } => {
                 state
-                    .ensure_local(shard_id, query_row_start, rows_sha256)
+                    .ensure_local(DatabaseId::Action, shard_id, query_row_start, rows_sha256)
                     .await
             }
             WorkerTarget::Remote { base_url, .. } => {
+                let table = DatabaseId::Action;
                 let response = self
                     .http
-                    .post(format!("{base_url}/internal/shards/{shard_id}/load"))
+                    .post(format!(
+                        "{base_url}/internal/{table}/shards/{shard_id}/load"
+                    ))
                     .query(&[
                         ("query_row_start", query_row_start.to_string()),
                         ("logical_rows", "0".to_string()),
@@ -447,11 +461,16 @@ impl CoordinatorState {
 
     async fn fetch_hint(&self, worker: &WorkerTarget, shard_id: u64) -> Result<Vec<u8>, String> {
         match worker {
-            WorkerTarget::Embedded { state, .. } => state.crs_local(shard_id).await,
+            WorkerTarget::Embedded { state, .. } => {
+                state.crs_local(DatabaseId::Action, shard_id).await
+            }
             WorkerTarget::Remote { base_url, .. } => {
+                let table = DatabaseId::Action;
                 let response = self
                     .http
-                    .get(format!("{base_url}/internal/shards/{shard_id}/hint"))
+                    .get(format!(
+                        "{base_url}/internal/{table}/shards/{shard_id}/hint"
+                    ))
                     .send()
                     .await
                     .map_err(|e| e.to_string())?;
@@ -495,12 +514,15 @@ impl CoordinatorState {
         request: EvaluateRequest,
     ) -> Result<Vec<u64>, String> {
         match worker {
-            WorkerTarget::Embedded { state, .. } => state.evaluate_local(request).await,
+            WorkerTarget::Embedded { state, .. } => {
+                state.evaluate_local(DatabaseId::Action, request).await
+            }
             WorkerTarget::Remote { base_url, .. } => {
+                let table = DatabaseId::Action;
                 let generation = request.generation;
                 let response = self
                     .http
-                    .post(format!("{base_url}/internal/evaluate"))
+                    .post(format!("{base_url}/internal/{table}/evaluate"))
                     .body(encode_evaluate_request(&request))
                     .send()
                     .await

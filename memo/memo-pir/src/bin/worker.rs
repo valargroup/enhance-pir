@@ -1,5 +1,5 @@
 use clap::Parser;
-use memo_pir::worker::{router, WorkerState};
+use memo_pir::worker::{router, WorkerState, DEFAULT_EVALUATION_SLOTS};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
@@ -11,6 +11,9 @@ struct Cli {
     listen: SocketAddr,
     #[arg(long, default_value = "./memo-worker-data")]
     data_dir: PathBuf,
+    /// Concurrent shard evaluations this worker admits.
+    #[arg(long, default_value_t = DEFAULT_EVALUATION_SLOTS)]
+    evaluation_slots: usize,
 }
 
 #[tokio::main]
@@ -21,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
     let cli = Cli::parse();
-    let state = WorkerState::new(cli.data_dir)?;
+    let state = WorkerState::with_evaluation_slots(cli.data_dir, cli.evaluation_slots)?;
     let listener = tokio::net::TcpListener::bind(cli.listen).await?;
     tracing::info!(listen = %cli.listen, "memo PIR worker ready");
     axum::serve(listener, router(state)).await?;

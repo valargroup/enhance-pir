@@ -37,6 +37,14 @@ pub struct ShardRuntime {
     pub rows_sha256: String,
     pub server: IPIRServer<u16>,
     pub crs_blocks: Vec<CrsBlock>,
+    /// Monotonic load order, so a worker can pick the newest runtime of a shard.
+    pub prepared_at: u64,
+}
+
+fn next_prepared_at() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
 /// Directory holding one shard's artifacts, namespaced by table so several
@@ -157,6 +165,7 @@ impl ShardRuntime {
             rows_sha256,
             server,
             crs_blocks,
+            prepared_at: next_prepared_at(),
         })
     }
 
@@ -237,6 +246,7 @@ impl ShardRuntime {
             rows_sha256: rows_sha256.to_string(),
             server,
             crs_blocks,
+            prepared_at: next_prepared_at(),
         })
     }
 
@@ -356,7 +366,11 @@ mod tests {
 
     /// Every served layout, with the instance count its rows need. One instance
     /// carries d * log2(p) = 28,672 plaintext bits.
-    const LAYOUTS: &[(&str, DatabaseLayout, usize)] = &[("action", crate::types::ACTION_LAYOUT, 2)];
+    const LAYOUTS: &[(&str, DatabaseLayout, usize)] = &[
+        ("action", crate::types::ACTION_LAYOUT, 2),
+        ("witness", crate::types::WITNESS_LAYOUT, 3),
+        ("nullifier", crate::types::NULLIFIER_LAYOUT, 2),
+    ];
 
     #[test]
     fn every_layout_has_the_expected_instance_count() {

@@ -96,6 +96,31 @@ impl DatabaseId {
     }
 }
 
+impl DatabaseId {
+    /// Row geometry of the table. A protocol constant: every party derives
+    /// parameters from it, so it can only change with a schema version bump.
+    pub const fn layout(&self) -> DatabaseLayout {
+        match self {
+            DatabaseId::Action => ACTION_LAYOUT,
+            DatabaseId::Witness => WITNESS_LAYOUT,
+            DatabaseId::NfCold | DatabaseId::NfWarm => NULLIFIER_LAYOUT,
+        }
+    }
+
+    /// Seed of the table's deterministic public query setup. ACTION keeps the
+    /// original memo-PIR seed so sealed artifacts and pinned clients stay
+    /// valid; every other table is domain-separated by its wire name.
+    pub fn setup_seed(&self) -> u64 {
+        match self {
+            DatabaseId::Action => MEMO_SETUP_SEED,
+            other => seed_from_domain(&format!(
+                "zcash/ironwood-pir/{}/setup-seed/v1",
+                other.as_str()
+            )),
+        }
+    }
+}
+
 impl std::fmt::Display for DatabaseId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
@@ -119,6 +144,43 @@ pub const ACTION_LAYOUT: DatabaseLayout = DatabaseLayout {
     records_per_row: 8,
     shard_rows: 8_192,
 };
+
+/// The WITNESS table: one note commitment per record, one sub-shard of 256
+/// leaves per row. Provisional until the witness table ships (Phase 3).
+pub const WITNESS_LAYOUT: DatabaseLayout = DatabaseLayout {
+    record_bytes: 32,
+    records_per_row: 256,
+    shard_rows: 8_192,
+};
+
+/// The nullifier tables: one hash bucket per row, 112 entries of 41 bytes.
+/// Provisional until the nullifier tables ship (Phase 4).
+pub const NULLIFIER_LAYOUT: DatabaseLayout = DatabaseLayout {
+    record_bytes: 4_592,
+    records_per_row: 1,
+    shard_rows: 8_192,
+};
+
+/// First eight bytes, little-endian, of
+/// `SHA-256("zcash/ironwood-memo-pir/setup-seed/v1")`: the ACTION setup seed.
+pub const MEMO_SETUP_SEED: u64 = 0xaf1a_e284_ec07_131a;
+
+/// First eight little-endian bytes of the SHA-256 of a domain string.
+pub fn seed_from_domain(domain: &str) -> u64 {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(domain.as_bytes());
+    u64::from_le_bytes(digest[..8].try_into().expect("eight bytes"))
+}
+
+/// Expands a `u64` seed into the 32-byte seed the setup generator takes: the
+/// value in the low eight bytes, zero elsewhere. Byte-identical to the
+/// nullifier-PIR expansion so the two deployments cannot share a setup only
+/// by choosing the same `u64`.
+pub fn setup_seed_bytes(seed: u64) -> [u8; 32] {
+    let mut bytes = [0; 32];
+    bytes[..8].copy_from_slice(&seed.to_le_bytes());
+    bytes
+}
 
 // Projections of `ACTION_LAYOUT` kept for the ACTION-specific code paths
 // (record parsing, the journal) that are not yet layout-parameterized.
@@ -365,6 +427,26 @@ mod tests {
         assert_eq!(ACTION_LAYOUT.used_rows_for(9), 2);
         assert_eq!(ACTION_LAYOUT.row_for_position(65_537), (8_192, 1));
         assert!(ACTION_LAYOUT.shard_rows.is_multiple_of(2_048));
+    }
+
+    #[test]
+    fn setup_seeds_are_domain_separated_and_action_is_pinned() {
+        assert_eq!(
+            seed_from_domain("zcash/ironwood-memo-pir/setup-seed/v1"),
+            MEMO_SETUP_SEED
+        );
+        assert_eq!(DatabaseId::Action.setup_seed(), MEMO_SETUP_SEED);
+        let mut seeds: Vec<u64> = DatabaseId::ALL.iter().map(DatabaseId::setup_seed).collect();
+        seeds.sort_unstable();
+        seeds.dedup();
+        assert_eq!(seeds.len(), DatabaseId::ALL.len());
+        assert_eq!(
+            &setup_seed_bytes(MEMO_SETUP_SEED)[..8],
+            &MEMO_SETUP_SEED.to_le_bytes()
+        );
+        assert!(setup_seed_bytes(MEMO_SETUP_SEED)[8..]
+            .iter()
+            .all(|b| *b == 0));
     }
 
     #[test]

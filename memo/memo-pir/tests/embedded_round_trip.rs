@@ -119,13 +119,16 @@ async fn publishes_two_shards_and_answers_boundary_positions() {
 
     // A worker only evaluates its complete active assignment.
     let partial = worker
-        .evaluate_local(EvaluateRequest {
-            generation: metadata.generation,
-            shards: vec![ShardQuery {
-                shard_id: 0,
-                coefficients: vec![0; SHARD_ROWS],
-            }],
-        })
+        .evaluate_local(
+            DatabaseId::Action,
+            EvaluateRequest {
+                generation: metadata.generation,
+                shards: vec![ShardQuery {
+                    shard_id: 0,
+                    coefficients: vec![0; SHARD_ROWS],
+                }],
+            },
+        )
         .await
         .expect_err("partial assignment");
     assert!(
@@ -133,15 +136,18 @@ async fn publishes_two_shards_and_answers_boundary_positions() {
         "{partial}"
     );
     let superset = worker
-        .evaluate_local(EvaluateRequest {
-            generation: metadata.generation,
-            shards: (0..3)
-                .map(|shard_id| ShardQuery {
-                    shard_id,
-                    coefficients: vec![0; SHARD_ROWS],
-                })
-                .collect(),
-        })
+        .evaluate_local(
+            DatabaseId::Action,
+            EvaluateRequest {
+                generation: metadata.generation,
+                shards: (0..3)
+                    .map(|shard_id| ShardQuery {
+                        shard_id,
+                        coefficients: vec![0; SHARD_ROWS],
+                    })
+                    .collect(),
+            },
+        )
         .await
         .expect_err("superset assignment");
     assert!(
