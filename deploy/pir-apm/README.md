@@ -15,7 +15,7 @@ environment instead of being compiled in.
 | Piece | Location on the coordinator |
 | --- | --- |
 | Binary | `/usr/local/bin/pir-apm` |
-| Unit | `/etc/systemd/system/pir-apm.service` (from `infra/digitalocean/memo-poc/deploy/pir-apm.service`) |
+| Unit | `/etc/systemd/system/pir-apm.service` (from `infra/digitalocean/production/deploy/pir-apm.service`) |
 | Environment | `/etc/default/pir-apm`, root-only, written by `scripts/deploy-memo-pir.sh` |
 | Listener | `127.0.0.1:3002` |
 | Public dashboard | `https://<MEMO_PUBLIC_URL host>/apm/` via Caddy `handle_path /apm*` |

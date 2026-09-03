@@ -1,9 +1,37 @@
 # Unified PIR deployment for DAG-sync
 
-Status: design proposal, 2026-09-02. Nothing here is implemented. It builds on the deployed
-memo PIR proof of concept described in [`vizor_tx_enhancement.md`](vizor_tx_enhancement.md)
-and proposes how the nullifier, witness and transaction-enhancement services become one
-deployable system that a DAG-sync wallet can use.
+Status: design, 2026-09-02; scope revised 2026-09-03. Sections 2 through 5 are implemented
+(server, `wallet-libraries`, Vizor). Section 6 was rewritten to the production shape that
+actually ships. It builds on the memo PIR described in
+[`vizor_tx_enhancement.md`](vizor_tx_enhancement.md) and describes how the nullifier,
+witness and transaction-enhancement services became one coordinator that a DAG-sync wallet
+can use.
+
+## Scope status
+
+**Shipped scope: memo retrieval only.** The production fleet serves the ACTION table and
+nothing else (`--tables action`). That removes the one leak this program set out to remove
+first: the wallet's exact-txid `GetTransaction` request after compact scanning. Everything
+in this document that exists for DAG-sync is implemented but is not a supported product
+path:
+
+| Piece | State | Scope |
+| --- | --- | --- |
+| ACTION table, 824-byte record (§3.1) | deployed, production | shipped |
+| One generation manifest, pinned fetches, retained generations (§3.4) | deployed | shipped |
+| WITNESS and WITNESS-ROOTS tables, cap, frontier (§3.2) | implemented, not served | behind `--tables` |
+| NF-COLD and NF-WARM tables (§3.3) | implemented, not served | behind `--tables` |
+| Query envelope 8 / 4 / 4 (§5) and the Vizor DAG-sync pass | implemented | stands down when tables are absent |
+| Three worker pools, two coordinators, Spaces artifacts (§6.4) | not built | growth path, not planned |
+
+Why DAG-sync is out of scope: it is a UX feature (spendability, change and history before
+the scan reaches the tip), not a privacy fix. Its privacy contribution, removing the block
+download for change discovery, is already covered by the ACTION record. Its cost is a
+fixed 28-query envelope per pass against one query per batch, four more tables, and the
+fleet in §6.4. It stays behind the flag until restore-from-seed UX becomes a priority.
+
+Next milestone: the transparent-address table (§7.1). It is the second leak on the list and
+it reuses the cold/warm hashtable framework that §3.3 built.
 
 ---
 
@@ -87,9 +115,13 @@ a record later invalidates every sealed shard artifact (§10.1 of the memo docum
 is an append-only rebuild of the whole pool.
 
 ```text
-nf[32] ‖ ephemeralKey[32] ‖ encCiphertext[580] ‖ cv_net[32] ‖ outCiphertext[80] ‖ txid[32] ‖ height[4]
-= 792 bytes            8 per row = 6,336-byte row            row = p >> 3, slot = p & 7
+nf[32] ‖ ephemeralKey[32] ‖ encCiphertext[580] ‖ cmx[32] ‖ cv_net[32] ‖ outCiphertext[80] ‖ txid[32] ‖ height[4]
+= 824 bytes            8 per row = 6,592-byte row            row = p >> 3, slot = p & 7
 ```
+
+(Record v3. The design below was written at 792 bytes without `cmx`; `cmx` was added at
+implementation time so a note discovered from an action row can be authenticated without a
+witness query. Row and instance arithmetic below is updated to 824.)
 
 Why each addition is required, named by the DAG-sync step that fails without it:
 
@@ -99,16 +131,17 @@ Why each addition is required, named by the DAG-sync step that fails without it:
 | `cv_net`, `outCiphertext` | 112 | Outgoing recovery under the OVK after a seed restore. Without them sent history is unrecoverable except by requesting transactions by txid. The memo document preferred a second column; one record is better here because DAG-sync reads the row anyway, and a second column is a second query in the fixed schedule of §5. |
 | `txid`, `height` | 36 | Transaction history and confirmation depth without any lightwalletd call. Today change discovery downloads the compact block at `spend_height` from lightwalletd (`nullifier/README.md`, "Change Note Discovery"), a block-level leak that must go. |
 
-`cmx` is deliberately omitted: it is recomputed from the decrypted note, and witness tier B
-returns the leaf for verification.
+`cmx` was first omitted (recomputed from the decrypted note, with witness tier B returning
+the leaf) and then included in v3 so that authentication does not depend on a witness
+query.
 
 The `DecryptionLeaf { nf, ephemeral_key, ciphertext[52] }` record from
-`plans/wip/decryption_pir_implementation_4a3d65f2.plan.md` is subsumed by this record and
-that plan should be closed against this document.
+`plans/done/8_decryption_pir_implementation_4a3d65f2.plan.md` is subsumed by this record
+and that plan is closed against this document.
 
 Geometry, confirmed by `params_for_simplepir` (test `action_rows_use_two_ipir_instances`):
 with `d = 2048` and `p = 2^14` one iPIR instance carries 28,672 plaintext bits, so the
-6,336-byte row (50,688 bits) still fits `instances = 2`. `db_cols`, the request, and the
+6,592-byte row (52,736 bits) still fits `instances = 2`. `db_cols`, the request, and the
 10 KiB response are unchanged from the 612-byte layout. The memo document's earlier §10.1
 estimate that a 724-byte record would need three instances was wrong.
 
@@ -189,7 +222,7 @@ One manifest per generation:
   } }
 ```
 
-A pass pins one generation for all of its queries. Coordinators retain two generations so an
+A pass pins one generation for all of its queries. The coordinator retains eight generations so an
 in-flight pass finishes on the generation it started on. Publication is gated at
 `tip − CONFIRMATION_DEPTH` for every database; `CONFIRMATION_DEPTH = 10` is already shared
 through `shared/pir-types`.
@@ -262,113 +295,141 @@ observable.
 
 ## 6. Deployment
 
-Per environment (staging on `test`, production on `main`), one region to start.
+What ships is the memo fleet as built, renamed from proof of concept to production. One
+environment, one region, one table.
 
 ```text
-                    ┌───────────── public edge: Caddy TLS, optional onion service ─────────────┐
-  wallet ──────────►│   pir.<domain>  →  coordinator-01 / coordinator-02  (no rows, stateless)  │
-                    └──────────────────────────────────┬───────────────────────────────────────┘
-                                                       │  private VPC, MPQ1 / MPR1 / MPH1 framing
-              ┌────────────────────────────┬───────────┴──────────────────┬────────────────────────┐
-         action-pool                  witness-pool                    nf-pool
-         action-worker-01..NN         witness-worker-01..02           nf-worker-01..MM
-         ACTION shards                WITNESS tier A + B shards       NF-COLD bucket ranges
-                                                                      NF-WARM replicated on every nf worker
-
-         ownership within a pool = f(shard_id) over that pool's ordered worker list; never rebalanced
-
-  ingest-01  (Zakura archive node, 1 TiB volume)
-     ├─► journals: actions.bin / commitments.bin / nullifiers.bin + manifest.json
-     ├─► generation artifacts (sealed shard databases, CRS, manifest, sha256) ──► DigitalOcean Spaces
-     └─► frontier deltas to workers; workers restore sealed shards from Spaces on (re)start
+                    ┌──────────── public edge: Caddy TLS on pir.<domain> ────────────┐
+  wallet ──────────►│  coordinator-01: Zakura archive (1 TiB), ingest, coordinator,   │
+                    │                  pir-apm sidecar                                 │
+                    └──────────────────────────┬───────────────────────────────────────┘
+                                               │  private VPC, worker port 8091 by tag
+                              worker-01 ───────┴─────── worker-02   (append-only list)
+                              ACTION shards, ownership = f(shard_id) over the list
 ```
 
 ### 6.1 Roles
 
-**ingest.** The only consumer of the archive node. It produces three append-only journals
-(ACTION record, cmx leaf, nullifier with `SpendMeta`) with the journal discipline already in
-`memo/memo-pir/src/store.rs` (append, `sync_all`, then manifest via tmp + fsync + rename),
-cross-checked per block against `trees.ironwood.size`. It runs on its own host; in the POC
-it shares the coordinator's. It publishes per-generation artifacts to
-`s3://<bucket>/pir/<network>/<generation>/…`, manifest written last with
-`Cache-Control: no-cache`, copying the publisher pattern from
-`vote-nullifier-pir/.github/workflows/publish-snapshot.yml`.
-
-**coordinator.** Holds no rows. Parses the global query, slices it per shard, sums the
-partials, packs once. Two instances behind the edge for availability; both read the
-generation manifest and hold only packing state. Any worker failure surfaces as one generic
-503. Public routes:
+**coordinator-01.** Runs `zakurad` (archive), the ingest loop, and `memo-pir-server
+--tables action`. Ingest writes every table's journal (ACTION, commitments, sub-shard
+roots, nullifiers) with the append-then-manifest discipline in `memo/memo-pir/src/store.rs`,
+so widening the served set later is a flag change, not a re-ingest. Publication is gated at
+`tip − CONFIRMATION_DEPTH`; the coordinator retains eight generations and pins parameter
+fetches to a generation. Holds no rows. Any worker failure surfaces as one generic 503.
+Public routes:
 
 ```text
 GET  /v1/generation
-GET  /v1/{action,witness,nf-cold,nf-warm}/params
-GET  /v1/{action,witness,nf-cold,nf-warm}/public-params
-GET  /v1/witness/cap
-GET  /v1/witness/frontier?from=<height>&to=<height>
-POST /v1/{action,witness,nf-cold,nf-warm}/query
+GET  /v1/action/params
+GET  /v1/action/public-params
+POST /v1/action/query
+GET  /v1/health
 ```
 
-**workers, one pool per database.** Private port, firewalled by tag to the coordinators.
-The pools are separate because the databases have different resource profiles, not
-different request rates; the envelope in §5 fixes the ratio of queries across databases.
+The witness and nullifier routes exist in the binary and return 503 or an absent-table
+error when their tables are not served.
 
-| Pool | Why it is its own pool |
-| --- | --- |
-| action-pool | Every query scans every ACTION shard, so per-query cost is proportional to total ACTION bytes (36.9 GiB at 50 M positions). Memory-bandwidth bound, and the only pool that grows continuously. Size it from load tests, not from storage. |
-| witness-pool | Small (1.5 GiB at 50 M), sealed shards never rebuild, and it sits on the spendability path where latency matters. Two hosts for availability. Isolation keeps ACTION load and nullifier rebuild bursts away from witness latency. |
-| nf-pool | NF-COLD re-preprocesses all of its shards at the daily checkpoint, a CPU and memory-bandwidth burst that would degrade ACTION queries if co-located. NF-WARM is replicated on every nf worker and rebuilt each generation. |
+**workers.** Private port, firewalled by tag to the coordinator. One ordered list in
+`/etc/memo-pir/workers.json`; ownership is `f(shard_id)` over that list and the list is
+append-only. Sealed shards are immutable and hash-verified on load.
 
-Pools are logical. Each is an ordered worker URL list per database and ownership is
-`f(shard_id)` over that list. At today's scale the lists may name the same physical hosts;
-splitting later is a configuration change plus artifact restore from Spaces, with no shard
-renumbering as long as each list keeps its order. The client never sees a pool, so pool
-topology is not a privacy surface.
+### 6.2 Operations
 
-**generation swap.** All frontier shards prepared and hints summed in every pool before a
-single atomic swap across all four databases. Two generations retained.
-
-### 6.2 Operations tooling
-
-Generalise the `vote-nullifier-pir` workflows, which are hard-coded to one service, one
-port, one path and a fixed four-host topology (`docs/runbooks/ci-setup.md` there):
-
-- `release.yml`: artifact-only; linux-amd64 with `+avx512f`, plus arm64; mirrored to Spaces.
-- `deploy.yml` and `restart.yml`: parameterised by role (`coordinator | worker | ingest`) and
-  pool. Rolling order is workers, then coordinators. Readiness gates on `/ready` and on a
-  `served_generation >= expected_generation` metric. Adding a worker appends to a pool's
-  list. **Reordering a list is an operator error** (`vizor_tx_enhancement.md` §7.2); the
-  workflow diffs the list against the published manifest and refuses a reorder.
-- `publish-generation.yml`: manual for staging and rollback; automatic from ingest in
-  steady state.
-- Observability: the `pir-apm` sidecar pattern and a Sentry generation-staleness watchdog.
-  Metrics stay aggregate and never carry anything derived from a query. The memo POC
-  already ships this: `memo-pir-server` exposes `/metrics` (prefix `memo_`, with
-  `memo_snapshot_generation` as the served-generation gauge) and `/ready`, and
-  `deploy/pir-apm` runs on the coordinator with its dashboard at `/apm/`.
-- GitHub Environments `staging` and `production`. DNS `pir.<domain>` and
-  `stage.pir.<domain>`. Terraform under `infra/digitalocean/<env>` with isolated state,
-  replacing the `memo-poc` root.
+- `.github/workflows/deploy-pir-fleet.yml` deploys the commit that passed `CI` on `main`
+  to the `production` GitHub Environment, workers first, then the coordinator, with
+  checksum-verified uploads, health gates, and rollback. Runbook:
+  [`memo-pir-deploy.md`](memo-pir-deploy.md).
+- The deploy script refuses a worker inventory that is not a valid append to the previous
+  one only by convention today; the manifest carries each shard's owning worker, so a
+  reorder shows up as digest mismatches at activation.
+- Observability is the `pir-apm` sidecar on the coordinator (`/apm/`), aggregate metrics
+  only. No Sentry watchdog.
+- Terraform under `infra/digitalocean/production`, state untracked, remote state on Spaces
+  as the documented next step. No staging environment.
 
 ### 6.3 Sizing
 
-Unpadded record bytes across the fleet. Power-of-two row padding and iPIR artifacts
-roughly double each figure. Derivations: ACTION = positions × 792; WITNESS = positions × 32;
-NF-COLD = nullifiers × 41 ÷ 0.55 with nullifiers ≈ positions as the upper bound.
+ACTION is the only served table. Unpadded record bytes; power-of-two row padding and iPIR
+artifacts roughly double the figure.
 
-| Positions | ACTION | WITNESS | NF-COLD | action-pool (64 GB hosts) | witness-pool | nf-pool |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 136 K (today) | 103 MiB | 4.2 MiB | 9.7 MiB | 2, sharing hosts with the other pools | 2 | 2 |
-| 1 M | 755 MiB | 31 MiB | 71 MiB | 2 | 2 | 2 |
-| 10 M | 7.4 GiB | 305 MiB | 710 MiB | 4–6 | 2 | 2 |
-| 50 M | 36.9 GiB | 1.5 GiB | 3.5 GiB | 16–24 | 2 | 2–4 |
+| Positions | ACTION bytes | Hosts |
+| ---: | ---: | --- |
+| 136 K (today) | 107 MiB | 1 coordinator + 2 workers, as deployed |
+| 1 M | 786 MiB | same; load test before adding a worker |
+| 10 M | 7.7 GiB | add workers to the list; still one pool |
 
-Per-query server work stays linear in the size of each database across its pool, as the
-memo document §7.2 already notes. The table is capacity, not throughput. Choose worker
-counts from a load test at the one-million-position point.
+Per-query server work is linear in the size of the table across the worker list. Choose
+worker counts from a load test, not from storage.
+
+The trigger that matters is not storage but the request: the SimplePIR first-dimension
+query grows linearly in `logical_rows`, and at roughly three Ironwood positions per block
+today the pool reaches one million positions within about a year. At that point the request
+is about 700 KiB. Before then, one of: amortise the packing keys across a batch of queries
+(batch API in `ipir-sp`), widen ACTION rows to 32 records, or a two-dimensional first
+dimension. Any of these is a client and server change; the row widening also rebuilds every
+sealed shard, which is why it should be decided before the pool is large.
+
+### 6.4 Growth path, not planned
+
+The original §6 designed for DAG-sync at 50 M positions. Kept here in condensed form so the
+reasoning survives; none of it is scheduled.
+
+- **One worker pool per table** (`action-pool`, `witness-pool`, `nf-pool`), because the
+  tables have different resource profiles: ACTION is memory-bandwidth bound and grows
+  continuously; WITNESS is small and latency-sensitive; NF-COLD re-preprocesses everything
+  at its daily checkpoint. Pools are logical (an ordered worker list per table), so splitting
+  is a configuration change plus artifact restore, with no shard renumbering.
+- **Two stateless coordinators** behind the edge for availability, both reading the
+  generation manifest.
+- **A separate ingest host** publishing per-generation sealed-shard artifacts and the
+  manifest to DigitalOcean Spaces, with workers restoring sealed shards from Spaces on
+  restart (the `vote-nullifier-pir` publish-snapshot pattern).
+- **Role- and pool-parameterised** `deploy`, `restart` and `publish-generation` workflows
+  with a readiness gate on `served_generation >= expected_generation` and a refusal to
+  reorder any pool's list.
+- **Staging** on `test`, `stage.pir.<domain>`, isolated Terraform state.
+- At 50 M positions: ACTION ≈ 38 GiB across 16–24 hosts, WITNESS ≈ 1.5 GiB on 2,
+  NF-COLD ≈ 3.5 GiB on 2–4.
 
 ---
 
 ## 7. What is still missing
+
+### 7.1 Transparent addresses: the next milestone
+
+Vizor still sends its transparent addresses to lightwalletd in two places: the
+address-scoped txid stream used for gap-limit discovery and history
+(`TransactionsInvolvingAddress` in `rust/src/wallet/sync_engine/enhance.rs`) and the UTXO
+stream used for balance (`download_transparent_outputs` in `sync_engine/mod.rs`). That
+reveals every t-address the wallet owns, links them to each other, and links them to the
+shielded session. Tor hides the network address, not the addresses in the request.
+
+This is a hash-keyed problem, not a position-indexed one, so the ACTION framework does not
+apply and the NF-COLD / NF-WARM framework of §3.3 does:
+
+- **Key**: hash of the output script (`hash(script_pubkey)`), bucketed like `hash(nf)`.
+- **Record**: a capped list of unspent outputs for that script (`txid ‖ index ‖ value ‖
+  height`, 48 bytes each) plus a `used` flag and a total count, so one lookup answers both
+  "balance" and "has this address ever been used" for gap-limit discovery.
+- **Cold / warm**: the UTXO set churns every block, exactly like the nullifier set. Daily
+  cold checkpoint over the full UTXO set, warm delta since the checkpoint that also carries
+  spends of cold entries, and the wallet always issues one cold and one warm query per
+  address.
+- **Overflow**: addresses with thousands of UTXOs (exchanges, mining pools) exceed any
+  fixed cap. Cap the list, set a `truncated` flag, and have the wallet fail closed to
+  "balance unknown until scanned" for such an address rather than fall back to the
+  lightwalletd stream, which would be a result-dependent request.
+- **Schedule**: a fixed number of address pairs per pass, dummies included, as in §5. The
+  gap-limit walk must not become a variable number of requests.
+- **What it does not hide**: that the wallet is a PIR client, and whatever the wallet still
+  sends to lightwalletd for broadcasting transparent spends.
+
+Size at today's mainnet UTXO set is a few hundred megabytes at the 41-byte-entry density
+of §3.3; it fits the existing coordinator and worker list as a second served table
+(`--tables action,t-utxo-cold,t-utxo-warm`). The ingest already reads full blocks from
+Zakura, so the journal is an addition, not a new source.
+
+### 7.2 Open items
 
 - **The tail scan is mandatory.** Nothing serves `[anchor + 1, tip]` privately. Mempool
   status and `GetStatus(txid)` for wallet-originated transactions remain a separate leak.
@@ -381,10 +442,10 @@ counts from a load test at the one-million-position point.
 - **The Shielded Vote `nf-server`** could become a fifth database on the same fleet, but its
   dataset is pinned to a voting round's `snapshot_height`, not tracked by generation. Keep
   it separate until that is reconciled.
-- **Research items before wallet traffic:** a batch query API in `ipir-sp` (§4); the
-  end-to-end sharded-versus-monolithic transcript test the memo document §11 lists as open;
-  an independent parameter review at the 6,336-byte row shape and at each supported
-  capacity.
+- **Research items before DAG-sync traffic:** a batch query API in `ipir-sp` (§4, also the
+  ACTION request-size trigger in §6.3); an independent parameter review at the 6,592-byte
+  row shape and at each supported capacity. The sharded-versus-monolithic transcript test
+  from the memo document §11 exists (`memo/memo-pir/tests/sharded_vs_monolithic.rs`).
 
 ---
 
@@ -421,6 +482,7 @@ it:
   costs
 - `../plans/future/frontier_witness_update_design_1bab3c5a.plan.md` — rightmost-path
   broadcast adopted in §3.2
-- `../plans/wip/decryption_pir_implementation_4a3d65f2.plan.md` — subsumed by §3.1
-- `vote-nullifier-pir/docs/runbooks/ci-setup.md`, `server-setup.md` — fleet tooling
-  generalised in §6.2
+- [`memo-pir-deploy.md`](memo-pir-deploy.md) — the production deploy workflow and runbook
+- `../plans/done/8_decryption_pir_implementation_4a3d65f2.plan.md` — subsumed by §3.1
+- `vote-nullifier-pir/docs/runbooks/ci-setup.md`, `server-setup.md` — fleet tooling the
+  growth path in §6.4 would generalise

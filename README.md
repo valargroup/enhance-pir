@@ -1,89 +1,67 @@
 # Spendability PIR
 
-Private spendability checks for Zcash wallets using single-server Private Information Retrieval (PIR). Two subsystems let a wallet determine note status instantly — privately, with sub-second latency, no sync required.
+Single-server Private Information Retrieval (PIR) for Zcash wallets on the
+**Ironwood** shielded pool (NU6.3, mainnet activation height **3,428,143**).
 
-**Nullifier PIR** — detects spent notes by querying a bucketed hash table of recent Ironwood nullifiers via SimplePIR. Prevents stale balances and failed transactions while the wallet is behind.
+## What ships
 
-**Witness PIR** — fetches Merkle authentication paths for newly discovered notes via YPIR, enabling immediate spendability before the local ShardTree is complete.
+The product is the **ACTION table** served by the `memo/` fleet. It removes one
+concrete privacy leak from Vizor: after compact-block scanning finds a note, the
+wallet no longer asks lightwalletd for that transaction by txid to recover the
+memo. Instead it issues exactly one real-or-dummy PIR query per completed scan
+batch against a position-indexed table of every Ironwood action, and the server
+learns neither the transaction, nor the position, nor whether the batch found
+anything. The record (824 bytes: nullifier, ephemeral key, full ciphertext,
+commitment, value commitment, out-ciphertext, txid, height) is wider than memo
+recovery needs so that later scopes do not force a rebuild of sealed shards.
 
-Both are sync-time accelerators: once the wallet catches up, PIR is unnecessary. If the server is unreachable, the wallet falls back to standard scanning with no loss of funds or correctness.
-
-Both subsystems cover the **Ironwood** shielded pool (NU6.3, mainnet activation height
-**3,428,143**). Orchard and Sapling are ignored. Servers require a lightwalletd speaking
-lightwallet-protocol v0.5.0 or later, and refuse to start against an endpoint that reports an
-empty Ironwood commitment tree past activation.
-
-## Documentation
-
-- [Nullifier PIR](nullifier/README.md) — hash table design, server architecture, client protocol, parameters
-- [Witness PIR](witness/README.md) — tree decomposition, broadcast + PIR tiers, witness reconstruction
-- [Wallet Integration](docs/pir_wallet_integration.md) — FFI contracts, database schema, feature flags, spendability gates
+- [`docs/vizor_tx_enhancement.md`](docs/vizor_tx_enhancement.md) — design, threat
+  model, database layout, wallet contract
+- [`docs/memo-pir-deploy.md`](docs/memo-pir-deploy.md) — production fleet, GitHub
+  Environment, rollout and rollback
+- [`docs/pir_deployment_architecture.md`](docs/pir_deployment_architecture.md) —
+  scope status, the DAG-sync tables that are built but not a supported path, the
+  growth path, and the next milestone (transparent addresses)
+- [`memo/README.md`](memo/README.md) — build, run, and operator notes
 
 ## Workspace
 
 ```
 spendability-pir/
+├── memo/memo-pir/            # coordinator, workers, ingest, reference client (the product)
+├── deploy/pir-apm/           # monitoring sidecar for the coordinator
 ├── shared/
-│   ├── pir-types/            # PirEngine trait, YpirScenario, ServerPhase, CONFIRMATION_DEPTH
-│   └── chain-ingest/         # LwdClient, ChainTracker, sync/follow streams
-├── nullifier/
-│   ├── spend-types/          # Constants, hash_to_bucket, ChainEvent, SpendabilityMetadata
-│   ├── hashtable-pir/        # Bucketed hash table with per-block insert/rollback, snapshots
-│   ├── nf-ingest/            # Compact block parser, nullifier extraction
-│   ├── spend-server/         # Axum HTTP server, YPIR serving, ArcSwap rebuild
-│   └── spend-client/         # SpendClient with is_spent(nf) API
-├── witness/
-│   ├── witness-types/        # Tree constants, PirWitness, BroadcastData
-│   ├── commitment-ingest/    # Ironwood note commitment extraction
-│   ├── commitment-tree-db/   # In-memory Merkle tree, sub-shard decomposition
-│   ├── witness-server/       # Axum HTTP server, broadcast + YPIR serving
-│   └── witness-client/       # WitnessClient with get_witness(position) API
-└── proto/                    # Shared protobuf definitions
+│   ├── pir-types/            # DatabaseId, layouts, generation manifest, CONFIRMATION_DEPTH
+│   └── chain-ingest/         # lightwalletd client (legacy servers only)
+├── infra/digitalocean/       # production Terraform root and deployed unit files
+├── scripts/                  # deploy-memo-pir.sh, driven by the fleet workflow
+│
+│   # legacy, not deployed — kept as libraries until removed
+├── nullifier/                # bucketed nullifier PIR (spend-server, spend-client, ...)
+├── witness/                  # windowed witness PIR; memo-pir uses commitment-tree-db
+├── combined-server/          # the retired single-host binary
+└── proto/
 ```
 
-## Quick Start
+The `nullifier/` and `witness/` subsystems were the first two PIR services and
+their wallet integration is described in
+[`docs/pir_wallet_integration.md`](docs/pir_wallet_integration.md). Their
+successors (full-pool witness and cold/warm nullifier tables) exist inside
+`memo-pir` for the wallet's DAG-sync pass, which is implemented but outside the
+shipped scope. See the deployment architecture document for the reasoning.
 
-### Build
+## Build and test
 
 ```bash
-cargo build                                    # library crates, no server PIR backend
-cargo build --features ypir -p spend-server    # nullifier server with YPIR
-cargo build --features ypir -p witness-server  # witness server with YPIR
-cargo build --features ipir -p combined-server # what production ships
+cargo build --release -p memo-pir --bins    # memo-pir-server, memo-pir-worker, memo-pir-cli
+make test-fast                              # hermetic: no network, no PIR crypto (~12s warm)
+make check                                  # cargo check --workspace --all-targets
+make lint                                   # clippy, all targets and features (matches CI)
 ```
 
-### Run (nullifier server)
-
-```bash
-cargo run -p spend-server --features ypir --release -- \
-    --lwd-url http://localhost:9067 \
-    --data-dir ./data \
-    --listen 0.0.0.0:8080
-```
-
-### Test
-
-Tests are split into three tiers so the default command is always safe to run.
-See [CLAUDE.md](CLAUDE.md) for the full policy.
-
-```bash
-make test-fast    # hermetic: no network, no PIR crypto (~12s warm)
-make test-slow    # mainnet ingest + PIR round-trips (minutes, needs network)
-make test-bench   # throughput/scaling benchmarks (manual only, GBs of RAM)
-```
-
-The slow and benchmark tests self-skip unless `PIR_SLOW_TESTS` / `PIR_BENCH` is
-set, so `make test-fast` can never reach mainnet lightwalletd.
-
-## Performance (release mode)
-
-|                | Nullifier PIR | Witness PIR |
-|----------------|---------------|-------------|
-| PIR database   | ~56 MB        | ~64 MB      |
-| Rebuild time   | ~3s           | ~3.5s       |
-| Query latency  | ~65ms         | ~96ms       |
-| Upload         | 672 KB        | 605 KB      |
-| Download       | 12 KB         | 36 KB       |
+Tests are split into three tiers so the default command is always safe to run;
+see [CLAUDE.md](CLAUDE.md). `make test-slow` and `make test-bench` exercise the
+legacy servers against mainnet and are opt-in.
 
 ## License
 

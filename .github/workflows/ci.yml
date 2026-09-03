@@ -51,10 +51,10 @@ jobs:
             memo_deploy:
               - '.github/actionlint.yaml'
               - 'scripts/deploy-memo-pir.sh'
-              - '.github/workflows/deploy-memo-pir.yml'
-              - 'infra/digitalocean/memo-poc/deploy/memo-pir-*.service'
-              - 'infra/digitalocean/memo-poc/deploy/pir-apm.service'
-              - 'infra/digitalocean/memo-poc/deploy/Caddyfile'
+              - '.github/workflows/deploy-pir-fleet.yml'
+              - 'infra/digitalocean/production/deploy/memo-pir-*.service'
+              - 'infra/digitalocean/production/deploy/pir-apm.service'
+              - 'infra/digitalocean/production/deploy/Caddyfile'
 
   validate-memo-deploy:
     name: Validate memo deployment tooling
@@ -286,7 +286,7 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      # IPIR is what production ships (see deploy.yml / release.yml), but the
+      # IPIR is the backend the memo fleet ships (see deploy-pir-fleet.yml), but the
       # other jobs either omit the feature or pass --lib, so nothing else runs
       # these integration tests. Release matters: the offline precomputation
       # takes minutes in a debug build.

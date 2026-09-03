@@ -48,6 +48,27 @@ struct Cli {
     worker_config: Option<PathBuf>,
     #[arg(long, default_value_t = 10)]
     poll_seconds: u64,
+    /// Which PIR tables to build and serve, by wire name (`action`,
+    /// `witness`, `witness-roots`, `nf-cold`, `nf-warm`). `action` is
+    /// mandatory. Every table's journal is always written, so widening the
+    /// served set later needs no re-ingest. The production scope serves
+    /// `action` only; the other tables exist for the DAG-sync pass, which the
+    /// wallet stands down when they are absent from the manifest.
+    #[arg(long, value_delimiter = ',', default_value = "action")]
+    tables: Vec<DatabaseId>,
+}
+
+/// Validates and de-duplicates the served table set, preserving the canonical
+/// `DatabaseId::ALL` order. ACTION must always be served: it carries the tree
+/// size that anchors every generation.
+fn served_tables(requested: &[DatabaseId]) -> Result<Vec<DatabaseId>, String> {
+    if !requested.contains(&DatabaseId::Action) {
+        return Err("the `action` table must be served".to_string());
+    }
+    Ok(DatabaseId::ALL
+        .into_iter()
+        .filter(|table| requested.contains(table))
+        .collect())
 }
 
 #[derive(Debug, Deserialize)]
@@ -144,10 +165,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }]
         }
     };
+    let tables = served_tables(&cli.tables)?;
+    tracing::info!(tables = ?tables, "serving PIR tables");
     let state = CoordinatorState::new(
-        DatabaseId::ALL
-            .into_iter()
-            .map(|table| TableSetup {
+        tables
+            .iter()
+            .map(|&table| TableSetup {
                 table,
                 pool: workers.clone(),
             })
@@ -256,37 +279,49 @@ async fn ingest(
                 let witness_roots =
                     TableJournal::new(DatabaseId::WitnessRoots, &journals.witness_roots)?;
                 let checkpoint = target - target % COLD_CHECKPOINT_INTERVAL;
-                if nullifier_tables
-                    .as_ref()
-                    .is_none_or(|tables| tables.checkpoint != checkpoint)
-                {
-                    nullifier_tables =
-                        Some(NullifierTables::build(&journals.nullifiers, checkpoint)?);
-                } else {
-                    // The cold table is unchanged; only the warm side moves.
-                    let fresh = NullifierTables::build(&journals.nullifiers, checkpoint)?;
-                    nullifier_tables = Some(fresh);
+                let serves_nullifiers = state
+                    .tables()
+                    .any(|table| matches!(table, DatabaseId::NfCold | DatabaseId::NfWarm));
+                if serves_nullifiers {
+                    if nullifier_tables
+                        .as_ref()
+                        .is_none_or(|tables| tables.checkpoint != checkpoint)
+                    {
+                        nullifier_tables =
+                            Some(NullifierTables::build(&journals.nullifiers, checkpoint)?);
+                    } else {
+                        // The cold table is unchanged; only the warm side moves.
+                        let fresh = NullifierTables::build(&journals.nullifiers, checkpoint)?;
+                        nullifier_tables = Some(fresh);
+                    }
                 }
-                let tables = nullifier_tables.as_ref().expect("built above");
-                let witness_cap = journals.witness_cap(target)?;
-                let frontier = journals.frontier_updates(
-                    target.saturating_sub(FRONTIER_UPDATES_RETAINED as u64 - 1),
-                    target,
-                )?;
+                let serves_witness = state.tables().any(|table| table == DatabaseId::Witness);
+                let (witness_cap, frontier) = if serves_witness {
+                    (
+                        Some(journals.witness_cap(target)?),
+                        journals.frontier_updates(
+                            target.saturating_sub(FRONTIER_UPDATES_RETAINED as u64 - 1),
+                            target,
+                        )?,
+                    )
+                } else {
+                    (None, Vec::new())
+                };
+                // `publish` ignores sources for tables that are not served.
+                let mut sources: Vec<&dyn memo_pir::coordinator::TableSource> =
+                    vec![&action, &witness, &witness_roots];
+                if let Some(tables) = nullifier_tables.as_ref().filter(|_| serves_nullifiers) {
+                    sources.push(&tables.cold);
+                    sources.push(&tables.warm);
+                }
                 state
                     .publish(
-                        &[
-                            &action,
-                            &witness,
-                            &witness_roots,
-                            &tables.cold,
-                            &tables.warm,
-                        ],
+                        &sources,
                         Anchor {
                             height: target,
                             hash,
                             cold_checkpoint_height: checkpoint,
-                            witness_cap: Some(witness_cap),
+                            witness_cap,
                             frontier,
                         },
                     )
@@ -316,7 +351,45 @@ mod tests {
             worker_urls,
             worker_config,
             poll_seconds: 10,
+            tables: vec![DatabaseId::Action],
         }
+    }
+
+    #[test]
+    fn default_table_set_is_action_only() {
+        let cli = Cli::parse_from(["memo-pir-server", "--zakura-cookie", "cookie"]);
+        assert_eq!(
+            served_tables(&cli.tables).unwrap(),
+            vec![DatabaseId::Action]
+        );
+    }
+
+    #[test]
+    fn table_list_parses_wire_names_in_canonical_order() {
+        let cli = Cli::parse_from([
+            "memo-pir-server",
+            "--zakura-cookie",
+            "cookie",
+            "--tables",
+            "nf-warm,action,witness,action",
+        ]);
+        assert_eq!(
+            served_tables(&cli.tables).unwrap(),
+            vec![DatabaseId::Action, DatabaseId::Witness, DatabaseId::NfWarm]
+        );
+    }
+
+    #[test]
+    fn table_list_requires_action() {
+        assert!(served_tables(&[DatabaseId::Witness]).is_err());
+        assert!(Cli::try_parse_from([
+            "memo-pir-server",
+            "--zakura-cookie",
+            "cookie",
+            "--tables",
+            "memo",
+        ])
+        .is_err());
     }
 
     #[test]

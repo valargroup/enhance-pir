@@ -1,5 +1,24 @@
 # Phased implementation: unified PIR deployment for DAG-sync
 
+## Status, 2026-09-03
+
+| Phase | State |
+| --- | --- |
+| 1. Widen the ACTION record | done (record v3, 824 bytes with `cmx`) |
+| 2. Parameterize the coordinator by table | done (`/v1/*`, generation manifest, eight generations retained) |
+| 3. WITNESS as a sharded table | done, not served in production |
+| 4. NULLIFIER cold/warm | done, not served in production |
+| 5. Production deployment shape | **replaced**: the memo fleet is the production shape; see `pir_deployment_architecture.md` §6 and `memo-pir-deploy.md` |
+| 6. Query envelope and protocol version | done; packing-key batch spike deferred |
+| 7. Transparent-address table | next; design in `pir_deployment_architecture.md` §7.1 |
+
+The shipped scope is memo retrieval only. The coordinator serves the tables named by
+`--tables` (production: `action`), journals every table regardless, and the wallet's
+DAG-sync pass stands down when a table is absent. The three-pool fleet in the original
+Phase 5 is recorded as a growth path and is not planned. The plan text below is kept as
+written for the record; where it says "retain two generations" the implementation retains
+eight.
+
 ## Context
 
 [`pir_deployment_architecture.md`](pir_deployment_architecture.md) proposes one deployable system from the three PIR services: an ACTION table (memo PIR with a widened record), a full-pool WITNESS table with tier A/B rows on the same row-shard framework, a NULLIFIER table split cold/warm, one generation manifest, one worker pool per table, and deploy tooling generalized from `vote-nullifier-pir`. This plan turns that into ordered, shippable phases across three repos:
@@ -14,7 +33,7 @@ Codebase facts that fix the order:
 - The wallet DB already stores everything a `(position, nf)` pass needs in `ironwood_received_notes` (`rho`, `nf`, `commitment_tree_position`, `recipient_key_scope`, `witness_stabilized`), but no query returns position and nullifier together. Witnesses are always recomputed from the local shard store; there is no API accepting an external Merkle path.
 - Nullifier server geometry is compile-time (`NUM_BUCKETS`, `Bucket { entries: [_; BUCKET_CAPACITY] }`); `TARGET_SIZE` eviction is called from `spend-server` and `combined-server`. Witness window logic is in `witness-types` (`physical_row_index`, `L0_MAX_SHARDS`), `commitment-tree-db` (`window_start_shard`), and `witness-client` (`PositionOutsideWindow`, `reconstruct.rs:34`).
 - `ipir-sp` pins: memo and wallet client on `e875404…`, nullifier/witness on `2bc1075…`.
-- `infra/digitalocean/memo-poc` has `terraform.tfstate` committed.
+- `infra/digitalocean/memo-poc` (now `production`) keeps its Terraform state untracked; `.gitignore` covers `tfstate`, `tfplan`, and populated `tfvars`. (An earlier revision of this plan said the state was committed; it was not.)
 
 Ordering principle: the one irreversible-cost change is the ACTION record (widening later rebuilds every sealed shard) and the pool is 136K positions today, so it ships first, server and wallet together. Everything after is refactor-then-extend on the memo framework, with the wallet phase that consumes each server phase listed beside it.
 
@@ -96,6 +115,8 @@ Gate: a wallet restored from seed at the Ironwood activation birthday shows corr
 
 ## Phase 5 — Production deployment shape
 
+> Replaced. Production is the memo fleet renamed (`infra/digitalocean/production`, GitHub Environment `production`, `deploy-pir-fleet.yml`), serving ACTION only. The items below are the growth path in `pir_deployment_architecture.md` §6.4.
+
 **Server only**
 - Split ingest into `memo/memo-pir/src/bin/ingest.rs` (Zakura poll loop, journals, frontier push via `/prepare`); the coordinator reads published generations.
 - Spaces publisher in ingest: sealed shard artifacts + `manifest.json` (written last, `no-cache`) to `s3://<bucket>/pir/<network>/<generation>/`; worker `load` restores missing sealed shards from Spaces with digest check. Pattern: `vote-nullifier-pir/.github/workflows/publish-snapshot.yml`.
@@ -134,3 +155,13 @@ P6 server ──► P6 wallet-lib ──► P6 app          (envelope; needs P3 
 - Wallet library: `cargo test -p zakura-pir-client` in its own invocation (feature-unification rule in `verify.yml`), `cargo test -p zcash_client_sqlite --features zakura-pir-memo,zakura-pir-witness,zakura-pir-spend`.
 - App: `cd rust && cargo test wallet::sync_engine::memo_pir`, `…::dag_sync`, the ignored live test against the deployed endpoint, and the regtest send E2E (`scripts/e2e/flutter-macos-regtest-import-sync.sh`) once P3 lands.
 - Docs updated in the same PR as the code (`docs/vizor_tx_enhancement.md` constants, `docs/pir_deployment_architecture.md` resolved questions, `docs/memo_pir_demo.md` revs). No phase merges with `TARGET_SIZE`, `L0_MAX_SHARDS`, or `PositionOutsideWindow` referenced after the phase that removes them.
+
+## Phase 7 — Transparent-address table (next)
+
+Design: `pir_deployment_architecture.md` §7.1. Server: a `t-utxo` journal from the raw
+blocks ingest already reads, cold/warm tables on the `NullifierTables` framework keyed by
+script hash with a capped UTXO list and a `used` flag, served under `--tables`. Wallet
+library: a fixed cold+warm pair per address with dummies, replacing the
+`TransactionsInvolvingAddress` stream and `download_transparent_outputs` in Vizor. Gate:
+a restored wallet with transparent receivers shows its transparent balance and completes
+gap-limit discovery with no address ever sent to lightwalletd.
