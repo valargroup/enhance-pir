@@ -24,6 +24,15 @@ pub struct EndpointCumulative {
     pub processing_in_flight: f64,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct WorkerQueryCumulative {
+    pub group: String,
+    pub attempts: f64,
+    pub failures: f64,
+    pub successful_duration: HistogramCumulative,
+    pub in_flight: f64,
+}
+
 #[derive(Clone, Debug)]
 pub struct MetricsSnapshot {
     pub at: Instant,
@@ -39,6 +48,8 @@ pub struct MetricsSnapshot {
     pub worker_tables: BTreeMap<String, BTreeMap<String, BTreeMap<String, f64>>>,
     /// table name -> group name -> (redundancy gauge stem, value)
     pub worker_groups: BTreeMap<String, BTreeMap<String, BTreeMap<String, f64>>>,
+    /// replica name -> coordinator-observed query attempt counters and timing
+    pub worker_queries: BTreeMap<String, WorkerQueryCumulative>,
     pub resident_memory_bytes: Option<f64>,
     pub process_start_time_seconds: Option<f64>,
 }
@@ -64,6 +75,17 @@ pub struct EndpointWindow {
     /// The server reported a processing histogram for this endpoint, so its
     /// alert can use processing latency even without configuration.
     pub processing_available: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct WorkerQueryWindow {
+    pub group: String,
+    pub qps: f64,
+    pub attempts: f64,
+    pub failures: f64,
+    pub failure_ratio: f64,
+    pub successful_latency: LatencyWindow,
+    pub in_flight: f64,
 }
 
 impl EndpointWindow {
@@ -179,9 +201,128 @@ impl RollingMetrics {
             .collect()
     }
 
+    pub fn worker_query_windows(&self) -> BTreeMap<String, WorkerQueryWindow> {
+        let Some(newest) = self.snapshots.back() else {
+            return BTreeMap::new();
+        };
+        let oldest_index = self
+            .snapshots
+            .iter()
+            .position(|snapshot| newest.at.duration_since(snapshot.at).as_secs() <= 300)
+            .unwrap_or(self.snapshots.len() - 1);
+        let oldest = &self.snapshots[oldest_index];
+        let elapsed = newest.at.duration_since(oldest.at).as_secs_f64().max(1.0);
+
+        newest
+            .worker_queries
+            .iter()
+            .map(|(replica, current)| {
+                let mut attempts = 0.0;
+                let mut failures = 0.0;
+                for index in (oldest_index + 1)..self.snapshots.len() {
+                    let previous_snapshot = &self.snapshots[index - 1];
+                    let next_snapshot = &self.snapshots[index];
+                    let reset = process_generation_changed(previous_snapshot, next_snapshot);
+                    let previous = previous_snapshot
+                        .worker_queries
+                        .get(replica)
+                        .cloned()
+                        .unwrap_or_default();
+                    let next = next_snapshot
+                        .worker_queries
+                        .get(replica)
+                        .cloned()
+                        .unwrap_or_default();
+                    attempts += counter_delta(next.attempts, previous.attempts, reset);
+                    failures += counter_delta(next.failures, previous.failures, reset);
+                }
+                (
+                    replica.clone(),
+                    WorkerQueryWindow {
+                        group: current.group.clone(),
+                        qps: attempts / elapsed,
+                        attempts,
+                        failures,
+                        failure_ratio: if attempts > 0.0 {
+                            failures / attempts
+                        } else {
+                            0.0
+                        },
+                        successful_latency: worker_query_latency_window(
+                            &self.snapshots,
+                            oldest_index,
+                            replica,
+                        ),
+                        in_flight: current.in_flight,
+                    },
+                )
+            })
+            .collect()
+    }
+
     #[cfg(test)]
     pub fn len(&self) -> usize {
         self.snapshots.len()
+    }
+}
+
+fn worker_query_latency_window(
+    snapshots: &VecDeque<MetricsSnapshot>,
+    oldest_index: usize,
+    replica: &str,
+) -> LatencyWindow {
+    let current = snapshots
+        .back()
+        .and_then(|snapshot| snapshot.worker_queries.get(replica))
+        .cloned()
+        .unwrap_or_default();
+    let mut buckets: Vec<(f64, f64)> = current
+        .successful_duration
+        .buckets
+        .iter()
+        .map(|(upper, _)| (*upper, 0.0))
+        .collect();
+    let mut samples = 0.0;
+    for index in (oldest_index + 1)..snapshots.len() {
+        let previous_snapshot = &snapshots[index - 1];
+        let next_snapshot = &snapshots[index];
+        let generation_changed = process_generation_changed(previous_snapshot, next_snapshot);
+        let previous = previous_snapshot
+            .worker_queries
+            .get(replica)
+            .cloned()
+            .unwrap_or_default();
+        let next = next_snapshot
+            .worker_queries
+            .get(replica)
+            .cloned()
+            .unwrap_or_default();
+        let previous = &previous.successful_duration;
+        let next = &next.successful_duration;
+        let reset = generation_changed || next.count < previous.count;
+        samples += if reset {
+            next.count
+        } else {
+            next.count - previous.count
+        };
+        let delta = if reset {
+            next.buckets.clone()
+        } else {
+            histogram_delta(&next.buckets, &previous.buckets)
+        };
+        for (upper, total) in &mut buckets {
+            *total += delta
+                .iter()
+                .find(|(delta_upper, _)| delta_upper == upper)
+                .map(|(_, value)| *value)
+                .unwrap_or(0.0);
+        }
+    }
+    LatencyWindow {
+        samples,
+        p50: histogram_quantile(0.50, &buckets, samples),
+        p95: histogram_quantile(0.95, &buckets, samples),
+        p99: histogram_quantile(0.99, &buckets, samples),
     }
 }
 
@@ -340,6 +481,7 @@ pub fn parse_prometheus(
         BTreeMap::new();
     let mut worker_groups: BTreeMap<String, BTreeMap<String, BTreeMap<String, f64>>> =
         BTreeMap::new();
+    let mut worker_queries: BTreeMap<String, WorkerQueryCumulative> = BTreeMap::new();
     let mut resident_memory_bytes = None;
     let mut process_start_time_seconds = None;
 
@@ -406,6 +548,51 @@ pub fn parse_prometheus(
             resident_memory_bytes = Some(sample.value);
         } else if name == "process_start_time_seconds" {
             process_start_time_seconds = Some(sample.value);
+        } else if name == schema.worker_replica_requests_total {
+            if let Some(outcome) = sample.labels.get("outcome") {
+                if matches!(outcome.as_str(), "succeeded" | "failed") {
+                    if let Some(values) = worker_query_entry(&mut worker_queries, &sample) {
+                        values.attempts += sample.value;
+                        if outcome == "failed" {
+                            values.failures += sample.value;
+                        }
+                    }
+                }
+            }
+        } else if name == schema.worker_replica_duration_bucket {
+            if sample.labels.get("outcome").map(String::as_str) == Some("succeeded") {
+                let Some(le) = sample.labels.get("le") else {
+                    continue;
+                };
+                let upper = if le == "+Inf" {
+                    f64::INFINITY
+                } else {
+                    le.parse::<f64>()
+                        .map_err(|_| format!("invalid histogram bound {le:?}"))?
+                };
+                if let Some(values) = worker_query_entry(&mut worker_queries, &sample) {
+                    values
+                        .successful_duration
+                        .buckets
+                        .push((upper, sample.value));
+                }
+            }
+        } else if name == schema.worker_replica_duration_sum {
+            if sample.labels.get("outcome").map(String::as_str) == Some("succeeded") {
+                if let Some(values) = worker_query_entry(&mut worker_queries, &sample) {
+                    values.successful_duration.sum = sample.value;
+                }
+            }
+        } else if name == schema.worker_replica_duration_count {
+            if sample.labels.get("outcome").map(String::as_str) == Some("succeeded") {
+                if let Some(values) = worker_query_entry(&mut worker_queries, &sample) {
+                    values.successful_duration.count = sample.value;
+                }
+            }
+        } else if name == schema.worker_replica_in_flight {
+            if let Some(values) = worker_query_entry(&mut worker_queries, &sample) {
+                values.in_flight = sample.value;
+            }
         } else if name.starts_with(&schema.gauge_prefix) {
             snapshot_gauges.insert(name.to_string(), sample.value);
         } else if let Some(stem) = name.strip_prefix(&schema.worker_group_prefix) {
@@ -458,6 +645,12 @@ pub fn parse_prometheus(
             .buckets
             .sort_by(|(left, _), (right, _)| left.total_cmp(right));
     }
+    for worker in worker_queries.values_mut() {
+        worker
+            .successful_duration
+            .buckets
+            .sort_by(|(left, _), (right, _)| left.total_cmp(right));
+    }
     Ok(MetricsSnapshot {
         at,
         endpoints,
@@ -467,9 +660,33 @@ pub fn parse_prometheus(
         tables,
         worker_tables,
         worker_groups,
+        worker_queries,
         resident_memory_bytes,
         process_start_time_seconds,
     })
+}
+
+const MAX_WORKERS: usize = 64;
+
+fn worker_query_entry<'a>(
+    workers: &'a mut BTreeMap<String, WorkerQueryCumulative>,
+    sample: &ParsedSample,
+) -> Option<&'a mut WorkerQueryCumulative> {
+    let group = sample.labels.get("group")?;
+    let replica = sample.labels.get("replica")?;
+    if replica.is_empty() || group.is_empty() {
+        return None;
+    }
+    if !workers.contains_key(replica) && workers.len() >= MAX_WORKERS {
+        return None;
+    }
+    let values = workers.entry(replica.clone()).or_default();
+    if values.group.is_empty() {
+        values.group = group.clone();
+    } else if values.group != *group {
+        return None;
+    }
+    Some(values)
 }
 
 /// Most distinct endpoint labels accepted from one exposition. The server's
@@ -670,6 +887,15 @@ enhance_worker_table_index{table="action",worker="worker-1"} 0
 enhance_worker_table_assigned_shards{table="action",worker="worker-1"} 2
 enhance_worker_group_configured_replicas{table="action",group="group-1"} 2
 enhance_worker_group_ready_replicas{table="action",group="group-1"} 1
+enhance_worker_replica_requests_total{group="group-1",replica="worker-1",outcome="selected"} 12
+enhance_worker_replica_requests_total{group="group-1",replica="worker-1",outcome="succeeded"} 10
+enhance_worker_replica_requests_total{group="group-1",replica="worker-1",outcome="failed"} 2
+enhance_worker_replica_request_duration_seconds_bucket{group="group-1",replica="worker-1",outcome="succeeded",le="0.5"} 8
+enhance_worker_replica_request_duration_seconds_bucket{group="group-1",replica="worker-1",outcome="succeeded",le="+Inf"} 10
+enhance_worker_replica_request_duration_seconds_sum{group="group-1",replica="worker-1",outcome="succeeded"} 3
+enhance_worker_replica_request_duration_seconds_count{group="group-1",replica="worker-1",outcome="succeeded"} 10
+enhance_worker_replica_request_duration_seconds_count{group="group-1",replica="worker-1",outcome="failed"} 2
+enhance_worker_replica_in_flight{group="group-1",replica="worker-1"} 1
 enhance_http_requests_total{endpoint="witness_query",method="POST",status="200"} 5
 enhance_http_request_processing_duration_seconds_count{endpoint="witness_query"} 5
 enhance_http_requests_total{endpoint="Bad Label",method="GET",status="200"} 1
@@ -708,6 +934,13 @@ process_start_time_seconds 1787880000
             parsed.worker_groups["action"]["group-1"]["ready_replicas"],
             1.0
         );
+        let worker_query = &parsed.worker_queries["worker-1"];
+        assert_eq!(worker_query.group, "group-1");
+        assert_eq!(worker_query.attempts, 12.0);
+        assert_eq!(worker_query.failures, 2.0);
+        assert_eq!(worker_query.successful_duration.count, 10.0);
+        assert_eq!(worker_query.successful_duration.buckets.len(), 2);
+        assert_eq!(worker_query.in_flight, 1.0);
         assert_eq!(parsed.worker_tables["worker-1"]["action"]["index"], 0.0);
         assert_eq!(
             parsed.worker_tables["worker-1"]["action"]["assigned_shards"],
@@ -746,6 +979,120 @@ process_start_time_seconds 1787880000
     }
 
     #[test]
+    fn computes_independent_worker_query_windows() {
+        let start = Instant::now();
+        let mut rolling = RollingMetrics::new(Schema::enhance_default());
+        for (index, (attempts, failures, successes)) in [(100.0, 5.0, 95.0), (112.0, 7.0, 105.0)]
+            .into_iter()
+            .enumerate()
+        {
+            let worker_queries = BTreeMap::from([
+                (
+                    "worker-a".to_string(),
+                    WorkerQueryCumulative {
+                        group: "group-1".to_string(),
+                        attempts,
+                        failures,
+                        successful_duration: HistogramCumulative {
+                            buckets: vec![(0.5, successes - 5.0), (f64::INFINITY, successes)],
+                            sum: successes * 0.3,
+                            count: successes,
+                        },
+                        in_flight: index as f64,
+                    },
+                ),
+                (
+                    "worker-b".to_string(),
+                    WorkerQueryCumulative {
+                        group: "group-1".to_string(),
+                        attempts: 50.0 + index as f64 * 5.0,
+                        failures: 0.0,
+                        successful_duration: HistogramCumulative {
+                            buckets: vec![
+                                (0.5, 50.0 + index as f64 * 5.0),
+                                (f64::INFINITY, 50.0 + index as f64 * 5.0),
+                            ],
+                            sum: 5.0,
+                            count: 50.0 + index as f64 * 5.0,
+                        },
+                        in_flight: 0.0,
+                    },
+                ),
+            ]);
+            rolling.push(MetricsSnapshot {
+                at: start + Duration::from_secs(index as u64 * 15),
+                endpoints: BTreeMap::new(),
+                snapshot_gauges: BTreeMap::new(),
+                workers: BTreeMap::new(),
+                layout: BTreeMap::new(),
+                tables: BTreeMap::new(),
+                worker_tables: BTreeMap::new(),
+                worker_groups: BTreeMap::new(),
+                worker_queries,
+                resident_memory_bytes: None,
+                process_start_time_seconds: Some(100.0),
+            });
+        }
+
+        let windows = rolling.worker_query_windows();
+        let a = &windows["worker-a"];
+        assert_eq!(a.group, "group-1");
+        assert_eq!(a.attempts, 12.0);
+        assert_eq!(a.failures, 2.0);
+        assert_eq!(a.successful_latency.samples, 10.0);
+        assert_eq!(a.in_flight, 1.0);
+        assert!((a.qps - 0.8).abs() < f64::EPSILON);
+        assert!((a.failure_ratio - 1.0 / 6.0).abs() < f64::EPSILON);
+        assert_eq!(windows["worker-b"].attempts, 5.0);
+        assert_eq!(windows["worker-b"].failures, 0.0);
+    }
+
+    #[test]
+    fn worker_query_windows_reset_with_the_coordinator_process() {
+        let start = Instant::now();
+        let mut rolling = RollingMetrics::new(Schema::enhance_default());
+        for (index, (attempts, failures, process_start)) in [(100.0, 10.0, 1.0), (3.0, 1.0, 2.0)]
+            .into_iter()
+            .enumerate()
+        {
+            rolling.push(MetricsSnapshot {
+                at: start + Duration::from_secs(index as u64 * 15),
+                endpoints: BTreeMap::new(),
+                snapshot_gauges: BTreeMap::new(),
+                workers: BTreeMap::new(),
+                layout: BTreeMap::new(),
+                tables: BTreeMap::new(),
+                worker_tables: BTreeMap::new(),
+                worker_groups: BTreeMap::new(),
+                worker_queries: BTreeMap::from([(
+                    "worker-a".to_string(),
+                    WorkerQueryCumulative {
+                        group: "group-1".to_string(),
+                        attempts,
+                        failures,
+                        successful_duration: HistogramCumulative {
+                            buckets: vec![
+                                (0.5, attempts - failures),
+                                (f64::INFINITY, attempts - failures),
+                            ],
+                            sum: attempts - failures,
+                            count: attempts - failures,
+                        },
+                        in_flight: 0.0,
+                    },
+                )]),
+                resident_memory_bytes: None,
+                process_start_time_seconds: Some(process_start),
+            });
+        }
+
+        let window = &rolling.worker_query_windows()["worker-a"];
+        assert_eq!(window.attempts, 3.0);
+        assert_eq!(window.failures, 1.0);
+        assert_eq!(window.successful_latency.samples, 2.0);
+    }
+
+    #[test]
     fn keeps_observed_and_processing_latency_separate() {
         let start = Instant::now();
         let histogram = |count: f64, slow_upper: f64| HistogramCumulative {
@@ -779,6 +1126,7 @@ process_start_time_seconds 1787880000
                 tables: BTreeMap::new(),
                 worker_tables: BTreeMap::new(),
                 worker_groups: BTreeMap::new(),
+                worker_queries: BTreeMap::new(),
                 resident_memory_bytes: None,
                 process_start_time_seconds: None,
             });
@@ -852,6 +1200,7 @@ process_start_time_seconds 1787880000
                 tables: BTreeMap::new(),
                 worker_tables: BTreeMap::new(),
                 worker_groups: BTreeMap::new(),
+                worker_queries: BTreeMap::new(),
                 resident_memory_bytes: None,
                 process_start_time_seconds: None,
             });
@@ -902,6 +1251,7 @@ process_start_time_seconds 1787880000
                 tables: BTreeMap::new(),
                 worker_tables: BTreeMap::new(),
                 worker_groups: BTreeMap::new(),
+                worker_queries: BTreeMap::new(),
                 resident_memory_bytes: None,
                 process_start_time_seconds: Some(100.0 + index as f64),
             });
@@ -988,6 +1338,7 @@ enhance_snapshot_generation 1
             tables: BTreeMap::new(),
             worker_tables: BTreeMap::new(),
             worker_groups: BTreeMap::new(),
+            worker_queries: BTreeMap::new(),
             resident_memory_bytes: None,
             process_start_time_seconds: None,
         });
@@ -1044,6 +1395,7 @@ enhance_snapshot_generation 1
                 tables: BTreeMap::new(),
                 worker_tables: BTreeMap::new(),
                 worker_groups: BTreeMap::new(),
+                worker_queries: BTreeMap::new(),
                 resident_memory_bytes: None,
                 process_start_time_seconds: None,
             });

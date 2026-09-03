@@ -170,6 +170,7 @@ copy_to() {
 }
 
 mapfile -t WORKER_HOSTS < <(jq -r '.[].replicas[].ssh_host' <<<"$ENHANCE_WORKERS_JSON")
+mapfile -t WORKER_NAMES < <(jq -r '.[].replicas[].name' <<<"$ENHANCE_WORKERS_JSON")
 REMOTE_STAGE="/tmp/enhance-pir-$ENHANCE_RELEASE_SHA"
 
 preflight_host() {
@@ -544,7 +545,23 @@ if [[ "$rollout_ok" -eq 1 && -n "$old_metadata" ]]; then
   fi
 fi
 if [[ "$rollout_ok" -eq 1 ]]; then
-  "$ENHANCE_ARTIFACT_DIR/enhance-pir-cli" --server "$ENHANCE_PUBLIC_URL" dummy || rollout_ok=0
+  # Two sequential queries exercise both replicas in every active-active group.
+  for _ in 1 2; do
+    "$ENHANCE_ARTIFACT_DIR/enhance-pir-cli" --server "$ENHANCE_PUBLIC_URL" dummy || rollout_ok=0
+  done
+fi
+if [[ "$rollout_ok" -eq 1 ]]; then
+  worker_metrics="$(remote "$ENHANCE_COORDINATOR_HOST" "curl --fail --silent http://127.0.0.1:8080/metrics")" || rollout_ok=0
+  worker_duration_metrics="$(grep '^enhance_worker_replica_request_duration_seconds_count{' <<<"$worker_metrics" || true)"
+fi
+if [[ "$rollout_ok" -eq 1 ]]; then
+  for worker in "${WORKER_NAMES[@]}"; do
+    if ! grep -Fq "replica=\"$worker\"" <<<"$worker_duration_metrics"; then
+      echo "worker query metrics missing for $worker" >&2
+      rollout_ok=0
+      break
+    fi
+  done
 fi
 # Readiness gate and sidecar exposure: /ready is loopback-only, /apm/ is public,
 # and the raw /metrics exposition must stay behind Caddy's 404.
@@ -552,7 +569,20 @@ if [[ "$rollout_ok" -eq 1 ]]; then
   remote "$ENHANCE_COORDINATOR_HOST" "curl --fail --silent http://127.0.0.1:8080/ready >/dev/null" || rollout_ok=0
 fi
 if [[ "$rollout_ok" -eq 1 ]]; then
-  curl --fail --silent --show-error "$ENHANCE_PUBLIC_URL/apm/" | grep -q '<title>' || rollout_ok=0
+  apm_ok=0
+  for _ in $(seq 1 10); do
+    apm_html="$(curl --fail --silent --show-error "$ENHANCE_PUBLIC_URL/apm/" || true)"
+    cards_ok=1
+    for worker in "${WORKER_NAMES[@]}"; do
+      grep -Fq "data-worker=\"$worker\"" <<<"$apm_html" || cards_ok=0
+    done
+    if grep -q '<title>' <<<"$apm_html" && [[ "$cards_ok" -eq 1 ]]; then
+      apm_ok=1
+      break
+    fi
+    sleep 3
+  done
+  [[ "$apm_ok" -eq 1 ]] || rollout_ok=0
 fi
 if [[ "$rollout_ok" -eq 1 ]]; then
   metrics_code="$(curl --silent --output /dev/null --write-out '%{http_code}' "$ENHANCE_PUBLIC_URL/metrics" || true)"

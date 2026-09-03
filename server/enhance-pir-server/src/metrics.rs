@@ -69,6 +69,8 @@ struct Metrics {
     worker_group_configured_replicas: IntGaugeVec,
     worker_group_ready_replicas: IntGaugeVec,
     worker_replica_requests: IntCounterVec,
+    worker_replica_request_duration: HistogramVec,
+    worker_replica_in_flight: IntGaugeVec,
     layout_confirmations: IntGauge,
     layout_activation_height: IntGauge,
 }
@@ -280,6 +282,25 @@ fn build_metrics() -> Metrics {
         &["group", "replica", "outcome"],
     )
     .expect("valid metric");
+    let worker_replica_request_duration = HistogramVec::new(
+        HistogramOpts::new(
+            "enhance_worker_replica_request_duration_seconds",
+            "Coordinator-observed duration of worker evaluation attempts.",
+        )
+        .buckets(vec![
+            0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0,
+        ]),
+        &["group", "replica", "outcome"],
+    )
+    .expect("valid metric");
+    let worker_replica_in_flight = IntGaugeVec::new(
+        Opts::new(
+            "enhance_worker_replica_in_flight",
+            "Worker evaluation attempts currently in flight from the coordinator.",
+        ),
+        &["group", "replica"],
+    )
+    .expect("valid metric");
 
     // Chain-level constants, exported so the dashboard's explainer never
     // hardcodes a number that lives in `types.rs`.
@@ -331,6 +352,8 @@ fn build_metrics() -> Metrics {
         Box::new(worker_group_configured_replicas.clone()),
         Box::new(worker_group_ready_replicas.clone()),
         Box::new(worker_replica_requests.clone()),
+        Box::new(worker_replica_request_duration.clone()),
+        Box::new(worker_replica_in_flight.clone()),
         Box::new(layout_confirmations.clone()),
         Box::new(layout_activation_height.clone()),
     ] {
@@ -383,6 +406,8 @@ fn build_metrics() -> Metrics {
         worker_group_configured_replicas,
         worker_group_ready_replicas,
         worker_replica_requests,
+        worker_replica_request_duration,
+        worker_replica_in_flight,
         layout_confirmations,
         layout_activation_height,
     }
@@ -689,6 +714,50 @@ pub fn record_replica_request(group: &str, replica: &str, outcome: &str) {
         .inc();
 }
 
+/// Times one coordinator-to-worker evaluation RPC. The inflight gauge is
+/// drop-safe so aborted query tasks cannot leave a replica looking busy.
+pub struct WorkerReplicaTimer {
+    started: Instant,
+    group: String,
+    replica: String,
+    _in_flight: GaugeGuard,
+}
+
+impl WorkerReplicaTimer {
+    fn finish(self, outcome: &'static str) {
+        let m = metrics();
+        m.worker_replica_request_duration
+            .with_label_values(&[&self.group, &self.replica, outcome])
+            .observe(self.started.elapsed().as_secs_f64());
+        m.worker_replica_requests
+            .with_label_values(&[&self.group, &self.replica, outcome])
+            .inc();
+    }
+
+    /// Complete this attempt as a successful worker response.
+    pub fn succeeded(self) {
+        self.finish("succeeded");
+    }
+
+    /// Complete this attempt as an HTTP, network, or response-validation failure.
+    pub fn failed(self) {
+        self.finish("failed");
+    }
+}
+
+pub fn start_worker_replica_request(group: &str, replica: &str) -> WorkerReplicaTimer {
+    let m = metrics();
+    WorkerReplicaTimer {
+        started: Instant::now(),
+        group: group.to_string(),
+        replica: replica.to_string(),
+        _in_flight: GaugeGuard::new(
+            m.worker_replica_in_flight
+                .with_label_values(&[group, replica]),
+        ),
+    }
+}
+
 /// Render the registry as Prometheus text exposition.
 pub fn encode() -> (axum::http::StatusCode, String, String) {
     let m = metrics();
@@ -824,6 +893,67 @@ mod tests {
         assert!(content_type.starts_with("text/plain"));
         assert!(body.contains("enhance_http_requests_total{endpoint=\"generation\""));
         assert!(!body.contains("/other"));
+    }
+
+    #[test]
+    fn worker_replica_timer_records_terminal_metrics_and_balances_inflight() {
+        let m = metrics();
+        let labels = ["test-group", "test-replica"];
+        let success_labels = ["test-group", "test-replica", "succeeded"];
+        let before_requests = m
+            .worker_replica_requests
+            .with_label_values(&success_labels)
+            .get();
+        let before_samples = m
+            .worker_replica_request_duration
+            .with_label_values(&success_labels)
+            .get_sample_count();
+        let before_inflight = m.worker_replica_in_flight.with_label_values(&labels).get();
+
+        let timer = start_worker_replica_request(labels[0], labels[1]);
+        assert_eq!(
+            m.worker_replica_in_flight.with_label_values(&labels).get(),
+            before_inflight + 1
+        );
+        timer.succeeded();
+
+        assert_eq!(
+            m.worker_replica_in_flight.with_label_values(&labels).get(),
+            before_inflight
+        );
+        assert_eq!(
+            m.worker_replica_requests
+                .with_label_values(&success_labels)
+                .get(),
+            before_requests + 1
+        );
+        assert_eq!(
+            m.worker_replica_request_duration
+                .with_label_values(&success_labels)
+                .get_sample_count(),
+            before_samples + 1
+        );
+
+        let failure_labels = ["test-group", "test-replica", "failed"];
+        let before_failures = m
+            .worker_replica_requests
+            .with_label_values(&failure_labels)
+            .get();
+        let failed = start_worker_replica_request(labels[0], labels[1]);
+        failed.failed();
+        assert_eq!(
+            m.worker_replica_requests
+                .with_label_values(&failure_labels)
+                .get(),
+            before_failures + 1
+        );
+
+        let cancelled = start_worker_replica_request(labels[0], labels[1]);
+        drop(cancelled);
+        assert_eq!(
+            m.worker_replica_in_flight.with_label_values(&labels).get(),
+            before_inflight
+        );
     }
 
     #[test]
