@@ -8,8 +8,7 @@ project:
 - one `m-8vcpu-64gb-intel` coordinator with a 1 TiB XFS volume at
   `/srv/zakura`, running Zakura (archive), ingest, the coordinator, Caddy, and
   the `pir-apm` sidecar;
-- one `m-8vcpu-64gb-intel` private PIR worker that serves every table and
-  shard; and
+- one logical shard group with two `s-4vcpu-8gb` private PIR replicas; and
 - a dedicated VPC and firewalls. Only the coordinator may reach worker port
   8091. SSH is restricted to `allowed_ssh_cidrs`.
 
@@ -46,19 +45,28 @@ infisical run --projectId=40862c6d-a089-4355-b405-0477be0ee3b1 --env=prod --path
   sh -c 'export TF_VAR_digitalocean_token="$DO_TOKEN_NEW_ORG"; terraform init && terraform plan'
 ```
 
+For the first topology migration, do not apply the expansion and existing
+worker resize together. Create `digitalocean_droplet.worker[1]` first, deploy
+the grouped inventory, and verify that `shard-group-01` reports two ready
+replicas. Only then apply the remaining plan, which resizes or replaces
+`worker[0]` while its peer serves the group. Review the saved plan at each
+step; a production apply remains a separate, operator-confirmed action.
+
 ## Capacity
 
-Grow the worker host before growing the worker count. If a second worker is
-ever needed: provision it with the private-worker firewall and append it to
-the inventory the deploy workflow passes to the coordinator (`ENHANCE_WORKERS_JSON`
-in the `production` GitHub Environment). The step from one worker to two moves
-every shard at or beyond `SHARDS_PER_WORKER` (2) to the new worker and rebuilds
-them there once; every append after that moves nothing. Existing entries are
-never renamed, reordered, or removed.
+Each ordered shard group owns six shards and has two active-active replicas.
+The coordinator sends a query to one ready replica per group and retries its
+peer on failure. Publication requires one ready replica in every used group;
+the second copy provides redundancy without contributing a duplicate PIR
+partial.
 
-`spendability-memo-pir-worker-02` from the proof of concept was removed from
-`worker_names`; `terraform apply` destroys it once the fleet has deployed with
-the one-entry inventory.
+Keep group order append-only. Add the next replica pair before the database
+crosses a six-shard boundary; adding or replacing a replica within an existing
+group does not move shards. Worker process RSS, including retained frontier
+generations and rebuild overlap, is enforced with a 2 GiB systemd cgroup limit
+and swap disabled. The bundled
+`s-4vcpu-8gb` size is the closest currently available AMS3 shape to the desired
+4-vCPU/4-GiB worker and leaves additional host memory headroom.
 
 ## Legacy host
 

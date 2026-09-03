@@ -15,9 +15,15 @@ variable "region" {
   default = "ams3"
 }
 
-variable "size" {
+variable "coordinator_size" {
   type    = string
   default = "m-8vcpu-64gb-intel"
+}
+
+variable "worker_size" {
+  description = "Worker Droplet size. Four-vCPU workers use the closest AMS3 bundled size; keep process RSS below 2 GiB."
+  type        = string
+  default     = "s-4vcpu-8gb"
 }
 
 variable "image" {

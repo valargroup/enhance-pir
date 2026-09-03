@@ -40,21 +40,27 @@ fi
 if ! jq -e --arg coordinator "$ENHANCE_COORDINATOR_HOST" '
   type == "array" and length >= 1 and
   all(.[];
-    (keys | sort) == ["name", "service_url", "ssh_host"] and
+    (keys | sort) == ["name", "replicas"] and
     (.name | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9-]*$")) and
-    (.ssh_host | type == "string" and test("^[A-Za-z0-9.-]+$")) and
-    (.service_url | type == "string" and test("^https?://[A-Za-z0-9.-]+:[0-9]+/?$"))
+    (.replicas | type == "array" and length == 2) and
+    all(.replicas[];
+      (keys | sort) == ["name", "service_url", "ssh_host"] and
+      (.name | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9-]*$")) and
+      (.ssh_host | type == "string" and test("^[A-Za-z0-9.-]+$")) and
+      (.service_url | type == "string" and test("^https?://[A-Za-z0-9.-]+:[0-9]+/?$"))
+    )
   ) and
   ([.[].name] | length == (unique | length)) and
-  ([.[].ssh_host] | length == (unique | length)) and
-  ([.[].service_url | rtrimstr("/")] | length == (unique | length)) and
-  all(.[].ssh_host; . != $coordinator)
+  ([.[].replicas[].name] | length == (unique | length)) and
+  ([.[].replicas[].ssh_host] | length == (unique | length)) and
+  ([.[].replicas[].service_url | rtrimstr("/")] | length == (unique | length)) and
+  all(.[].replicas[].ssh_host; . != $coordinator)
 ' >/dev/null <<<"$ENHANCE_WORKERS_JSON"; then
-  echo "ENHANCE_WORKERS_JSON is invalid or contains duplicate workers" >&2
+  echo "ENHANCE_WORKERS_JSON is invalid or contains duplicate groups or replicas" >&2
   exit 2
 fi
 
-SERVER_CONFIG="$(jq -c '{workers: map({name, url: (.service_url | rtrimstr("/"))})}' <<<"$ENHANCE_WORKERS_JSON")"
+SERVER_CONFIG="$(jq -c '{groups: map({name, replicas: [.replicas[] | {name, url: (.service_url | rtrimstr("/"))}]})}' <<<"$ENHANCE_WORKERS_JSON")"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENHANCE_CADDYFILE="${ENHANCE_CADDYFILE:-$SCRIPT_DIR/../infra/digitalocean/production/deploy/Caddyfile}"
@@ -86,25 +92,28 @@ render_caddyfile() {
   fi
 }
 
-# Sealed shard ownership is a function of worker order, so an existing
-# inventory may only ever be extended at the end. `-n` matters: without it jq
+# Sealed shard ownership is a function of group order, so groups may only be
+# extended at the end. Replica membership may change without moving shards.
+# `-n` matters: without it jq
 # waits for stdin and, given none, produces no result, which `-e` reports as
 # failure for every input, including an unchanged inventory.
 topology_is_append_only() {
   local old="$1" new="$2"
   jq -n -e --argjson old "$old" --argjson new "$new" '
-    ($old.workers | type == "array") and
-    ($new.workers | length) >= ($old.workers | length) and
-    all(range(0; $old.workers | length); $new.workers[.] == $old.workers[.])
+    ($old.groups | type == "array") and
+    ($new.groups | length) >= ($old.groups | length) and
+    all(range(0; $old.groups | length); $new.groups[.].name == $old.groups[.].name)
   ' >/dev/null
 }
 
 if [[ "$MODE" == "validate" ]]; then
-  extended="$(jq -c '.workers += [{name: "self-test", url: "http://127.0.0.1:1"}]' <<<"$SERVER_CONFIG")"
+  extended="$(jq -c '.groups += [{name: "self-test", replicas: [{name: "self-test-a", url: "http://127.0.0.1:1"}]}]' <<<"$SERVER_CONFIG")"
   # Prepend rather than reverse: a one-entry inventory reversed is unchanged.
-  reordered="$(jq -c '.workers = [{name: "self-test", url: "http://127.0.0.1:1"}] + .workers' <<<"$SERVER_CONFIG")"
+  reordered="$(jq -c '.groups = [{name: "self-test", replicas: [{name: "self-test-a", url: "http://127.0.0.1:1"}]}] + .groups' <<<"$SERVER_CONFIG")"
+  replaced="$(jq -c '.groups[0].replicas[0].name = "replacement"' <<<"$SERVER_CONFIG")"
   topology_is_append_only "$SERVER_CONFIG" "$SERVER_CONFIG" || { echo "append-only check rejects an unchanged inventory" >&2; exit 1; }
-  topology_is_append_only "$SERVER_CONFIG" "$extended" || { echo "append-only check rejects an appended worker" >&2; exit 1; }
+  topology_is_append_only "$SERVER_CONFIG" "$extended" || { echo "append-only check rejects an appended group" >&2; exit 1; }
+  topology_is_append_only "$SERVER_CONFIG" "$replaced" || { echo "append-only check rejects a replica replacement" >&2; exit 1; }
   if topology_is_append_only "$SERVER_CONFIG" "$reordered"; then echo "append-only check accepts a prepended inventory" >&2; exit 1; fi
   rendered="$(mktemp)"
   render_caddyfile "$ENHANCE_CADDYFILE" "$rendered"
@@ -160,7 +169,7 @@ copy_to() {
   "${SCP[@]}" "$source" "$ENHANCE_DEPLOY_USER@$host:$destination"
 }
 
-mapfile -t WORKER_HOSTS < <(jq -r '.[].ssh_host' <<<"$ENHANCE_WORKERS_JSON")
+mapfile -t WORKER_HOSTS < <(jq -r '.[].replicas[].ssh_host' <<<"$ENHANCE_WORKERS_JSON")
 REMOTE_STAGE="/tmp/enhance-pir-$ENHANCE_RELEASE_SHA"
 
 preflight_host() {
@@ -543,7 +552,8 @@ if [[ "$rollout_ok" -eq 1 ]]; then
   new_metadata="$(curl --fail --silent --show-error "$ENHANCE_PUBLIC_URL/v1/enhance/generation")" || rollout_ok=0
 fi
 if [[ "$rollout_ok" -eq 1 ]]; then
-  if ! jq -e --argjson expected "$expected_workers" '
+  expected_groups="$(jq 'length' <<<"$ENHANCE_WORKERS_JSON")"
+  if ! jq -e --argjson expected "$expected_groups" '
     .network == "main" and .pool == "ironwood" and
     (.setup_seed | type == "number") and
     ([.shards[].worker] | unique | length) <= $expected and

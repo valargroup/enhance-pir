@@ -1,10 +1,17 @@
 locals {
   coordinator_name = "spendability-memo-pir-coordinator-01"
-  # One worker serves every table and shard. Append a name here only after
-  # reading the note on the one-to-two transition in README.md.
-  worker_names = [
-    "spendability-memo-pir-worker-01",
+  # Group order is stable shard placement. Replica membership may change
+  # without moving shards; append groups before the next six-shard boundary.
+  worker_groups = [
+    {
+      name = "shard-group-01"
+      replicas = [
+        "spendability-memo-pir-worker-01",
+        "spendability-memo-pir-worker-02",
+      ]
+    },
   ]
+  worker_names    = flatten([for group in local.worker_groups : group.replicas])
   common_packages = ["ca-certificates", "curl", "jq", "htop"]
 }
 
@@ -26,7 +33,7 @@ resource "digitalocean_droplet" "coordinator" {
   name       = local.coordinator_name
   image      = var.image
   region     = var.region
-  size       = var.size
+  size       = var.coordinator_size
   ssh_keys   = var.ssh_key_ids
   vpc_uuid   = digitalocean_vpc.enhance.id
   tags       = [digitalocean_tag.coordinator.name]
@@ -44,7 +51,7 @@ resource "digitalocean_droplet" "worker" {
   name       = local.worker_names[count.index]
   image      = var.image
   region     = var.region
-  size       = var.size
+  size       = var.worker_size
   ssh_keys   = var.ssh_key_ids
   vpc_uuid   = digitalocean_vpc.enhance.id
   tags       = [digitalocean_tag.worker.name]

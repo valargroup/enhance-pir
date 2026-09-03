@@ -6,10 +6,13 @@ use enhance_pir::client::{record_in_row, QuerySession};
 use enhance_pir::types::{
     EnhanceGeneration, EnhanceRecord, EnhanceRecordParts, SHARD_POSITIONS, SHARD_ROWS,
 };
-use enhance_pir_server::coordinator::{router, CoordinatorState, TableSetup, WorkerTarget};
+use enhance_pir_server::coordinator::{
+    router, CoordinatorState, TableSetup, WorkerGroup, WorkerTarget,
+};
 use enhance_pir_server::store::RecordJournal;
 use enhance_pir_server::types::{DatabaseId, ENHANCE_LAYOUT};
 use enhance_pir_server::wire::{EvaluateRequest, ShardQuery};
+use enhance_pir_server::worker::router as worker_router;
 use enhance_pir_server::worker::WorkerState;
 use enhance_pir_server::worker::RETAINED_GENERATIONS;
 use std::path::Path;
@@ -49,12 +52,26 @@ fn store_with(dir: &Path, count: u64, height: u64) -> RecordJournal {
 fn coordinator(worker: &WorkerState) -> CoordinatorState {
     CoordinatorState::new(vec![TableSetup {
         table: DatabaseId::Enhance,
-        pool: vec![WorkerTarget::Embedded {
-            name: "embedded".to_string(),
-            state: worker.clone(),
+        groups: vec![WorkerGroup {
+            name: "embedded-group".to_string(),
+            replicas: vec![WorkerTarget::Embedded {
+                name: "embedded".to_string(),
+                state: worker.clone(),
+            }],
         }],
     }])
     .expect("coordinator")
+}
+
+fn replicated_coordinator(replicas: Vec<WorkerTarget>) -> CoordinatorState {
+    CoordinatorState::new(vec![TableSetup {
+        table: DatabaseId::Enhance,
+        groups: vec![WorkerGroup {
+            name: "group-1".to_string(),
+            replicas,
+        }],
+    }])
+    .expect("replicated coordinator")
 }
 
 fn session(state: &CoordinatorState) -> QuerySession {
@@ -168,6 +185,115 @@ async fn publishes_two_shards_and_answers_boundary_positions() {
         superset.contains("complete active shard assignment"),
         "{superset}"
     );
+}
+
+#[tokio::test]
+async fn replicas_hold_the_same_assignment_and_produce_one_logical_answer() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = store_with(&dir.path().join("journal"), 120, 3_428_143);
+    let replica_a = WorkerState::new(dir.path().join("replica-a")).expect("replica a");
+    let replica_b = WorkerState::new(dir.path().join("replica-b")).expect("replica b");
+    let state = replicated_coordinator(vec![
+        WorkerTarget::Embedded {
+            name: "replica-a".to_string(),
+            state: replica_a.clone(),
+        },
+        WorkerTarget::Embedded {
+            name: "replica-b".to_string(),
+            state: replica_b.clone(),
+        },
+    ]);
+    state
+        .publish_from_store(&store, 3_428_143, hash(3_428_143))
+        .await
+        .expect("publish with both replicas");
+
+    let metadata = state.metadata().expect("metadata");
+    assert_eq!(metadata.shards[0].worker, "group-1");
+    assert_eq!(replica_a.cached_shard_count().await, 1);
+    assert_eq!(replica_b.cached_shard_count().await, 1);
+    let request = EvaluateRequest {
+        generation: metadata.generation,
+        shards: vec![ShardQuery {
+            shard_id: 0,
+            coefficients: vec![0; SHARD_ROWS],
+        }],
+    };
+    assert_eq!(
+        replica_a
+            .evaluate_local(DatabaseId::Enhance, request.clone())
+            .await
+            .expect("replica a evaluates"),
+        replica_b
+            .evaluate_local(DatabaseId::Enhance, request)
+            .await
+            .expect("replica b evaluates")
+    );
+
+    let session = session(&state);
+    assert_eq!(fetch(&state, &session, 42).await, record(42));
+    assert_eq!(fetch(&state, &session, 43).await, record(43));
+}
+
+#[tokio::test]
+async fn one_replica_is_a_publish_and_query_quorum() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = store_with(&dir.path().join("journal"), 120, 3_428_143);
+    let healthy = WorkerState::new(dir.path().join("healthy")).expect("healthy replica");
+    let state = replicated_coordinator(vec![
+        WorkerTarget::Remote {
+            name: "offline".to_string(),
+            base_url: "http://127.0.0.1:9".to_string(),
+        },
+        WorkerTarget::Embedded {
+            name: "healthy".to_string(),
+            state: healthy.clone(),
+        },
+    ]);
+    state
+        .publish_from_store(&store, 3_428_143, hash(3_428_143))
+        .await
+        .expect("one replica satisfies the group quorum");
+
+    assert_eq!(healthy.cached_shard_count().await, 1);
+    let session = session(&state);
+    assert_eq!(fetch(&state, &session, 7).await, record(7));
+}
+
+#[tokio::test]
+async fn query_retries_the_peer_when_the_selected_replica_goes_offline() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = store_with(&dir.path().join("journal"), 120, 3_428_143);
+    let remote = WorkerState::new(dir.path().join("remote")).expect("remote replica");
+    let peer = WorkerState::new(dir.path().join("peer")).expect("peer replica");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind worker");
+    let address = listener.local_addr().expect("worker address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, worker_router(remote))
+            .await
+            .expect("worker server");
+    });
+    let state = replicated_coordinator(vec![
+        WorkerTarget::Remote {
+            name: "remote".to_string(),
+            base_url: format!("http://{address}"),
+        },
+        WorkerTarget::Embedded {
+            name: "peer".to_string(),
+            state: peer,
+        },
+    ]);
+    state
+        .publish_from_store(&store, 3_428_143, hash(3_428_143))
+        .await
+        .expect("both replicas publish");
+
+    server.abort();
+    let _ = server.await;
+    let session = session(&state);
+    assert_eq!(fetch(&state, &session, 11).await, record(11));
 }
 
 /// Two generations must be answerable at once so a query built against the

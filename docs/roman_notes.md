@@ -119,7 +119,21 @@ Why 9 records per row?
 
 ## Scalability
 
-1. One controller and multipler workers
+1. One controller and multipler workers where each worker has a separate set of shards
+2. Because online evaluation is memory-bandwidth-bound, scale horizontally
+across workers with independent memory bandwidth. Each worker owns a
+disjoint shard range, and the coordinator evaluates all ranges in parallel
+A starting configuration is 4 vCPU / 4 GiB workers, sized to keep no more
+than approximately 2 GiB of total resident PIR state, including
+preprocessing artifacts and retained frontier generations. Confirm the
+worker size and shards-per-worker setting with an end-to-end load test
+3. Workers are organized into shard groups with two active-active replicas.
+Each query uses one ready replica per group and fails over to its peer; the
+replica partials are alternatives and must not both be added.
+4. Query size grows as the database grows. For example, at 1 million
+positions in Ironwood, we are at 0.79 MB query upload. As a result,
+we could have a coordinator-workers topology for the most recent 1M
+and split the older per 10M. Anonymity set is still large and is a strict improvement over today.
 
 Controller fans-out
 

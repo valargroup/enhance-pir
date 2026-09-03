@@ -1,10 +1,11 @@
 //! Server-internal geometry adapters for the single Enhance PIR database.
 
 pub use enhance_pir::types::{
-    logical_rows_for, setup_seed_bytes, used_rows_for, worker_index_for_shard, EnhanceGeneration,
-    EnhanceRecord, EnhanceRecordParts, ShardDescriptor, ACTIVATION_HEIGHT, CONFIRMATIONS,
-    ENHANCE_SETUP_SEED, ITEM_SIZE_BITS, NETWORK, POOL, PROTOCOL_REVISION, RECORDS_PER_ROW,
-    RECORD_BYTES, ROW_BYTES, SCHEMA_VERSION, SHARDS_PER_WORKER, SHARD_POSITIONS, SHARD_ROWS,
+    group_index_for_shard, logical_rows_for, setup_seed_bytes, used_rows_for,
+    worker_index_for_shard, EnhanceGeneration, EnhanceRecord, EnhanceRecordParts, ShardDescriptor,
+    ACTIVATION_HEIGHT, CONFIRMATIONS, ENHANCE_SETUP_SEED, ITEM_SIZE_BITS, NETWORK, POOL,
+    PROTOCOL_REVISION, RECORDS_PER_ROW, RECORD_BYTES, ROW_BYTES, SCHEMA_VERSION, SHARDS_PER_GROUP,
+    SHARDS_PER_WORKER, SHARD_POSITIONS, SHARD_ROWS,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

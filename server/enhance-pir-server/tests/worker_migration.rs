@@ -1,18 +1,13 @@
-//! The one-to-two-worker migration. Production runs a single worker, which
-//! `worker_index_for_shard` treats as owning every shard. Appending a second
-//! worker is the one step that moves published shards: everything at or
-//! beyond `SHARDS_PER_WORKER` goes to the new worker and is rebuilt there.
-//! This test is the rehearsal for `docs/enhance-pir-deploy.md`, "Adding the
-//! second worker": the coordinator restarts with a two-entry inventory,
-//! republishes from the same journal, and every client-visible byte is
-//! unchanged while ownership moves exactly as documented.
+//! Worker-group migration and placement. Replica membership may change without
+//! moving shards; appending a group only claims shards at or beyond the stable
+//! six-shard capacity boundary.
 
 use enhance_pir::client::{record_in_row, QuerySession};
-use enhance_pir_server::coordinator::{CoordinatorState, TableSetup, WorkerTarget};
+use enhance_pir_server::coordinator::{CoordinatorState, TableSetup, WorkerGroup, WorkerTarget};
 use enhance_pir_server::store::RecordJournal;
 use enhance_pir_server::types::{
-    worker_index_for_shard, DatabaseId, EnhanceRecord, EnhanceRecordParts, ENHANCE_LAYOUT,
-    SHARDS_PER_WORKER, SHARD_POSITIONS,
+    group_index_for_shard, DatabaseId, EnhanceRecord, EnhanceRecordParts, ENHANCE_LAYOUT,
+    SHARDS_PER_GROUP, SHARD_POSITIONS,
 };
 use enhance_pir_server::worker::WorkerState;
 use std::path::Path;
@@ -49,14 +44,17 @@ fn store_with(dir: &Path, count: u64, height: u64) -> RecordJournal {
     store
 }
 
-fn coordinator(pool: &[(&str, &WorkerState)]) -> CoordinatorState {
+fn coordinator(groups: &[(&str, &WorkerState)]) -> CoordinatorState {
     CoordinatorState::new(vec![TableSetup {
         table: DatabaseId::Enhance,
-        pool: pool
+        groups: groups
             .iter()
-            .map(|(name, state)| WorkerTarget::Embedded {
+            .map(|(name, state)| WorkerGroup {
                 name: (*name).to_string(),
-                state: (*state).clone(),
+                replicas: vec![WorkerTarget::Embedded {
+                    name: format!("{name}-replica"),
+                    state: (*state).clone(),
+                }],
             })
             .collect(),
     }])
@@ -86,33 +84,33 @@ async fn fetch(state: &CoordinatorState, session: &QuerySession, position: u64) 
 
 #[test]
 fn placement_rule_for_the_migration_is_as_documented() {
-    // One worker owns everything, however many shards exist.
+    // One logical group owns everything, however many shards exist.
     for shard in 0..10 {
-        assert_eq!(worker_index_for_shard(shard, 1), Some(0));
+        assert_eq!(group_index_for_shard(shard, 1), Some(0));
     }
-    // Two workers: shards below the quantum stay, the rest move to the new one
+    // Two groups: shards below the quantum stay, the rest move to the new one
     // and shards beyond its range are unowned until a third worker is appended.
-    for shard in 0..SHARDS_PER_WORKER {
-        assert_eq!(worker_index_for_shard(shard, 2), Some(0));
+    for shard in 0..SHARDS_PER_GROUP {
+        assert_eq!(group_index_for_shard(shard, 2), Some(0));
     }
-    for shard in SHARDS_PER_WORKER..2 * SHARDS_PER_WORKER {
-        assert_eq!(worker_index_for_shard(shard, 2), Some(1));
+    for shard in SHARDS_PER_GROUP..2 * SHARDS_PER_GROUP {
+        assert_eq!(group_index_for_shard(shard, 2), Some(1));
     }
-    assert_eq!(worker_index_for_shard(2 * SHARDS_PER_WORKER, 2), None);
+    assert_eq!(group_index_for_shard(2 * SHARDS_PER_GROUP, 2), None);
     // Every append after the first moves nothing.
-    for shard in 0..2 * SHARDS_PER_WORKER {
+    for shard in 0..2 * SHARDS_PER_GROUP {
         assert_eq!(
-            worker_index_for_shard(shard, 2),
-            worker_index_for_shard(shard, 3)
+            group_index_for_shard(shard, 2),
+            group_index_for_shard(shard, 3)
         );
     }
 }
 
-/// One worker serving three shards, then a coordinator restart with a second
-/// worker appended. Shards below `SHARDS_PER_WORKER` keep their digest and
-/// owner; the rest move to the new worker; every answer is byte-identical.
+/// One group serving three shards, then a coordinator restart with a second
+/// group appended. All shards remain below the first group's capacity and
+/// every answer and digest remains byte-identical.
 #[tokio::test]
-async fn second_worker_takes_the_upper_shards_without_changing_answers() {
+async fn appending_a_group_does_not_move_existing_in_range_shards() {
     let dir = tempfile::tempdir().expect("tempdir");
     let height = 3_428_143;
     let count = 2 * SHARD_POSITIONS as u64 + 300; // shards 0 and 1 sealed, 2 frontier
@@ -128,12 +126,12 @@ async fn second_worker_takes_the_upper_shards_without_changing_answers() {
         count - 1,
     ];
 
-    // Before: the production shape, one worker owns every shard.
+    // Before: the original production shape, one group owns every shard.
     let before = coordinator(&[("worker-1", &worker_1)]);
     before
         .publish_from_store(&store, height, hash(height))
         .await
-        .expect("publish with one worker");
+        .expect("publish with one group");
     let manifest_before = before.manifest().expect("manifest").tables[&DatabaseId::Enhance].clone();
     assert_eq!(manifest_before.shards.len(), 3);
     assert!(manifest_before
@@ -166,16 +164,7 @@ async fn second_worker_takes_the_upper_shards_without_changing_answers() {
     assert_eq!(manifest_after.shards.len(), 3);
     for (old, new) in manifest_before.shards.iter().zip(&manifest_after.shards) {
         assert_eq!(old.shard_id, new.shard_id);
-        let expected_owner = if new.shard_id < SHARDS_PER_WORKER {
-            "worker-1"
-        } else {
-            "worker-2"
-        };
-        assert_eq!(
-            new.worker, expected_owner,
-            "owner of shard {}",
-            new.shard_id
-        );
+        assert_eq!(new.worker, "worker-1", "owner of shard {}", new.shard_id);
         if old.sealed {
             assert!(new.sealed);
             assert_eq!(
@@ -197,10 +186,10 @@ async fn second_worker_takes_the_upper_shards_without_changing_answers() {
     }
     assert_eq!(fetch(&after, &session_after, count).await, record(count));
 
-    // The moved shard now lives on worker-2 and is gone from worker-1's active
-    // assignment: a query that reaches worker-1 for shard 2 is refused.
+    // The unused second group is neither prepared nor activated.
+    assert_eq!(worker_2.cached_shard_count().await, 0);
     let generation = after.metadata().expect("metadata").generation;
-    let refused = worker_1
+    let refused = worker_2
         .evaluate_local(
             DatabaseId::Enhance,
             enhance_pir_server::wire::EvaluateRequest {
@@ -214,9 +203,6 @@ async fn second_worker_takes_the_upper_shards_without_changing_answers() {
             },
         )
         .await
-        .expect_err("worker-1 no longer owns shard 2");
-    assert!(
-        refused.contains("complete active shard assignment"),
-        "{refused}"
-    );
+        .expect_err("worker-2 has no active assignment");
+    assert!(refused.contains("generation mismatch"), "{refused}");
 }

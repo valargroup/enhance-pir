@@ -25,6 +25,8 @@ pub struct AlertEngine {
     recent: VecDeque<(SystemTime, String)>,
     scrape_failures: u32,
     ready_failed_since: Option<Instant>,
+    worker_groups: BTreeMap<String, BTreeMap<String, BTreeMap<String, f64>>>,
+    workers: BTreeMap<String, BTreeMap<String, f64>>,
 }
 
 pub struct AlertInput<'a> {
@@ -43,7 +45,20 @@ impl AlertEngine {
             recent: VecDeque::new(),
             scrape_failures: 0,
             ready_failed_since: None,
+            worker_groups: BTreeMap::new(),
+            workers: BTreeMap::new(),
         }
+    }
+
+    pub fn set_worker_groups(
+        &mut self,
+        worker_groups: BTreeMap<String, BTreeMap<String, BTreeMap<String, f64>>>,
+    ) {
+        self.worker_groups = worker_groups;
+    }
+
+    pub fn set_workers(&mut self, workers: BTreeMap<String, BTreeMap<String, f64>>) {
+        self.workers = workers;
     }
 
     pub fn evaluate(&mut self, input: AlertInput<'_>) -> Vec<AlertTransition> {
@@ -158,6 +173,35 @@ impl AlertEngine {
                 format!("< {} MiB", thresholds::MEMORY_AVAILABLE_BYTES / 1024 / 1024),
             ),
         );
+
+        for (table, groups) in &self.worker_groups {
+            for (group, gauges) in groups {
+                let configured = gauges.get("configured_replicas").copied().unwrap_or(0.0);
+                let ready = gauges.get("ready_replicas").copied().unwrap_or(0.0);
+                conditions.insert(
+                    format!("worker_group_{table}_{group}"),
+                    (
+                        configured > 0.0 && ready < configured,
+                        format!("{ready:.0}/{configured:.0} replicas ready"),
+                        "all configured replicas ready".to_string(),
+                    ),
+                );
+            }
+        }
+        for (worker, gauges) in &self.workers {
+            let rss = gauges.get("process_rss_bytes").copied().unwrap_or(0.0);
+            conditions.insert(
+                format!("worker_rss_{worker}"),
+                (
+                    rss > thresholds::WORKER_RSS_LIMIT_BYTES as f64,
+                    format!("{:.0} MiB resident", rss / 1024.0 / 1024.0),
+                    format!(
+                        "<= {} MiB",
+                        thresholds::WORKER_RSS_LIMIT_BYTES / 1024 / 1024
+                    ),
+                ),
+            );
+        }
 
         let mut transitions = Vec::new();
         for (check, (firing, observed, threshold)) in conditions {
@@ -535,5 +579,36 @@ mod tests {
                 host: &host,
             })
             .is_empty());
+    }
+
+    #[test]
+    fn loss_of_shard_group_redundancy_pages_without_failing_readiness() {
+        let now = Instant::now();
+        let host = healthy_host();
+        let endpoints = BTreeMap::new();
+        let mut engine = AlertEngine::new(Schema::enhance_default());
+        engine.set_worker_groups(BTreeMap::from([(
+            "enhance".to_string(),
+            BTreeMap::from([(
+                "group-1".to_string(),
+                BTreeMap::from([
+                    ("configured_replicas".to_string(), 2.0),
+                    ("ready_replicas".to_string(), 1.0),
+                ]),
+            )]),
+        )]));
+
+        let fired = engine.evaluate(AlertInput {
+            now,
+            scrape_ok: true,
+            ready_ok: true,
+            endpoints: &endpoints,
+            host: &host,
+        });
+        let [AlertTransition::Fired(alert)] = fired.as_slice() else {
+            panic!("expected one redundancy alert");
+        };
+        assert_eq!(alert.check, "worker_group_enhance_group-1");
+        assert_eq!(alert.observed, "1/2 replicas ready");
     }
 }

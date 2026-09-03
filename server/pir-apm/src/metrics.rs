@@ -37,6 +37,8 @@ pub struct MetricsSnapshot {
     pub tables: BTreeMap<String, BTreeMap<String, f64>>,
     /// worker name -> table name -> (gauge stem, value)
     pub worker_tables: BTreeMap<String, BTreeMap<String, BTreeMap<String, f64>>>,
+    /// table name -> group name -> (redundancy gauge stem, value)
+    pub worker_groups: BTreeMap<String, BTreeMap<String, BTreeMap<String, f64>>>,
     pub resident_memory_bytes: Option<f64>,
     pub process_start_time_seconds: Option<f64>,
 }
@@ -336,6 +338,8 @@ pub fn parse_prometheus(
     let mut tables: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
     let mut worker_tables: BTreeMap<String, BTreeMap<String, BTreeMap<String, f64>>> =
         BTreeMap::new();
+    let mut worker_groups: BTreeMap<String, BTreeMap<String, BTreeMap<String, f64>>> =
+        BTreeMap::new();
     let mut resident_memory_bytes = None;
     let mut process_start_time_seconds = None;
 
@@ -404,6 +408,17 @@ pub fn parse_prometheus(
             process_start_time_seconds = Some(sample.value);
         } else if name.starts_with(&schema.gauge_prefix) {
             snapshot_gauges.insert(name.to_string(), sample.value);
+        } else if let Some(stem) = name.strip_prefix(&schema.worker_group_prefix) {
+            if let (Some(table), Some(group)) =
+                (sample.labels.get("table"), sample.labels.get("group"))
+            {
+                worker_groups
+                    .entry(table.clone())
+                    .or_default()
+                    .entry(group.clone())
+                    .or_default()
+                    .insert(stem.to_string(), sample.value);
+            }
         } else if let Some(stem) = name.strip_prefix(&schema.worker_table_prefix) {
             if let (Some(worker), Some(table)) =
                 (sample.labels.get("worker"), sample.labels.get("table"))
@@ -451,6 +466,7 @@ pub fn parse_prometheus(
         layout,
         tables,
         worker_tables,
+        worker_groups,
         resident_memory_bytes,
         process_start_time_seconds,
     })
@@ -652,6 +668,8 @@ enhance_table_registered{table="action"} 1
 enhance_table_shards{table="action"} 3
 enhance_worker_table_index{table="action",worker="worker-1"} 0
 enhance_worker_table_assigned_shards{table="action",worker="worker-1"} 2
+enhance_worker_group_configured_replicas{table="action",group="group-1"} 2
+enhance_worker_group_ready_replicas{table="action",group="group-1"} 1
 enhance_http_requests_total{endpoint="witness_query",method="POST",status="200"} 5
 enhance_http_request_processing_duration_seconds_count{endpoint="witness_query"} 5
 enhance_http_requests_total{endpoint="Bad Label",method="GET",status="200"} 1
@@ -682,6 +700,14 @@ process_start_time_seconds 1787880000
         assert_eq!(parsed.layout["confirmations"], 10.0);
         assert_eq!(parsed.tables["action"]["registered"], 1.0);
         assert_eq!(parsed.tables["action"]["shards"], 3.0);
+        assert_eq!(
+            parsed.worker_groups["action"]["group-1"]["configured_replicas"],
+            2.0
+        );
+        assert_eq!(
+            parsed.worker_groups["action"]["group-1"]["ready_replicas"],
+            1.0
+        );
         assert_eq!(parsed.worker_tables["worker-1"]["action"]["index"], 0.0);
         assert_eq!(
             parsed.worker_tables["worker-1"]["action"]["assigned_shards"],
@@ -752,6 +778,7 @@ process_start_time_seconds 1787880000
                 layout: BTreeMap::new(),
                 tables: BTreeMap::new(),
                 worker_tables: BTreeMap::new(),
+                worker_groups: BTreeMap::new(),
                 resident_memory_bytes: None,
                 process_start_time_seconds: None,
             });
@@ -824,6 +851,7 @@ process_start_time_seconds 1787880000
                 layout: BTreeMap::new(),
                 tables: BTreeMap::new(),
                 worker_tables: BTreeMap::new(),
+                worker_groups: BTreeMap::new(),
                 resident_memory_bytes: None,
                 process_start_time_seconds: None,
             });
@@ -873,6 +901,7 @@ process_start_time_seconds 1787880000
                 layout: BTreeMap::new(),
                 tables: BTreeMap::new(),
                 worker_tables: BTreeMap::new(),
+                worker_groups: BTreeMap::new(),
                 resident_memory_bytes: None,
                 process_start_time_seconds: Some(100.0 + index as f64),
             });
@@ -958,6 +987,7 @@ enhance_snapshot_generation 1
             layout: BTreeMap::new(),
             tables: BTreeMap::new(),
             worker_tables: BTreeMap::new(),
+            worker_groups: BTreeMap::new(),
             resident_memory_bytes: None,
             process_start_time_seconds: None,
         });
@@ -1013,6 +1043,7 @@ enhance_snapshot_generation 1
                 layout: BTreeMap::new(),
                 tables: BTreeMap::new(),
                 worker_tables: BTreeMap::new(),
+                worker_groups: BTreeMap::new(),
                 resident_memory_bytes: None,
                 process_start_time_seconds: None,
             });

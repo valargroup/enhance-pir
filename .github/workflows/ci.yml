@@ -40,5 +40,5 @@ jobs:
           ENHANCE_DEPLOY_USER: deploy
           ENHANCE_PUBLIC_URL: https://enhance.example.net
           ENHANCE_WORKERS_JSON: >-
-            [{"name":"worker-1","ssh_host":"worker-1.example.net","service_url":"http://10.0.0.2:8091"},{"name":"worker-2","ssh_host":"worker-2.example.net","service_url":"http://10.0.0.3:8091"}]
+            [{"name":"shard-group-01","replicas":[{"name":"worker-01a","ssh_host":"worker-01a.example.net","service_url":"http://10.0.0.2:8091"},{"name":"worker-01b","ssh_host":"worker-01b.example.net","service_url":"http://10.0.0.3:8091"}]}]
         run: ops/scripts/deploy-enhance-pir.sh validate

@@ -66,6 +66,9 @@ struct Metrics {
     worker_total_memory_bytes: IntGaugeVec,
     worker_available_memory_bytes: IntGaugeVec,
     worker_process_rss_bytes: IntGaugeVec,
+    worker_group_configured_replicas: IntGaugeVec,
+    worker_group_ready_replicas: IntGaugeVec,
+    worker_replica_requests: IntCounterVec,
     layout_confirmations: IntGauge,
     layout_activation_height: IntGauge,
 }
@@ -80,6 +83,10 @@ fn table_gauge(name: &str, help: &str) -> IntGaugeVec {
 
 fn worker_table_gauge(name: &str, help: &str) -> IntGaugeVec {
     IntGaugeVec::new(Opts::new(name, help), &["worker", "table"]).expect("valid metric")
+}
+
+fn worker_group_gauge(name: &str, help: &str) -> IntGaugeVec {
+    IntGaugeVec::new(Opts::new(name, help), &["table", "group"]).expect("valid metric")
 }
 
 fn gauge(name: &str, help: &str) -> IntGauge {
@@ -181,11 +188,11 @@ fn build_metrics() -> Metrics {
     );
     let table_shards_per_worker = table_gauge(
         "enhance_table_shards_per_worker",
-        "Fixed number of shard ids each worker in the table's pool owns.",
+        "Fixed number of shard ids each logical worker group owns (legacy metric name).",
     );
     let table_pool_workers = table_gauge(
         "enhance_table_pool_workers",
-        "Workers in the table's ordered pool.",
+        "Logical shard groups in the table's ordered pool (legacy metric name).",
     );
     let table_query_slots_available = table_gauge(
         "enhance_table_query_slots_available",
@@ -226,7 +233,7 @@ fn build_metrics() -> Metrics {
     // per table, so these are only meaningful with both labels.
     let worker_table_index = worker_table_gauge(
         "enhance_worker_table_index",
-        "Zero-based position of the worker in this table's pool; fixes which shards it owns.",
+        "Zero-based position of the worker's logical group in this table's pool.",
     );
     let worker_table_assigned_shards = worker_table_gauge(
         "enhance_worker_table_assigned_shards",
@@ -257,6 +264,22 @@ fn build_metrics() -> Metrics {
         "enhance_worker_process_rss_bytes",
         "Resident memory of the worker process, as reported by its health probe.",
     );
+    let worker_group_configured_replicas = worker_group_gauge(
+        "enhance_worker_group_configured_replicas",
+        "Replicas configured for this logical shard group.",
+    );
+    let worker_group_ready_replicas = worker_group_gauge(
+        "enhance_worker_group_ready_replicas",
+        "Replicas ready for the newest published generation in this shard group.",
+    );
+    let worker_replica_requests = IntCounterVec::new(
+        Opts::new(
+            "enhance_worker_replica_requests_total",
+            "Replica query attempts partitioned by logical group, replica, and outcome.",
+        ),
+        &["group", "replica", "outcome"],
+    )
+    .expect("valid metric");
 
     // Chain-level constants, exported so the dashboard's explainer never
     // hardcodes a number that lives in `types.rs`.
@@ -305,6 +328,9 @@ fn build_metrics() -> Metrics {
         Box::new(worker_total_memory_bytes.clone()),
         Box::new(worker_available_memory_bytes.clone()),
         Box::new(worker_process_rss_bytes.clone()),
+        Box::new(worker_group_configured_replicas.clone()),
+        Box::new(worker_group_ready_replicas.clone()),
+        Box::new(worker_replica_requests.clone()),
         Box::new(layout_confirmations.clone()),
         Box::new(layout_activation_height.clone()),
     ] {
@@ -354,6 +380,9 @@ fn build_metrics() -> Metrics {
         worker_total_memory_bytes,
         worker_available_memory_bytes,
         worker_process_rss_bytes,
+        worker_group_configured_replicas,
+        worker_group_ready_replicas,
+        worker_replica_requests,
         layout_confirmations,
         layout_activation_height,
     }
@@ -514,6 +543,14 @@ pub struct WorkerObservation {
     pub tables: Vec<WorkerTableObservation>,
 }
 
+#[derive(Clone, Debug)]
+pub struct WorkerGroupObservation {
+    pub table: DatabaseId,
+    pub name: String,
+    pub configured_replicas: u64,
+    pub ready_replicas: u64,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Observation {
     pub phase: Option<CoordinatorPhase>,
@@ -523,6 +560,7 @@ pub struct Observation {
     pub retained_generations: u64,
     pub tables: Vec<TableObservation>,
     pub worker_details: Vec<WorkerObservation>,
+    pub worker_groups: Vec<WorkerGroupObservation>,
 }
 
 fn clamp(value: u64) -> i64 {
@@ -631,8 +669,24 @@ pub fn record_observation(observation: &Observation) {
                 .set(clamp(share.active_shards));
         }
     }
+    for group in &observation.worker_groups {
+        let label = [group.table.as_str(), group.name.as_str()];
+        m.worker_group_configured_replicas
+            .with_label_values(&label)
+            .set(clamp(group.configured_replicas));
+        m.worker_group_ready_replicas
+            .with_label_values(&label)
+            .set(clamp(group.ready_replicas));
+    }
     m.layout_confirmations.set(clamp(CONFIRMATIONS));
     m.layout_activation_height.set(clamp(ACTIVATION_HEIGHT));
+}
+
+pub fn record_replica_request(group: &str, replica: &str, outcome: &str) {
+    metrics()
+        .worker_replica_requests
+        .with_label_values(&[group, replica, outcome])
+        .inc();
 }
 
 /// Render the registry as Prometheus text exposition.
@@ -828,6 +882,12 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            worker_groups: vec![WorkerGroupObservation {
+                table: DatabaseId::Enhance,
+                name: "shard-group-01".into(),
+                configured_replicas: 2,
+                ready_replicas: 1,
+            }],
         });
         assert_eq!(m.snapshot_phase_code.get(), 2);
         assert_eq!(m.snapshot_sync_current_height.get(), 0);
@@ -849,6 +909,9 @@ mod tests {
         )));
         assert!(body.contains("enhance_worker_up{worker=\"worker-1\"} 1"));
         assert!(body.contains("enhance_worker_up{worker=\"worker-2\"} 0"));
+        assert!(body.contains(
+            "enhance_worker_group_ready_replicas{group=\"shard-group-01\",table=\"enhance\"} 1"
+        ));
         assert!(body.contains("enhance_worker_index{worker=\"worker-2\"} 1"));
         assert!(body.contains(
             "enhance_worker_table_assigned_shards{table=\"enhance\",worker=\"worker-1\"} 2"

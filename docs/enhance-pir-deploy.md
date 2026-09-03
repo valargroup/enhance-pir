@@ -24,9 +24,20 @@ script.
 ENHANCE_COORDINATOR_HOST=coordinator.example.net \
 ENHANCE_DEPLOY_USER=deploy \
 ENHANCE_PUBLIC_URL=https://enhance.example.net \
-ENHANCE_WORKERS_JSON='[{"name":"worker-1","ssh_host":"worker-1.example.net","service_url":"http://10.0.0.2:8091"},{"name":"worker-2","ssh_host":"worker-2.example.net","service_url":"http://10.0.0.3:8091"}]' \
+ENHANCE_WORKERS_JSON='[{"name":"shard-group-01","replicas":[{"name":"worker-01a","ssh_host":"worker-01a.example.net","service_url":"http://10.0.0.2:8091"},{"name":"worker-01b","ssh_host":"worker-01b.example.net","service_url":"http://10.0.0.3:8091"}]}]' \
 ops/scripts/deploy-enhance-pir.sh validate
 ```
+
+Each ordered shard group owns six shards and has exactly two active-active
+replicas. Group order is append-only because it determines shard placement;
+replicas inside an existing group may be replaced without moving shards. A
+generation publishes once at least one replica in every used group is ready.
+The first rollout from the legacy flat inventory is an intentional topology
+format migration and requires `ENHANCE_ALLOW_TOPOLOGY_CHANGE=true`; later
+replica replacements do not require that override.
+Each worker service is cgroup-limited to 2 GiB with swap disabled. A replica
+that exceeds the limit is restarted by systemd; its peer continues serving the
+group while it rebuilds on the next publication.
 
 Current runtime paths are `/etc/enhance-pir`, `/opt/enhance-pir`,
 `/srv/zakura/enhance-data`, and `/srv/enhance-pir/artifacts`. Existing

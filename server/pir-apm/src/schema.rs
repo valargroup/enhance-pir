@@ -35,6 +35,8 @@ pub struct Schema {
     pub table_prefix: String,
     /// `<prefix>_worker_table_*{worker="...",table="..."}` ownership families.
     pub worker_table_prefix: String,
+    /// `<prefix>_worker_group_*{table="...",group="..."}` redundancy families.
+    pub worker_group_prefix: String,
 }
 
 impl Schema {
@@ -100,6 +102,7 @@ impl Schema {
             layout_prefix: format!("{prefix}_layout_"),
             table_prefix: format!("{prefix}_table_"),
             worker_table_prefix: format!("{prefix}_worker_table_"),
+            worker_group_prefix: format!("{prefix}_worker_group_"),
             prefix: prefix.to_string(),
             endpoints,
             processing_endpoints,
@@ -197,6 +200,7 @@ mod tests {
         assert!(schema.is_informational("health"));
         assert_eq!(schema.table_prefix, "enhance_table_");
         assert_eq!(schema.worker_table_prefix, "enhance_worker_table_");
+        assert_eq!(schema.worker_group_prefix, "enhance_worker_group_");
         assert_eq!(schema.observed_budget("query"), None);
     }
 

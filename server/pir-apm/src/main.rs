@@ -134,6 +134,18 @@ async fn scrape_loop(
         }
 
         let windows = rolling.windows();
+        alerts.set_worker_groups(
+            rolling
+                .latest()
+                .map(|snapshot| snapshot.worker_groups.clone())
+                .unwrap_or_default(),
+        );
+        alerts.set_workers(
+            rolling
+                .latest()
+                .map(|snapshot| snapshot.workers.clone())
+                .unwrap_or_default(),
+        );
         let transitions = alerts.evaluate(AlertInput {
             now,
             scrape_ok: scrape_ok && scrape_error.is_none(),

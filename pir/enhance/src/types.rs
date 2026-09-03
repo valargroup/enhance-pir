@@ -12,7 +12,13 @@ pub const RECORDS_PER_ROW: usize = 9;
 pub const ROW_BYTES: usize = RECORD_BYTES * RECORDS_PER_ROW;
 pub const SHARD_ROWS: usize = 8_192;
 pub const SHARD_POSITIONS: usize = SHARD_ROWS * RECORDS_PER_ROW;
-pub const SHARDS_PER_WORKER: u64 = 2;
+/// Shards assigned to one logical worker group. Every replica in the group
+/// holds the complete assignment; replicas are alternatives, not additive
+/// contributors to a query.
+pub const SHARDS_PER_GROUP: u64 = 6;
+/// Backwards-compatible alias for callers compiled against the former
+/// single-owner placement terminology.
+pub const SHARDS_PER_WORKER: u64 = SHARDS_PER_GROUP;
 pub const ITEM_SIZE_BITS: u64 = (ROW_BYTES * 8) as u64;
 
 pub const RECORD_EPHEMERAL_KEY_OFFSET: usize = 0;
@@ -139,15 +145,20 @@ pub fn logical_rows_for(used_rows: u64) -> u64 {
     used_rows.max(SHARD_ROWS as u64).next_power_of_two()
 }
 
-pub fn worker_index_for_shard(shard_id: u64, worker_count: usize) -> Option<usize> {
-    if worker_count == 0 {
+pub fn group_index_for_shard(shard_id: u64, group_count: usize) -> Option<usize> {
+    if group_count == 0 {
         return None;
     }
-    if worker_count == 1 {
+    if group_count == 1 {
         return Some(0);
     }
-    let index = usize::try_from(shard_id / SHARDS_PER_WORKER).ok()?;
-    (index < worker_count).then_some(index)
+    let index = usize::try_from(shard_id / SHARDS_PER_GROUP).ok()?;
+    (index < group_count).then_some(index)
+}
+
+/// Backwards-compatible alias for the former single-owner placement helper.
+pub fn worker_index_for_shard(shard_id: u64, worker_count: usize) -> Option<usize> {
+    group_index_for_shard(shard_id, worker_count)
 }
 
 #[cfg(test)]

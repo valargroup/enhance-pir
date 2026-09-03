@@ -2,7 +2,7 @@ use crate::ipir::{global_parameters, shard_parameters};
 use crate::metrics;
 use crate::store::RecordJournal;
 use crate::types::{
-    worker_index_for_shard, DatabaseId, DatabaseLayout, EnhanceGeneration, GenerationManifest,
+    group_index_for_shard, DatabaseId, DatabaseLayout, EnhanceGeneration, GenerationManifest,
     ShardDescriptor, TableManifest, PROTOCOL_REVISION,
 };
 use crate::wire::{
@@ -26,7 +26,8 @@ use ipir_sp::server::{
 use ipir_sp::YpirSchemeParams;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{RwLock, Semaphore};
@@ -55,12 +56,21 @@ impl WorkerTarget {
     }
 }
 
-/// One table the coordinator serves and the ordered worker pool that owns its
-/// shards. Pools may share physical hosts; ownership is per pool.
+/// Two or more interchangeable workers holding the same complete shard range.
+/// The name is stable placement identity; replica names identify physical
+/// processes and may be replaced without moving shards.
+#[derive(Clone)]
+pub struct WorkerGroup {
+    pub name: String,
+    pub replicas: Vec<WorkerTarget>,
+}
+
+/// One table the coordinator serves and the ordered worker groups that own its
+/// shards. Groups may share physical hosts; ownership is per table.
 #[derive(Clone)]
 pub struct TableSetup {
     pub table: DatabaseId,
-    pub pool: Vec<WorkerTarget>,
+    pub groups: Vec<WorkerGroup>,
 }
 
 /// What the coordinator needs from a table's rows to publish it. Journals
@@ -145,6 +155,33 @@ pub struct TableSnapshot {
     pub top_key_images: TopKeyImages<'static>,
     pub public_params: Vec<u8>,
     pub public_params_epoch: [u8; 8],
+    ready_groups: BTreeMap<String, Arc<ReadyWorkerGroup>>,
+}
+
+struct ReadyWorkerGroup {
+    replicas: Vec<WorkerTarget>,
+    next: AtomicUsize,
+}
+
+#[derive(Debug)]
+struct WorkerEvaluationError {
+    message: String,
+    retryable: bool,
+}
+
+impl std::fmt::Display for WorkerEvaluationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl ReadyWorkerGroup {
+    fn replicas_for_request(&self) -> Vec<WorkerTarget> {
+        let start = self.next.fetch_add(1, Ordering::Relaxed) % self.replicas.len();
+        (0..self.replicas.len())
+            .map(|offset| self.replicas[(start + offset) % self.replicas.len()].clone())
+            .collect()
+    }
 }
 
 /// Every table at one anchor. Immutable once published.
@@ -207,16 +244,46 @@ impl CoordinatorState {
         }
         let mut tables = BTreeMap::new();
         for setup in setups {
-            if setup.pool.is_empty() {
-                return Err(format!("table {} needs at least one worker", setup.table));
-            }
-            let mut names: Vec<_> = setup.pool.iter().map(|worker| worker.name()).collect();
-            names.sort_unstable();
-            if names.windows(2).any(|pair| pair[0] == pair[1]) {
+            if setup.groups.is_empty() {
                 return Err(format!(
-                    "worker names in the {} pool must be unique",
+                    "table {} needs at least one worker group",
                     setup.table
                 ));
+            }
+            let mut group_names: Vec<_> = setup
+                .groups
+                .iter()
+                .map(|group| group.name.as_str())
+                .collect();
+            group_names.sort_unstable();
+            if group_names.windows(2).any(|pair| pair[0] == pair[1]) {
+                return Err(format!(
+                    "worker group names in the {} pool must be unique",
+                    setup.table
+                ));
+            }
+            let mut replica_names = HashSet::new();
+            for group in &setup.groups {
+                if group.name.is_empty() {
+                    return Err(format!(
+                        "worker group name in {} must not be empty",
+                        setup.table
+                    ));
+                }
+                if group.replicas.is_empty() {
+                    return Err(format!(
+                        "worker group {} in {} needs at least one replica",
+                        group.name, setup.table
+                    ));
+                }
+                for replica in &group.replicas {
+                    if !replica_names.insert(replica.name().to_string()) {
+                        return Err(format!(
+                            "worker replica names in the {} pool must be unique",
+                            setup.table
+                        ));
+                    }
+                }
             }
             if tables.contains_key(&setup.table) {
                 return Err(format!("table {} is configured twice", setup.table));
@@ -325,12 +392,13 @@ impl CoordinatorState {
             .map(|snapshot| snapshot.public_params.clone())
     }
 
-    /// Every distinct worker across all pools, in first-seen pool order.
+    /// Every distinct replica across all pools, in first-seen group order.
     fn workers(&self) -> Vec<WorkerTarget> {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         self.tables
             .values()
-            .flat_map(|table| table.setup.pool.iter())
+            .flat_map(|table| table.setup.groups.iter())
+            .flat_map(|group| group.replicas.iter())
             .filter(|worker| seen.insert(worker.name().to_string()))
             .cloned()
             .collect()
@@ -353,7 +421,9 @@ impl CoordinatorState {
                 metrics::TableObservation {
                     table,
                     registered: state.is_some(),
-                    pool_workers: state.map_or(0, |t| t.setup.pool.len() as u64),
+                    // Retain the existing metric field name, but report
+                    // logical groups so capacity is not doubled by replicas.
+                    pool_workers: state.map_or(0, |t| t.setup.groups.len() as u64),
                     query_slots_available: state
                         .map_or(0, |t| t.query_slots.available_permits() as u64),
                     positions: published.map_or(0, |t| t.positions),
@@ -373,14 +443,16 @@ impl CoordinatorState {
                 .tables
                 .iter()
                 .filter_map(|(table, state)| {
-                    let pool_index = state
-                        .setup
-                        .pool
-                        .iter()
-                        .position(|candidate| candidate.name() == name)?;
+                    let (pool_index, group) =
+                        state.setup.groups.iter().enumerate().find(|(_, group)| {
+                            group
+                                .replicas
+                                .iter()
+                                .any(|candidate| candidate.name() == name)
+                        })?;
                     let assigned: Vec<&ShardDescriptor> = manifest
                         .and_then(|m| m.tables.get(table))
-                        .map(|t| t.shards.iter().filter(|s| s.worker == name).collect())
+                        .map(|t| t.shards.iter().filter(|s| s.worker == group.name).collect())
                         .unwrap_or_default();
                     Some((
                         *table,
@@ -451,6 +523,24 @@ impl CoordinatorState {
             .into_iter()
             .map(|(_, observation)| observation)
             .collect();
+        let worker_groups = self
+            .tables
+            .iter()
+            .flat_map(|(table, state)| {
+                state.setup.groups.iter().map(move |group| {
+                    let ready_replicas = newest
+                        .and_then(|snapshot| snapshot.tables.get(table))
+                        .and_then(|snapshot| snapshot.ready_groups.get(&group.name))
+                        .map_or(0, |ready| ready.replicas.len() as u64);
+                    metrics::WorkerGroupObservation {
+                        table: *table,
+                        name: group.name.clone(),
+                        configured_replicas: group.replicas.len() as u64,
+                        ready_replicas,
+                    }
+                })
+            })
+            .collect();
         metrics::Observation {
             phase: Some(phase),
             anchor_height: manifest.map_or(0, |m| m.anchor_height),
@@ -459,6 +549,7 @@ impl CoordinatorState {
             retained_generations: retained.len() as u64,
             tables,
             worker_details,
+            worker_groups,
         }
     }
 
@@ -480,9 +571,10 @@ impl CoordinatorState {
         .await
     }
 
-    /// Builds the Enhance snapshot, activates every worker, then swaps in the
-    /// new generation while keeping the previous one answerable. Sources this
-    /// coordinator does not serve are skipped.
+    /// Builds the Enhance snapshot, activates at least one replica in every
+    /// shard group, then swaps in the new generation while keeping previous
+    /// generations answerable. Sources this coordinator does not serve are
+    /// skipped.
     pub async fn publish(
         &self,
         sources: &[&dyn TableSource],
@@ -510,22 +602,13 @@ impl CoordinatorState {
             })
             .unwrap_or(0);
 
-        let mut assignments: BTreeMap<
-            String,
-            (WorkerTarget, BTreeMap<DatabaseId, Vec<ActivateShard>>),
-        > = BTreeMap::new();
         let mut snapshots = BTreeMap::new();
         let mut manifests = BTreeMap::new();
         for source in sources {
             let table = source.table();
-            let snapshot = self.build_table(source, &mut assignments).await?;
+            let snapshot = self.build_table(source, generation).await?;
             manifests.insert(table, snapshot.manifest.clone());
             snapshots.insert(table, Arc::new(snapshot));
-        }
-
-        for (_, (worker, tables)) in assignments {
-            self.activate_worker(&worker, ActivateRequest { generation, tables })
-                .await?;
         }
 
         let manifest = GenerationManifest {
@@ -554,15 +637,13 @@ impl CoordinatorState {
         Ok(())
     }
 
-    /// Prepares every shard of one table on its pool and sums the CRS hints.
-    /// Records each worker's assignment for the single activation call.
+    /// Prepares every shard on all available replicas, sums one CRS hint per
+    /// shard, and activates every replica that completed the group's full
+    /// assignment. One ready replica per group is the publication quorum.
     async fn build_table(
         &self,
         journal: &dyn TableSource,
-        assignments: &mut BTreeMap<
-            String,
-            (WorkerTarget, BTreeMap<DatabaseId, Vec<ActivateShard>>),
-        >,
+        generation: u64,
     ) -> Result<TableSnapshot, String> {
         let table = journal.table();
         let state = self.table(table)?;
@@ -585,64 +666,128 @@ impl CoordinatorState {
             ));
         }
         let rlwe = state.rlwe;
-        let pool = &state.setup.pool;
+        let groups = &state.setup.groups;
+
+        let mut candidates: BTreeMap<String, BTreeMap<String, (WorkerTarget, Vec<ActivateShard>)>> =
+            groups
+                .iter()
+                .map(|group| {
+                    (
+                        group.name.clone(),
+                        group
+                            .replicas
+                            .iter()
+                            .cloned()
+                            .map(|replica| (replica.name().to_string(), (replica, Vec::new())))
+                            .collect(),
+                    )
+                })
+                .collect();
 
         let mut descriptors = Vec::new();
         let mut combined_crs: Option<Vec<CrsBlock>> = None;
         for shard_id in journal.shard_ids() {
-            let worker_index = worker_index_for_shard(shard_id, pool.len()).ok_or_else(|| {
+            let group_index = group_index_for_shard(shard_id, groups.len()).ok_or_else(|| {
                 format!(
-                    "{table} shard {shard_id} exceeds the capacity of {} workers",
-                    pool.len()
+                    "{table} shard {shard_id} exceeds the capacity of {} worker groups",
+                    groups.len()
                 )
             })?;
-            let worker = &pool[worker_index];
+            let group = &groups[group_index];
             let rows = journal.read_shard_rows(shard_id)?;
             let digest = RecordJournal::rows_digest(&rows);
             let query_row_start = shard_id as usize * layout.shard_rows;
-            let cache_key = format!("{}:{shard_id}:{query_row_start}:{digest}", worker.name());
-            let cached_hint = state.hint_cache.read().await.get(&cache_key).cloned();
-            let hint = if let Some(hint) = cached_hint {
-                self.ensure_worker(worker, table, shard_id, query_row_start, digest.clone())
-                    .await?;
-                hint
-            } else {
-                self.prepare_worker(
-                    worker,
-                    table,
-                    shard_id,
-                    query_row_start,
-                    logical_rows,
-                    digest.clone(),
-                    rows,
-                )
-                .await?;
-                let hint = self.fetch_hint(worker, table, shard_id).await?;
-                let hint = Arc::new(
-                    decode_crs_blocks(&hint, ypir.db_cols / rlwe.d, rlwe.d)
-                        .map_err(|e| e.to_string())?,
-                );
-                let mut cache = state.hint_cache.write().await;
-                let shard_prefix = format!("{}:{shard_id}:", worker.name());
-                cache.retain(|key, _| !key.starts_with(&shard_prefix));
-                cache.insert(cache_key, hint.clone());
-                hint
+
+            let replicas: Vec<WorkerTarget> = candidates[&group.name]
+                .values()
+                .map(|(replica, _)| replica.clone())
+                .collect();
+            if replicas.is_empty() {
+                return Err(format!(
+                    "worker group {} has no replica with a complete {table} assignment",
+                    group.name
+                ));
+            }
+            let mut tasks = tokio::task::JoinSet::new();
+            for replica in replicas {
+                let coordinator = self.clone();
+                let rows = rows.clone();
+                let digest = digest.clone();
+                tasks.spawn(async move {
+                    let name = replica.name().to_string();
+                    let result = coordinator
+                        .prepare_replica_shard(
+                            &replica,
+                            table,
+                            shard_id,
+                            query_row_start,
+                            logical_rows,
+                            digest,
+                            rows,
+                            ypir.db_cols / rlwe.d,
+                            rlwe.d,
+                        )
+                        .await;
+                    (name, result)
+                });
+            }
+
+            let mut successful = Vec::new();
+            while let Some(result) = tasks.join_next().await {
+                match result {
+                    Ok((name, Ok(hint))) => successful.push((name, hint)),
+                    Ok((name, Err(error))) => {
+                        tracing::warn!(%error, replica = %name, group = %group.name, shard_id,
+                            "replica shard preparation failed");
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, group = %group.name, shard_id,
+                            "replica shard preparation task failed");
+                    }
+                }
+            }
+            let Some((_, canonical_hint)) = successful.first() else {
+                return Err(format!(
+                    "worker group {} has no ready replica for {table} shard {shard_id}",
+                    group.name
+                ));
             };
+            let canonical_hint = canonical_hint.clone();
+            let accepted: HashSet<String> = successful
+                .into_iter()
+                .filter_map(|(name, hint)| {
+                    if *hint == *canonical_hint {
+                        Some(name)
+                    } else {
+                        tracing::warn!(replica = %name, group = %group.name, shard_id,
+                            "replica CRS hint differs from its peer");
+                        None
+                    }
+                })
+                .collect();
+            let group_candidates = candidates
+                .get_mut(&group.name)
+                .expect("configured worker group");
+            group_candidates.retain(|name, _| accepted.contains(name));
+            for (_, assignment) in group_candidates.values_mut() {
+                assignment.push(ActivateShard {
+                    shard_id,
+                    rows_sha256: digest.clone(),
+                });
+            }
+            if group_candidates.is_empty() {
+                return Err(format!(
+                    "worker group {} has no replica with a complete matching {table} assignment",
+                    group.name
+                ));
+            }
+
+            let hint = canonical_hint;
             if let Some(accumulator) = &mut combined_crs {
                 add_crs_blocks_assign_mod(accumulator, &hint, rlwe).map_err(|e| e.to_string())?;
             } else {
                 combined_crs = Some((*hint).clone());
             }
-            assignments
-                .entry(worker.name().to_string())
-                .or_insert_with(|| (worker.clone(), BTreeMap::new()))
-                .1
-                .entry(table)
-                .or_default()
-                .push(ActivateShard {
-                    shard_id,
-                    rows_sha256: digest.clone(),
-                });
             let populated = journal.populated_positions_in_shard(shard_id);
             descriptors.push(ShardDescriptor {
                 shard_id,
@@ -650,8 +795,48 @@ impl CoordinatorState {
                 populated_positions: populated,
                 rows_sha256: digest,
                 sealed: populated == layout.shard_positions() as u64,
-                worker: worker.name().to_string(),
+                // Kept for wire compatibility; this is now the stable logical
+                // group identity rather than a physical replica name.
+                worker: group.name.clone(),
             });
+        }
+
+        let used_groups: HashSet<&str> = descriptors
+            .iter()
+            .map(|shard| shard.worker.as_str())
+            .collect();
+        let mut ready_groups = BTreeMap::new();
+        for (group_name, replicas) in candidates {
+            if !used_groups.contains(group_name.as_str()) {
+                continue;
+            }
+            let mut ready_replicas = Vec::new();
+            for (_, (replica, shards)) in replicas {
+                let mut tables = BTreeMap::new();
+                tables.insert(table, shards);
+                match self
+                    .activate_worker(&replica, ActivateRequest { generation, tables })
+                    .await
+                {
+                    Ok(()) => ready_replicas.push(replica),
+                    Err(error) => {
+                        tracing::warn!(%error, replica = %replica.name(), group = %group_name,
+                        generation, "replica activation failed")
+                    }
+                }
+            }
+            if ready_replicas.is_empty() {
+                return Err(format!(
+                    "worker group {group_name} did not activate any replica for generation {generation}"
+                ));
+            }
+            ready_groups.insert(
+                group_name,
+                Arc::new(ReadyWorkerGroup {
+                    replicas: ready_replicas,
+                    next: AtomicUsize::new(0),
+                }),
+            );
         }
 
         let combined_crs = combined_crs.ok_or_else(|| "no CRS contributions".to_string())?;
@@ -686,7 +871,63 @@ impl CoordinatorState {
             top_key_images,
             public_params,
             public_params_epoch: epoch,
+            ready_groups,
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn prepare_replica_shard(
+        &self,
+        replica: &WorkerTarget,
+        table: DatabaseId,
+        shard_id: u64,
+        query_row_start: usize,
+        logical_rows: u64,
+        rows_sha256: String,
+        rows: Vec<u8>,
+        expected_blocks: usize,
+        degree: usize,
+    ) -> Result<Arc<Vec<CrsBlock>>, String> {
+        let state = self.table(table)?;
+        let cache_key = format!(
+            "{}:{shard_id}:{query_row_start}:{rows_sha256}",
+            replica.name()
+        );
+        if let Some(hint) = state.hint_cache.read().await.get(&cache_key).cloned() {
+            if self
+                .ensure_worker(
+                    replica,
+                    table,
+                    shard_id,
+                    query_row_start,
+                    rows_sha256.clone(),
+                )
+                .await
+                .is_ok()
+            {
+                return Ok(hint);
+            }
+        }
+
+        self.prepare_worker(
+            replica,
+            table,
+            shard_id,
+            query_row_start,
+            logical_rows,
+            rows_sha256,
+            rows,
+        )
+        .await?;
+        let encoded = self.fetch_hint(replica, table, shard_id).await?;
+        let hint = Arc::new(
+            decode_crs_blocks(&encoded, expected_blocks, degree).map_err(|e| e.to_string())?,
+        );
+        let mut cache = state.hint_cache.write().await;
+        let shard_prefix = format!("{}:{shard_id}:", replica.name());
+        cache.retain(|key, _| !key.starts_with(&shard_prefix));
+        cache.insert(cache_key, hint.clone());
+        Ok(hint)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -831,9 +1072,17 @@ impl CoordinatorState {
         worker: &WorkerTarget,
         table: DatabaseId,
         request: EvaluateRequest,
-    ) -> Result<Vec<u64>, String> {
+    ) -> Result<Vec<u64>, WorkerEvaluationError> {
         match worker {
-            WorkerTarget::Embedded { state, .. } => state.evaluate_local(table, request).await,
+            WorkerTarget::Embedded { state, .. } => state
+                .evaluate_local(table, request)
+                .await
+                .map_err(|message| WorkerEvaluationError {
+                    retryable: message.contains("evaluation limit")
+                        || message.contains("generation mismatch")
+                        || message.contains("active shard disappeared"),
+                    message,
+                }),
             WorkerTarget::Remote { base_url, .. } => {
                 let generation = request.generation;
                 let response = self
@@ -842,15 +1091,34 @@ impl CoordinatorState {
                     .body(encode_evaluate_request(&request))
                     .send()
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|error| WorkerEvaluationError {
+                        message: error.to_string(),
+                        retryable: true,
+                    })?;
                 if !response.status().is_success() {
-                    return Err(format!("worker evaluation returned {}", response.status()));
+                    let status = response.status();
+                    return Err(WorkerEvaluationError {
+                        message: format!("worker evaluation returned {status}"),
+                        retryable: status == StatusCode::TOO_MANY_REQUESTS
+                            || status.is_server_error(),
+                    });
                 }
-                let bytes = read_worker_body(response, 1024 * 1024).await?;
-                let (response_generation, coefficients) =
-                    decode_evaluate_response(&bytes).map_err(|e| e.to_string())?;
+                let bytes = read_worker_body(response, 1024 * 1024)
+                    .await
+                    .map_err(|message| WorkerEvaluationError {
+                        message,
+                        retryable: false,
+                    })?;
+                let (response_generation, coefficients) = decode_evaluate_response(&bytes)
+                    .map_err(|error| WorkerEvaluationError {
+                        message: error.to_string(),
+                        retryable: false,
+                    })?;
                 if response_generation != generation {
-                    return Err("worker response generation mismatch".to_string());
+                    return Err(WorkerEvaluationError {
+                        message: "worker response generation mismatch".to_string(),
+                        retryable: true,
+                    });
                 }
                 Ok(coefficients)
             }
@@ -888,14 +1156,14 @@ impl CoordinatorState {
             .map_err(|e| e.to_string())?;
 
         let shard_rows = table.layout().shard_rows;
-        let mut by_worker: BTreeMap<String, Vec<ShardQuery>> = BTreeMap::new();
+        let mut by_group: BTreeMap<String, Vec<ShardQuery>> = BTreeMap::new();
         for shard in &live.manifest.shards {
             let start = shard.global_row_start as usize;
             let coefficients = global_query
                 .get(start..start + shard_rows)
                 .ok_or_else(|| "query does not cover a published shard".to_string())?
                 .to_vec();
-            by_worker
+            by_group
                 .entry(shard.worker.clone())
                 .or_default()
                 .push(ShardQuery {
@@ -905,20 +1173,55 @@ impl CoordinatorState {
         }
 
         let mut tasks = tokio::task::JoinSet::new();
-        for worker in state.setup.pool.iter() {
-            let Some(shards) = by_worker.remove(worker.name()) else {
+        for (group_name, group) in &live.ready_groups {
+            let Some(shards) = by_group.remove(group_name) else {
                 continue;
             };
-            let worker = worker.clone();
+            let replicas = group.replicas_for_request();
+            let group_name = group_name.clone();
             let coordinator = self.clone();
             tasks.spawn(async move {
-                coordinator
-                    .evaluate_worker(&worker, table, EvaluateRequest { generation, shards })
-                    .await
+                let mut last_error = None;
+                for (attempt, replica) in replicas.into_iter().enumerate() {
+                    if attempt > 0 {
+                        metrics::record_replica_request(&group_name, replica.name(), "retry");
+                    }
+                    metrics::record_replica_request(&group_name, replica.name(), "selected");
+                    match coordinator
+                        .evaluate_worker(
+                            &replica,
+                            table,
+                            EvaluateRequest {
+                                generation,
+                                shards: shards.clone(),
+                            },
+                        )
+                        .await
+                    {
+                        Ok(partial) => {
+                            metrics::record_replica_request(
+                                &group_name,
+                                replica.name(),
+                                "succeeded",
+                            );
+                            return Ok(partial);
+                        }
+                        Err(error) => {
+                            metrics::record_replica_request(&group_name, replica.name(), "failed");
+                            tracing::warn!(%error, replica = %replica.name(), generation,
+                                "worker replica evaluation failed; trying peer");
+                            if !error.retryable {
+                                return Err(error.message);
+                            }
+                            last_error = Some(error.message);
+                        }
+                    }
+                }
+                Err(last_error.unwrap_or_else(|| "worker group has no ready replica".to_string()))
             });
         }
-        if !by_worker.is_empty() {
-            return Err("snapshot references an unknown worker".to_string());
+        if !by_group.is_empty() {
+            return Err("snapshot references an unavailable worker group".to_string());
         }
         let mut combined = vec![0u64; live.ypir.db_cols];
         let mut partial_count = 0usize;
@@ -1115,7 +1418,12 @@ async fn health(State(state): State<CoordinatorState>) -> Response {
                     shards: newest
                         .and_then(|snapshot| snapshot.manifest.tables.get(table))
                         .map_or(0, |manifest| manifest.shards.len()),
-                    workers: table_state.setup.pool.len(),
+                    workers: table_state
+                        .setup
+                        .groups
+                        .iter()
+                        .map(|group| group.replicas.len())
+                        .sum(),
                 },
             )
         })
