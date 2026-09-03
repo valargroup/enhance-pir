@@ -14,7 +14,7 @@ use ipir_sp::IPIRClient;
 use memo_pir::coordinator::memo_setup_seed_bytes;
 use memo_pir::ipir::{global_parameters, RowPlaintextIter, ShardRuntime};
 use memo_pir::store::MemoStore;
-use memo_pir::types::{ROW_BYTES, SHARD_ROWS};
+use memo_pir::types::{ACTION_LAYOUT, ROW_BYTES, SHARD_ROWS};
 
 fn synthetic_rows(seed: u64) -> Vec<u8> {
     let mut state = seed;
@@ -33,15 +33,24 @@ fn two_shards_equal_one_monolithic_server() {
     let rows0 = synthetic_rows(0x9e37_79b9);
     let rows1 = synthetic_rows(0x7f4a_7c15);
     let logical_rows = 2 * SHARD_ROWS as u64;
-    let (rlwe, ypir) = global_parameters(logical_rows).expect("params");
+    let (rlwe, ypir) = global_parameters(logical_rows, &ACTION_LAYOUT).expect("params");
     assert_eq!(ypir.db_rows, logical_rows as usize);
     let client = IPIRClient::new(&rlwe, &ypir);
     let setup = client.generate_public_query_setup_simplepir_from_seed(memo_setup_seed_bytes());
 
     // Sharded: each shard preprocesses over its slice of the seeded setup.
-    let shard0 = ShardRuntime::build(0, 0, MemoStore::rows_digest(&rows0), &rows0, &rlwe, &setup)
-        .expect("shard 0");
+    let shard0 = ShardRuntime::build(
+        &ACTION_LAYOUT,
+        0,
+        0,
+        MemoStore::rows_digest(&rows0),
+        &rows0,
+        &rlwe,
+        &setup,
+    )
+    .expect("shard 0");
     let shard1 = ShardRuntime::build(
+        &ACTION_LAYOUT,
         1,
         SHARD_ROWS,
         MemoStore::rows_digest(&rows1),

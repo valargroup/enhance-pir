@@ -1,6 +1,6 @@
 use crate::ipir::{global_parameters, ShardRuntime};
 use crate::store::MemoStore;
-use crate::types::{ITEM_SIZE_BITS, ROW_BYTES, SHARD_ROWS};
+use crate::types::{DatabaseId, ACTION_LAYOUT, ITEM_SIZE_BITS, ROW_BYTES, SHARD_ROWS};
 use crate::wire::{
     decode_evaluate_request, encode_crs_blocks, encode_evaluate_response, EvaluateRequest,
 };
@@ -68,7 +68,7 @@ struct HealthResponse {
 
 impl WorkerState {
     pub fn new(artifact_dir: PathBuf) -> Result<Self, inspiring::InspiringError> {
-        let (rlwe, _) = global_parameters(SHARD_ROWS as u64)?;
+        let (rlwe, _) = global_parameters(SHARD_ROWS as u64, &ACTION_LAYOUT)?;
         Ok(Self {
             rlwe: Arc::new(rlwe),
             shards: Arc::new(RwLock::new(HashMap::new())),
@@ -95,7 +95,7 @@ impl WorkerState {
             }
         }
         let (global_rlwe, global_params) =
-            global_parameters(logical_rows).map_err(|e| e.to_string())?;
+            global_parameters(logical_rows, &ACTION_LAYOUT).map_err(|e| e.to_string())?;
         if global_rlwe.d != self.rlwe.d || global_rlwe.q != self.rlwe.q {
             return Err("global and worker RLWE parameters differ".to_string());
         }
@@ -108,6 +108,8 @@ impl WorkerState {
         let runtime = tokio::task::spawn_blocking(move || {
             ShardRuntime::load_or_build(
                 &artifact_dir,
+                DatabaseId::Action,
+                &ACTION_LAYOUT,
                 shard_id,
                 query_row_start,
                 rows_sha256,
@@ -143,6 +145,8 @@ impl WorkerState {
         let runtime = tokio::task::spawn_blocking(move || {
             ShardRuntime::load_cached(
                 &artifact_dir,
+                DatabaseId::Action,
+                &ACTION_LAYOUT,
                 shard_id,
                 query_row_start,
                 &rows_sha256,

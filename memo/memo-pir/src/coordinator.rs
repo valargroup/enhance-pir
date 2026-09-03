@@ -3,8 +3,8 @@ use crate::metrics;
 use crate::store::MemoStore;
 use crate::types::{
     logical_rows_for, worker_index_for_shard, Coverage, MemoSnapshotMetadata, ShardDescriptor,
-    NETWORK, POOL, RECORDS_PER_ROW, RECORD_BYTES, ROW_BYTES, SCHEMA_VERSION, SHARD_POSITIONS,
-    SHARD_ROWS,
+    ACTION_LAYOUT, NETWORK, POOL, RECORDS_PER_ROW, RECORD_BYTES, ROW_BYTES, SCHEMA_VERSION,
+    SHARD_POSITIONS, SHARD_ROWS,
 };
 use crate::wire::{
     decode_crs_blocks, decode_evaluate_response, encode_evaluate_request, EvaluateRequest,
@@ -110,7 +110,8 @@ impl CoordinatorState {
         if names.windows(2).any(|pair| pair[0] == pair[1]) {
             return Err("worker names must be unique".to_string());
         }
-        let (rlwe, _) = global_parameters(SHARD_ROWS as u64).map_err(|e| e.to_string())?;
+        let (rlwe, _) =
+            global_parameters(SHARD_ROWS as u64, &ACTION_LAYOUT).map_err(|e| e.to_string())?;
         let rlwe = Box::leak(Box::new(rlwe));
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
@@ -185,7 +186,8 @@ impl CoordinatorState {
             .await;
         let global_used_rows = store.tree_size().div_ceil(RECORDS_PER_ROW as u64);
         let logical_rows = logical_rows_for(global_used_rows);
-        let (global_rlwe, ypir) = global_parameters(logical_rows).map_err(|e| e.to_string())?;
+        let (global_rlwe, ypir) =
+            global_parameters(logical_rows, &ACTION_LAYOUT).map_err(|e| e.to_string())?;
         if global_rlwe.d != self.rlwe.d || global_rlwe.q != self.rlwe.q {
             return Err("global RLWE parameters changed unexpectedly".to_string());
         }
