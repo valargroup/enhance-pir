@@ -355,6 +355,8 @@ pub fn allowlisted_endpoint(method: &axum::http::Method, path: &str) -> Option<&
         (&Method::GET, "/memo/health") | (&Method::GET, "/v1/health") => return Some("health"),
         (&Method::GET, "/memo/metadata") => return Some("metadata"),
         (&Method::GET, "/v1/generation") => return Some("generation"),
+        (&Method::GET, "/v1/witness/cap") => return Some("witness_cap"),
+        (&Method::GET, "/v1/witness/frontier") => return Some("witness_frontier"),
         (&Method::GET, "/memo/params") => return Some("params"),
         (&Method::GET, "/memo/public-params") => return Some("public_params"),
         (&Method::POST, "/memo/query") => return Some("query"),

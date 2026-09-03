@@ -12,6 +12,7 @@ pub mod metrics;
 pub mod store;
 pub mod types;
 pub mod wire;
+pub mod witness;
 pub mod worker;
 pub mod zakura;
 

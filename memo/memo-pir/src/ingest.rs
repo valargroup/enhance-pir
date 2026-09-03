@@ -15,6 +15,7 @@
 
 use crate::store::{RecordJournal, StoreError};
 use crate::types::{DatabaseId, DatabaseLayout, ACTION_LAYOUT, WITNESS_LAYOUT};
+use crate::witness::{self, TreeView, WitnessCap, FRONTIER_RECORD_BYTES};
 use crate::zakura::CanonicalBlock;
 use std::path::{Path, PathBuf};
 
@@ -35,6 +36,16 @@ pub const NULLIFIER_LOG_LAYOUT: DatabaseLayout = DatabaseLayout {
 };
 
 pub const NULLIFIER_LOG_NAME: &str = "nullifiers";
+
+/// Per-block rightmost tree path, 32 hashes; positions are block offsets
+/// from the first ingested height.
+pub const FRONTIER_LOG_LAYOUT: DatabaseLayout = DatabaseLayout {
+    record_bytes: FRONTIER_RECORD_BYTES,
+    records_per_row: 1,
+    shard_rows: 8_192,
+};
+
+pub const FRONTIER_LOG_NAME: &str = "frontier";
 
 #[derive(Debug, thiserror::Error)]
 pub enum IngestError {
@@ -84,6 +95,7 @@ pub struct Journals {
     pub witness: RecordJournal,
     pub witness_roots: RecordJournal,
     pub nullifiers: RecordJournal,
+    pub frontier: RecordJournal,
 }
 
 impl Journals {
@@ -113,16 +125,76 @@ impl Journals {
                 NULLIFIER_LOG_NAME,
                 NULLIFIER_LOG_LAYOUT,
             )?,
+            frontier: RecordJournal::open_log(
+                data_dir.join(FRONTIER_LOG_NAME),
+                FRONTIER_LOG_NAME,
+                FRONTIER_LOG_LAYOUT,
+            )?,
         })
     }
 
-    fn all(&self) -> [&RecordJournal; 4] {
+    fn all(&self) -> [&RecordJournal; 5] {
         [
             &self.action,
             &self.witness,
             &self.witness_roots,
             &self.nullifiers,
+            &self.frontier,
         ]
+    }
+
+    /// The tree as the witness journals describe it: frontier sub-shard
+    /// leaves, completed sub-shard roots, and the tree size.
+    pub fn tree_view(&self) -> Result<(Vec<u8>, Vec<u8>, u64), IngestError> {
+        let tree_size = self.witness.tree_size();
+        let completed = self.witness_roots.tree_size();
+        let frontier_start = completed * witness::SUBSHARD_LEAVES as u64;
+        let frontier_leaves = self
+            .witness
+            .read_records(frontier_start, (tree_size - frontier_start) as usize)?;
+        let roots = self.witness_roots.read_records(0, completed as usize)?;
+        Ok((frontier_leaves, roots, tree_size))
+    }
+
+    /// The public cap at the current journal state.
+    pub fn witness_cap(&self, anchor_height: u64) -> Result<WitnessCap, IngestError> {
+        let (frontier_leaves, roots, tree_size) = self.tree_view()?;
+        Ok(TreeView {
+            tree_size,
+            frontier_leaves: &frontier_leaves,
+            subshard_roots: &roots,
+        }
+        .cap(anchor_height))
+    }
+
+    /// Frontier updates for heights `from..=to`, oldest first, as far as the
+    /// journal holds them.
+    pub fn frontier_updates(
+        &self,
+        from: u64,
+        to: u64,
+    ) -> Result<Vec<witness::FrontierUpdate>, IngestError> {
+        let mut updates = Vec::new();
+        for (index, block) in self.frontier.blocks().iter().enumerate() {
+            if block.height < from || block.height > to || block.action_count == 0 {
+                continue;
+            }
+            let bytes = self.frontier.read_records(block.first_position, 1)?;
+            let nodes = witness::decode_frontier(&bytes)
+                .ok_or_else(|| IngestError::Invariant("malformed frontier record".into()))?;
+            let tree_size = self
+                .witness
+                .blocks()
+                .get(index)
+                .map(|b| b.first_position + b.action_count)
+                .unwrap_or(0);
+            updates.push(witness::FrontierUpdate {
+                height: block.height,
+                tree_size,
+                rightmost_nodes: nodes.iter().map(hex::encode).collect(),
+            });
+        }
+        Ok(updates)
     }
 
     /// The lowest committed height across journals, or `None` if any journal
@@ -231,6 +303,20 @@ impl Journals {
             }
             self.nullifiers
                 .append_block(block.height, block.hash.clone(), &entries)?;
+        }
+
+        if needs(&self.frontier, block.height) {
+            let (frontier_leaves, roots, tree_size) = self.tree_view()?;
+            let nodes = TreeView {
+                tree_size,
+                frontier_leaves: &frontier_leaves,
+                subshard_roots: &roots,
+            }
+            .rightmost_nodes();
+            let records: Vec<[u8; FRONTIER_RECORD_BYTES]> =
+                nodes.iter().map(witness::encode_frontier).collect();
+            self.frontier
+                .append_block(block.height, block.hash.clone(), &records)?;
         }
 
         if self.action.tree_size() != block.tree_size || self.witness.tree_size() != block.tree_size

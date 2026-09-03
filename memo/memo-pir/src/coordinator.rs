@@ -10,6 +10,7 @@ use crate::wire::{
     decode_crs_blocks, decode_evaluate_response, encode_evaluate_request, EvaluateRequest,
     ShardQuery,
 };
+use crate::witness::{FrontierUpdate, WitnessCap};
 use crate::worker::{ActivateRequest, ActivateShard, WorkerState, RETAINED_GENERATIONS};
 use arc_swap::ArcSwap;
 use axum::body::Bytes;
@@ -124,16 +125,22 @@ impl TableSource for TableJournal<'_> {
     }
 }
 
-/// The chain state one generation is anchored to.
-#[derive(Clone, Debug)]
+/// The chain state one generation is anchored to, plus the public witness
+/// material published beside the tables.
+#[derive(Clone, Debug, Default)]
 pub struct Anchor {
     pub height: u64,
     /// Hex, display byte order.
     pub hash: String,
-    /// Hex depth-32 Ironwood tree root, empty until the witness tables ship.
-    pub tree_root: String,
     pub cold_checkpoint_height: u64,
+    /// The public tree summary, once the witness tables are served.
+    pub witness_cap: Option<WitnessCap>,
+    /// Recent per-block frontier updates, oldest first.
+    pub frontier: Vec<FrontierUpdate>,
 }
+
+/// How many frontier updates a generation carries (about a day of blocks).
+pub const FRONTIER_UPDATES_RETAINED: usize = 2_000;
 
 struct TableState {
     setup: TableSetup,
@@ -156,6 +163,10 @@ pub struct TableSnapshot {
 pub struct GenerationSnapshot {
     pub manifest: GenerationManifest,
     pub tables: BTreeMap<DatabaseId, Arc<TableSnapshot>>,
+    /// Public tree summary, present once the witness tables are served.
+    pub witness_cap: Option<WitnessCap>,
+    /// Recent per-block frontier updates, oldest first.
+    pub frontier: Vec<FrontierUpdate>,
 }
 
 /// Retained generations, newest first.
@@ -425,8 +436,7 @@ impl CoordinatorState {
             Anchor {
                 height: anchor_height,
                 hash: anchor_hash,
-                tree_root: String::new(),
-                cold_checkpoint_height: 0,
+                ..Anchor::default()
             },
         )
         .await
@@ -490,14 +500,24 @@ impl CoordinatorState {
             anchor_block_hash: anchor.hash,
             ironwood_tree_size,
             generation,
-            anchor_tree_root: anchor.tree_root,
+            anchor_tree_root: anchor
+                .witness_cap
+                .as_ref()
+                .map(|cap| cap.tree_root.clone())
+                .unwrap_or_default(),
             cold_checkpoint_height: anchor.cold_checkpoint_height,
             envelope: DEFAULT_ENVELOPE,
             tables: manifests,
         };
+        let mut frontier = anchor.frontier;
+        if frontier.len() > FRONTIER_UPDATES_RETAINED {
+            frontier.drain(..frontier.len() - FRONTIER_UPDATES_RETAINED);
+        }
         let snapshot = Arc::new(GenerationSnapshot {
             manifest,
             tables: snapshots,
+            witness_cap: anchor.witness_cap,
+            frontier,
         });
         let mut retained: Generations = Vec::with_capacity(RETAINED_GENERATIONS);
         retained.push(snapshot);
@@ -942,6 +962,8 @@ pub fn router(state: CoordinatorState) -> Router {
     Router::new()
         .route("/v1/health", get(health))
         .route("/v1/generation", get(generation_manifest))
+        .route("/v1/witness/cap", get(witness_cap))
+        .route("/v1/witness/frontier", get(witness_frontier))
         .route("/v1/:table/params", get(params))
         .route("/v1/:table/public-params", get(public_params))
         .route("/memo/health", get(legacy_health))
@@ -1113,6 +1135,42 @@ async fn generation_manifest(State(state): State<CoordinatorState>) -> Response 
         Some(manifest) => Json(manifest).into_response(),
         None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
+}
+
+async fn witness_cap(State(state): State<CoordinatorState>) -> Response {
+    match state
+        .newest()
+        .and_then(|snapshot| snapshot.witness_cap.clone())
+    {
+        Some(cap) => Json(cap).into_response(),
+        None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct FrontierRange {
+    from: u64,
+    to: u64,
+}
+
+/// Frontier updates for heights `from..=to`, bounded to what the newest
+/// generation carries. Public data, the same for every client.
+async fn witness_frontier(
+    State(state): State<CoordinatorState>,
+    axum::extract::Query(range): axum::extract::Query<FrontierRange>,
+) -> Response {
+    let Some(snapshot) = state.newest() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    if range.to < range.from || range.to - range.from > FRONTIER_UPDATES_RETAINED as u64 {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let updates: Vec<&FrontierUpdate> = snapshot
+        .frontier
+        .iter()
+        .filter(|update| update.height >= range.from && update.height <= range.to)
+        .collect();
+    Json(updates).into_response()
 }
 
 async fn legacy_metadata(State(state): State<CoordinatorState>) -> Response {

@@ -1,6 +1,7 @@
 use clap::{Parser, ValueEnum};
 use memo_pir::coordinator::{
     router, Anchor, CoordinatorPhase, CoordinatorState, TableJournal, TableSetup, WorkerTarget,
+    FRONTIER_UPDATES_RETAINED,
 };
 use memo_pir::ingest::Journals;
 use memo_pir::types::{DatabaseId, ACTIVATION_HEIGHT, COLD_CHECKPOINT_INTERVAL, CONFIRMATIONS};
@@ -142,10 +143,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }]
         }
     };
-    let state = CoordinatorState::new(vec![TableSetup {
-        table: DatabaseId::Action,
-        pool: workers,
-    }])?;
+    let state = CoordinatorState::new(
+        [
+            DatabaseId::Action,
+            DatabaseId::Witness,
+            DatabaseId::WitnessRoots,
+        ]
+        .into_iter()
+        .map(|table| TableSetup {
+            table,
+            pool: workers.clone(),
+        })
+        .collect(),
+    )?;
     let ingest_state = state.clone();
     let ingest_cli = cli.clone();
     tokio::spawn(async move {
@@ -247,14 +257,20 @@ async fn ingest(
                 let witness = TableJournal::new(DatabaseId::Witness, &journals.witness)?;
                 let witness_roots =
                     TableJournal::new(DatabaseId::WitnessRoots, &journals.witness_roots)?;
+                let witness_cap = journals.witness_cap(target)?;
+                let frontier = journals.frontier_updates(
+                    target.saturating_sub(FRONTIER_UPDATES_RETAINED as u64 - 1),
+                    target,
+                )?;
                 state
                     .publish(
                         &[&action, &witness, &witness_roots],
                         Anchor {
                             height: target,
                             hash,
-                            tree_root: String::new(),
                             cold_checkpoint_height: target - target % COLD_CHECKPOINT_INTERVAL,
+                            witness_cap: Some(witness_cap),
+                            frontier,
                         },
                     )
                     .await?;
