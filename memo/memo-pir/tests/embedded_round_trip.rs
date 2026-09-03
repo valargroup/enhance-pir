@@ -291,7 +291,7 @@ async fn v1_routes_and_legacy_aliases_describe_the_same_generation() {
 
     let (_, body) = get(&app, "/memo/metadata").await;
     let legacy: memo_pir::MemoSnapshotMetadata = serde_json::from_slice(&body).unwrap();
-    assert_eq!(legacy.schema_version, 2);
+    assert_eq!(legacy.schema_version, 3);
     assert_eq!(legacy.generation, manifest.generation);
     assert_eq!(legacy.shards, action.shards);
 
