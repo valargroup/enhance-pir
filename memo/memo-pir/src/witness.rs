@@ -167,14 +167,9 @@ impl TreeView<'_> {
                 // frontier is empty.
                 let width = 1usize << level;
                 if leaves.is_empty() {
-                    // The last leaf sits in a completed sub-shard whose
-                    // interior nodes are not stored; the subtree is full,
-                    // so its node is the root of `width` empty... no: full
-                    // of real leaves. Recompute from the sub-shard root only
-                    // at level 8; below it, callers must hold the leaves.
-                    // We report the completed sub-shard's interior nodes as
-                    // unavailable by using the sub-shard root at level 8 and
-                    // leaving lower levels to the client-side leaf cache.
+                    // The last leaf closed a sub-shard whose interior nodes
+                    // are not stored. No client uses these levels from an
+                    // update (see `apply_frontier_update`), so they are zero.
                     [0u8; 32]
                 } else {
                     let within = (last as usize) % SUBSHARD_LEAVES;
@@ -366,11 +361,13 @@ pub fn apply_frontier_update(
     }
     let empty = empty_roots();
     let last = new_tree_size - 1;
-    let same_subshard = (witness.position >> SUBSHARD_HEIGHT) == (last >> SUBSHARD_HEIGHT)
-        && !new_tree_size.is_multiple_of(SUBSHARD_LEAVES as u64);
+    // Levels 0..8 are never carried by an update (a completed sub-shard's
+    // interior is not stored), so a witness sharing the last leaf's sub-shard
+    // needs the leaf cache the wallet keeps, or a fresh fetch.
+    let same_subshard = (witness.position >> SUBSHARD_HEIGHT) == (last >> SUBSHARD_HEIGHT);
     if same_subshard && new_tree_size != witness.tree_size {
         return Err(
-            "witness is in the frontier sub-shard; re-fetch or splice new leaves".to_string(),
+            "witness shares the last leaf's sub-shard; re-fetch or splice new leaves".to_string(),
         );
     }
     for level in 0..TREE_DEPTH {
