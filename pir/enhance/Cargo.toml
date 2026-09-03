@@ -17,6 +17,7 @@ default = []
 cli = ["dep:clap", "dep:tokio"]
 
 [dependencies]
+base64 = "0.22"
 clap = { version = "4", features = ["derive"], optional = true }
 hex = "0.4"
 ipir-sp = { git = "https://github.com/valargroup/ipir-sp.git", rev = "e875404cef33661906ab60af236dfb327e6b28b1" }

@@ -505,7 +505,7 @@ mod tests {
         let host = healthy_host();
         let mut endpoints = BTreeMap::new();
         endpoints.insert(
-            "public_params".into(),
+            "init".into(),
             EndpointWindow {
                 requests: 50.0,
                 observed: LatencyWindow {
@@ -516,7 +516,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        // Default schema: public_params is budgeted at 2.0s, so 1.5s is quiet.
+        // Default schema: init is budgeted at 2.0s, so 1.5s is quiet.
         let mut engine = AlertEngine::new(Schema::enhance_default());
         assert!(engine
             .evaluate(AlertInput {
@@ -530,7 +530,7 @@ mod tests {
         // Same numbers under a schema with the 1.0s default budget page.
         let tight = Schema::new(
             "enhance",
-            vec!["public_params".to_string()],
+            vec!["init".to_string()],
             Default::default(),
             Default::default(),
             1.0,
@@ -548,7 +548,7 @@ mod tests {
         let [AlertTransition::Fired(alert)] = fired.as_slice() else {
             panic!("expected one latency alert");
         };
-        assert_eq!(alert.check, "public_params_high_latency");
+        assert_eq!(alert.check, "init_high_latency");
     }
 
     #[test]

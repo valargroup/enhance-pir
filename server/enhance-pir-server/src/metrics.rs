@@ -399,8 +399,6 @@ pub fn query_endpoint(_table: DatabaseId) -> &'static str {
 
 fn table_endpoint(table: DatabaseId, endpoint: &str) -> Option<&'static str> {
     Some(match (table, endpoint) {
-        (DatabaseId::Enhance, "params") => "params",
-        (DatabaseId::Enhance, "public-params") => "public_params",
         (DatabaseId::Enhance, "query") => "query",
         _ => return None,
     })
@@ -414,9 +412,7 @@ pub fn allowlisted_endpoint(method: &axum::http::Method, path: &str) -> Option<&
     use axum::http::Method;
     match (method, path) {
         (&Method::GET, "/v1/health") => return Some("health"),
-        (&Method::GET, "/v1/enhance/generation") => return Some("generation"),
-        (&Method::GET, "/v1/enhance/params") => return Some("params"),
-        (&Method::GET, "/v1/enhance/public-params") => return Some("public_params"),
+        (&Method::GET, "/v1/enhance/init") => return Some("init"),
         (&Method::POST, "/v1/enhance/query") => return Some("query"),
         _ => {}
     }
@@ -732,12 +728,12 @@ mod tests {
             Some("health")
         );
         assert_eq!(
-            allowlisted_endpoint(&Method::GET, "/v1/enhance/generation"),
-            Some("generation")
+            allowlisted_endpoint(&Method::GET, "/v1/enhance/init"),
+            Some("init")
         );
         assert_eq!(
-            allowlisted_endpoint(&Method::GET, "/v1/enhance/public-params"),
-            Some("public_params")
+            allowlisted_endpoint(&Method::GET, "/v1/enhance/generation"),
+            None
         );
         assert_eq!(
             allowlisted_endpoint(&Method::POST, "/v1/enhance/query"),
@@ -763,7 +759,7 @@ mod tests {
     #[tokio::test]
     async fn middleware_counts_allowlisted_requests_and_balances_in_flight() {
         let app = Router::new()
-            .route("/v1/enhance/generation", get(|| async { "ok" }))
+            .route("/v1/enhance/init", get(|| async { "ok" }))
             .route(
                 "/v1/enhance/query",
                 post(|| async {
@@ -781,10 +777,10 @@ mod tests {
             .route("/other", get(|| async { "untracked" }))
             .layer(axum::middleware::from_fn(track_request));
 
-        let before_generation = counter("generation", "GET", "200");
+        let before_init = counter("init", "GET", "200");
         let before_query = counter("query", "POST", "503");
         for (method, path) in [
-            (Method::GET, "/v1/enhance/generation"),
+            (Method::GET, "/v1/enhance/init"),
             (Method::POST, "/v1/enhance/query"),
             (Method::GET, "/other"),
         ] {
@@ -802,10 +798,10 @@ mod tests {
             assert!(response.status().is_success() || response.status() == 503);
         }
 
-        assert_eq!(counter("generation", "GET", "200"), before_generation + 1);
+        assert_eq!(counter("init", "GET", "200"), before_init + 1);
         assert_eq!(counter("query", "POST", "503"), before_query + 1);
         let m = metrics();
-        assert_eq!(m.http_in_flight.with_label_values(&["generation"]).get(), 0);
+        assert_eq!(m.http_in_flight.with_label_values(&["init"]).get(), 0);
         assert_eq!(m.http_in_flight.with_label_values(&["query"]).get(), 0);
         assert_eq!(
             m.http_processing_in_flight
@@ -822,7 +818,7 @@ mod tests {
         let (status, content_type, body) = encode();
         assert_eq!(status, StatusCode::OK);
         assert!(content_type.starts_with("text/plain"));
-        assert!(body.contains("enhance_http_requests_total{endpoint=\"generation\""));
+        assert!(body.contains("enhance_http_requests_total{endpoint=\"init\""));
         assert!(!body.contains("/other"));
     }
 

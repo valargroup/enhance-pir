@@ -62,14 +62,8 @@ fn coordinator(groups: &[(&str, &WorkerState)]) -> CoordinatorState {
 }
 
 fn session(state: &CoordinatorState) -> QuerySession {
-    QuerySession::new(
-        state.metadata().expect("metadata"),
-        state.params(DatabaseId::Enhance).expect("params"),
-        &state
-            .public_params(DatabaseId::Enhance)
-            .expect("public params"),
-    )
-    .expect("session accepts its own snapshot")
+    QuerySession::from_session(state.session().expect("session"))
+        .expect("session accepts its own snapshot")
 }
 
 async fn fetch(state: &CoordinatorState, session: &QuerySession, position: u64) -> EnhanceRecord {
@@ -188,7 +182,7 @@ async fn appending_a_group_does_not_move_existing_in_range_shards() {
 
     // The unused second group is neither prepared nor activated.
     assert_eq!(worker_2.cached_shard_count().await, 0);
-    let generation = after.metadata().expect("metadata").generation;
+    let generation = after.session().expect("session").generation.generation;
     let refused = worker_2
         .evaluate_local(
             DatabaseId::Enhance,

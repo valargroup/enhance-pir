@@ -241,11 +241,11 @@ render_caddyfile "$ENHANCE_CADDYFILE" "$caddyfile_rendered"
   echo "PIR_APM_HEALTH_PATH=/v1/health"
   echo "PIR_APM_READY_PATH=/ready"
   echo "PIR_APM_METRIC_PREFIX=enhance"
-  echo "PIR_APM_ENDPOINTS=health,generation,params,public_params,query"
+  echo "PIR_APM_ENDPOINTS=health,init,query"
   echo "PIR_APM_INFORMATIONAL_ENDPOINTS=health"
   echo "PIR_APM_PROCESSING_ENDPOINTS=query"
   echo "PIR_APM_LATENCY_P99_SECONDS=1.0"
-  echo "PIR_APM_LATENCY_P99_OVERRIDES=query=5.0,public_params=2.0"
+  echo "PIR_APM_LATENCY_P99_OVERRIDES=query=5.0,init=2.0"
   echo "PIR_APM_TITLE=Enhance PIR APM"
   echo "PIR_APM_ENVIRONMENT=$ENHANCE_APM_ENVIRONMENT"
   echo "PIR_APM_DATA_DIR=/srv/zakura/enhance-data"
@@ -476,7 +476,12 @@ as_root systemctl is-active --quiet pir-apm
 REMOTE
 }
 
-old_metadata="$(curl --fail --silent --show-error "$ENHANCE_PUBLIC_URL/v1/enhance/generation" || true)"
+old_session="$(curl --fail --silent --show-error "$ENHANCE_PUBLIC_URL/v1/enhance/init" || true)"
+old_metadata="$(jq -c '.generation' <<<"$old_session" 2>/dev/null || true)"
+if [[ -z "$old_metadata" || "$old_metadata" == "null" ]]; then
+  # A rollback may still be serving the split setup API during migration.
+  old_metadata="$(curl --fail --silent --show-error "$ENHANCE_PUBLIC_URL/v1/enhance/generation" || true)"
+fi
 
 if ! coordinator_service stop; then
   show_logs
@@ -522,16 +527,22 @@ if [[ "$rollout_ok" -eq 1 ]]; then
   fi
 fi
 if [[ "$rollout_ok" -eq 1 ]]; then
-  new_metadata="$(curl --fail --silent --show-error "$ENHANCE_PUBLIC_URL/v1/enhance/generation")" || rollout_ok=0
+  new_session="$(curl --fail --silent --show-error "$ENHANCE_PUBLIC_URL/v1/enhance/init")" || rollout_ok=0
+fi
+if [[ "$rollout_ok" -eq 1 ]]; then
+  new_metadata="$(jq -c '.generation' <<<"$new_session")" || rollout_ok=0
 fi
 if [[ "$rollout_ok" -eq 1 ]]; then
   expected_groups="$(jq 'length' <<<"$ENHANCE_WORKERS_JSON")"
   if ! jq -e --argjson expected "$expected_groups" '
-    .network == "main" and .pool == "ironwood" and
-    (.setup_seed | type == "number") and
-    ([.shards[].worker] | unique | length) <= $expected and
-    (.shards | length) > 0
-  ' >/dev/null <<<"$new_metadata"; then
+    (.generation.network == "main") and
+    (.generation.pool == "ironwood") and
+    (.generation.setup_seed | type == "number") and
+    ([.generation.shards[].worker] | unique | length) <= $expected and
+    (.generation.shards | length) > 0 and
+    (.params | type == "object") and
+    (.public_params_base64 | type == "string" and length > 0)
+  ' >/dev/null <<<"$new_session"; then
     rollout_ok=0
   fi
 fi

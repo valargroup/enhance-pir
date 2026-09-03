@@ -17,6 +17,7 @@ path = "src/bin/worker.rs"
 
 [dependencies]
 axum = "0.7"
+base64 = "0.22"
 enhance-pir = { path = "../../pir/enhance" }
 arc-swap = "1"
 clap = { version = "4", features = ["derive"] }

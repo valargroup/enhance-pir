@@ -116,17 +116,14 @@ impl Schema {
     pub fn enhance_default() -> Self {
         Self::new(
             "enhance",
-            ["health", "generation", "params", "public_params", "query"]
+            ["health", "init", "query"]
                 .into_iter()
                 .map(String::from)
                 .collect(),
             BTreeSet::from(["query".to_string()]),
             BTreeSet::from(["health".to_string()]),
             crate::thresholds::DEFAULT_LATENCY_P99_SECONDS,
-            BTreeMap::from([
-                ("query".to_string(), 5.0),
-                ("public_params".to_string(), 2.0),
-            ]),
+            BTreeMap::from([("query".to_string(), 5.0), ("init".to_string(), 2.0)]),
         )
         .expect("built-in schema is valid")
     }

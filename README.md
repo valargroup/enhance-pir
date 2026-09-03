@@ -54,9 +54,7 @@ capacity are available on the [Enhance PIR APM dashboard](https://enhance-pir.va
 The public API:
 
 - `GET /v1/health`
-- `GET /v1/enhance/generation`
-- `GET /v1/enhance/params`
-- `GET /v1/enhance/public-params`
+- `GET /v1/enhance/init`
 - `POST /v1/enhance/query`
 
 See [architecture](docs/architecture.md) and the

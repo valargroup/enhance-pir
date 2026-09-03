@@ -197,20 +197,14 @@ mod tests {
         // Mirrors the /etc/default/pir-apm block written by deploy-enhance-pir.sh.
         let config = Config::from_map(&vars(&[
             ("PIR_APM_HEALTH_PATH", "/v1/health"),
-            (
-                "PIR_APM_ENDPOINTS",
-                "health,generation,params,public_params,query",
-            ),
+            ("PIR_APM_ENDPOINTS", "health,init,query"),
             ("PIR_APM_INFORMATIONAL_ENDPOINTS", "health"),
             ("PIR_APM_PROCESSING_ENDPOINTS", "query"),
             ("PIR_APM_LATENCY_P99_SECONDS", "1.0"),
-            (
-                "PIR_APM_LATENCY_P99_OVERRIDES",
-                "query=5.0,public_params=2.0",
-            ),
+            ("PIR_APM_LATENCY_P99_OVERRIDES", "query=5.0,init=2.0"),
         ]))
         .unwrap();
-        assert_eq!(config.schema.latency_budget("public_params"), Some(2.0));
+        assert_eq!(config.schema.latency_budget("init"), Some(2.0));
         assert!(config.schema.uses_processing("query"));
     }
 
