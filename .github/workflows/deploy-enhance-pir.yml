@@ -59,7 +59,7 @@ jobs:
       - name: Build release binaries
         env:
           RUSTFLAGS: -C target-cpu=x86-64-v3
-        run: cargo build --locked --release -p enhance-pir-server -p enhance-pir -p pir-apm --bins
+        run: cargo build --locked --release -p enhance-pir-server -p enhance-pir -p pir-apm --bins --features enhance-pir/cli
       - name: Assemble checksummed artifact
         run: |
           set -euo pipefail

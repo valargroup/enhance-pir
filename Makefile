@@ -1,7 +1,7 @@
 .PHONY: build check test run-server run-worker demo-check fmt
 
 build:
-	cargo build --release --workspace --bins
+	cargo build --release --workspace --bins --features enhance-pir/cli
 
 check:
 	cargo fmt --all --check

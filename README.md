@@ -34,7 +34,7 @@ not build or deploy them.
 ```sh
 make check
 cargo run --release -p enhance-pir-server --bin enhance-pir-server -- --help
-cargo run --release -p enhance-pir --bin enhance-pir-cli -- --help
+cargo run --release -p enhance-pir --features cli --bin enhance-pir-cli -- --help
 ```
 
 The public API is intentionally narrow:
