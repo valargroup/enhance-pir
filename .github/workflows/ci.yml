@@ -20,6 +20,7 @@ jobs:
       nullifier: ${{ steps.filter.outputs.nullifier }}
       witness: ${{ steps.filter.outputs.witness }}
       code: ${{ steps.filter.outputs.code }}
+      memo_deploy: ${{ steps.filter.outputs.memo_deploy }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -43,6 +44,28 @@ jobs:
               - 'rust-toolchain.toml'
               - 'proto/**'
               - '.github/workflows/ci.yml'
+            memo_deploy:
+              - 'scripts/deploy-memo-pir.sh'
+              - '.github/workflows/deploy-memo-pir.yml'
+              - 'infra/digitalocean/memo-poc/deploy/memo-pir-*.service'
+
+  validate-memo-deploy:
+    name: Validate memo deployment tooling
+    needs: changes
+    if: needs.changes.outputs.memo_deploy == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check deployment shell
+        run: shellcheck scripts/deploy-memo-pir.sh
+      - name: Validate example inventory
+        env:
+          MEMO_COORDINATOR_HOST: coordinator.example.net
+          MEMO_DEPLOY_USER: deploy
+          MEMO_PUBLIC_URL: https://memo.example.net
+          MEMO_WORKERS_JSON: >-
+            [{"name":"worker-1","ssh_host":"worker-1.example.net","service_url":"http://10.0.0.2:8091"},{"name":"worker-2","ssh_host":"worker-2.example.net","service_url":"http://10.0.0.3:8091"}]
+        run: scripts/deploy-memo-pir.sh validate
 
   lint:
     name: Lint
