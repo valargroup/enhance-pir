@@ -91,8 +91,11 @@ and reloaded. It proxies `/apm/*` to the sidecar, returns 404 for `/metrics` and
 the diff between the live and staged Caddyfile without installing it.
 
 After a deploy the dashboard is at `<MEMO_PUBLIC_URL>/apm/`. It is
-unauthenticated by design and shows only aggregate metrics; see
-`deploy/pir-apm/README.md` for the alert catalogue and manual test commands.
+unauthenticated by design and shows only aggregate metrics. The fleet view is
+table-aware: every PIR table the coordinator knows about gets a card, and
+endpoint rows for new tables appear without a config change. The sidecar
+probes `/v1/health`. See `deploy/pir-apm/README.md` for the gauge families,
+the alert catalogue, and manual test commands.
 
 ## Rollout and rollback
 

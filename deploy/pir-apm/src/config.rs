@@ -66,6 +66,11 @@ impl Config {
             Some(list) => split_list(&list).into_iter().collect(),
             None => defaults.processing_endpoints.clone(),
         };
+        let informational_endpoints: BTreeSet<String> = match get("PIR_APM_INFORMATIONAL_ENDPOINTS")
+        {
+            Some(list) => split_list(&list).into_iter().collect(),
+            None => defaults.informational_endpoints.clone(),
+        };
         let default_latency_p99 = match get("PIR_APM_LATENCY_P99_SECONDS") {
             Some(value) => value
                 .parse()
@@ -80,6 +85,7 @@ impl Config {
             &prefix,
             endpoints,
             processing_endpoints,
+            informational_endpoints,
             default_latency_p99,
             latency_overrides,
         )
@@ -181,6 +187,7 @@ mod tests {
         assert_eq!(config.schema.latency_budget("params_tier1"), Some(0.5));
         assert_eq!(config.schema.latency_budget("tier1_query"), Some(2.0));
         assert!(config.schema.uses_processing("tier1_query"));
+        assert!(config.schema.is_informational("health"));
         assert_eq!(config.health_path, "/health");
         assert!(config.slack_webhook_url.is_none());
     }
@@ -192,7 +199,8 @@ mod tests {
         assert!(Config::from_map(&vars(&[("PIR_APM_READY_PATH", "ready")])).is_err());
         assert!(Config::from_map(&vars(&[("PIR_APM_LATENCY_P99_OVERRIDES", "query")])).is_err());
         assert!(Config::from_map(&vars(&[("PIR_APM_LATENCY_P99_OVERRIDES", "nope=1")])).is_err());
-        assert!(Config::from_map(&vars(&[("PIR_APM_PROCESSING_ENDPOINTS", "nope")])).is_err());
+        assert!(Config::from_map(&vars(&[("PIR_APM_PROCESSING_ENDPOINTS", "no pe")])).is_err());
+        assert!(Config::from_map(&vars(&[("PIR_APM_INFORMATIONAL_ENDPOINTS", "Bad")])).is_err());
         assert!(Config::from_map(&vars(&[("PIR_APM_ENDPOINTS", "Bad Name")])).is_err());
     }
 }

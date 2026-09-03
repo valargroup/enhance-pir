@@ -254,33 +254,60 @@ impl CoordinatorState {
             .collect()
     }
 
-    /// Point-in-time gauges for `/metrics`. Reads only aggregate state; the
-    /// row and shard gauges describe the ACTION table. Probes each remote
-    /// worker's health with a short timeout so a dead worker shows up on the
-    /// dashboard without slowing the scrape down.
+    /// Point-in-time gauges for `/metrics`. Reads only aggregate state.
+    /// Probes each remote worker's health with a short timeout so a dead
+    /// worker shows up on the dashboard without slowing the scrape down.
     pub async fn observe(&self) -> metrics::Observation {
         let phase = self.phase.read().await.clone();
-        let newest = self.newest();
-        let manifest = newest.as_ref().map(|snapshot| &snapshot.manifest);
-        let action = manifest.and_then(|manifest| manifest.tables.get(&DatabaseId::Action));
+        let retained = self.live.load();
+        let newest = retained.first();
+        let manifest = newest.map(|snapshot| &snapshot.manifest);
+
+        let tables = DatabaseId::ALL
+            .into_iter()
+            .map(|table| {
+                let state = self.tables.get(&table);
+                let published = manifest.and_then(|m| m.tables.get(&table));
+                metrics::TableObservation {
+                    table,
+                    registered: state.is_some(),
+                    pool_workers: state.map_or(0, |t| t.setup.pool.len() as u64),
+                    query_slots_available: state
+                        .map_or(0, |t| t.query_slots.available_permits() as u64),
+                    positions: published.map_or(0, |t| t.positions),
+                    used_rows: published.map_or(0, |t| t.used_rows),
+                    logical_rows: published.map_or(0, |t| t.logical_rows),
+                    shards: published.map_or(0, |t| t.shards.len() as u64),
+                    sealed_shards: published
+                        .map_or(0, |t| t.shards.iter().filter(|s| s.sealed).count() as u64),
+                }
+            })
+            .collect();
+
         let mut probes = tokio::task::JoinSet::new();
         for (index, worker) in self.workers().into_iter().enumerate() {
-            let assigned: Vec<&ShardDescriptor> = manifest
-                .map(|m| {
-                    m.tables
-                        .values()
-                        .flat_map(|table| table.shards.iter())
-                        .filter(|shard| shard.worker == worker.name())
-                        .collect()
+            let name = worker.name().to_string();
+            let shares: Vec<(DatabaseId, u64, u64, u64)> = self
+                .tables
+                .iter()
+                .filter_map(|(table, state)| {
+                    let pool_index = state
+                        .setup
+                        .pool
+                        .iter()
+                        .position(|candidate| candidate.name() == name)?;
+                    let assigned: Vec<&ShardDescriptor> = manifest
+                        .and_then(|m| m.tables.get(table))
+                        .map(|t| t.shards.iter().filter(|s| s.worker == name).collect())
+                        .unwrap_or_default();
+                    Some((
+                        *table,
+                        pool_index as u64,
+                        assigned.len() as u64,
+                        assigned.iter().map(|s| s.populated_positions).sum(),
+                    ))
                 })
-                .unwrap_or_default();
-            let mut observation = metrics::WorkerObservation {
-                name: worker.name().to_string(),
-                index: index as u64,
-                assigned_shards: assigned.len() as u64,
-                populated_positions: assigned.iter().map(|s| s.populated_positions).sum(),
-                ..Default::default()
-            };
+                .collect();
             let probe = match &worker {
                 WorkerTarget::Embedded { .. } => None,
                 WorkerTarget::Remote { base_url, .. } => {
@@ -301,12 +328,33 @@ impl CoordinatorState {
                     }
                     Some((client, base_url)) => probe_worker_health(&client, &base_url).await,
                 };
-                observation.up = probe.up;
-                observation.generation = probe.generation;
-                observation.active_shards = probe.active_shards;
-                observation.total_memory_bytes = probe.total_memory_bytes;
-                observation.available_memory_bytes = probe.available_memory_bytes;
-                observation.process_rss_bytes = probe.process_rss_bytes;
+                let observation = metrics::WorkerObservation {
+                    name,
+                    index: index as u64,
+                    up: probe.up,
+                    generation: probe.generation,
+                    total_memory_bytes: probe.total_memory_bytes,
+                    available_memory_bytes: probe.available_memory_bytes,
+                    process_rss_bytes: probe.process_rss_bytes,
+                    tables: shares
+                        .into_iter()
+                        .map(
+                            |(table, pool_index, assigned_shards, populated_positions)| {
+                                metrics::WorkerTableObservation {
+                                    table,
+                                    index: pool_index,
+                                    assigned_shards,
+                                    populated_positions,
+                                    active_shards: probe
+                                        .active_shards
+                                        .get(table.as_str())
+                                        .copied()
+                                        .unwrap_or(0),
+                                }
+                            },
+                        )
+                        .collect(),
+                };
                 (index, observation)
             });
         }
@@ -322,21 +370,13 @@ impl CoordinatorState {
             .map(|(_, observation)| observation)
             .collect();
         metrics::Observation {
-            worker_details,
             phase: Some(phase),
             anchor_height: manifest.map_or(0, |m| m.anchor_height),
             generation: manifest.map_or(0, |m| m.generation),
             ironwood_tree_size: manifest.map_or(0, |m| m.ironwood_tree_size),
-            used_rows: action.map_or(0, |t| t.used_rows),
-            shards: action.map_or(0, |t| t.shards.len() as u64),
-            workers: self
-                .tables
-                .get(&DatabaseId::Action)
-                .map_or(0, |table| table.setup.pool.len() as u64),
-            query_slots_available: self
-                .tables
-                .get(&DatabaseId::Action)
-                .map_or(0, |table| table.query_slots.available_permits() as u64),
+            retained_generations: retained.len() as u64,
+            tables,
+            worker_details,
         }
     }
 
@@ -875,7 +915,8 @@ fn parse_table(name: &str) -> Result<DatabaseId, StatusCode> {
 struct WorkerProbe {
     up: bool,
     generation: u64,
-    active_shards: u64,
+    /// Active shard count per table wire name, from the newest generation.
+    active_shards: BTreeMap<String, u64>,
     total_memory_bytes: u64,
     available_memory_bytes: u64,
     process_rss_bytes: u64,
@@ -899,14 +940,18 @@ async fn probe_worker_health(client: &reqwest::Client, base_url: &str) -> Worker
         return WorkerProbe::default();
     };
     let field = |name: &str| body.get(name).and_then(|v| v.as_u64()).unwrap_or(0);
-    // `active_shards` is a per-table object on current workers and a bare
-    // number on older ones; sum either form.
+    // `active_shards` is a per-table object keyed by wire name on current
+    // workers; an older bare number is attributed to the ACTION table.
     let active_shards = match body.get("active_shards") {
-        Some(serde_json::Value::Object(per_table)) => {
-            per_table.values().filter_map(|v| v.as_u64()).sum()
-        }
-        Some(value) => value.as_u64().unwrap_or(0),
-        None => 0,
+        Some(serde_json::Value::Object(per_table)) => per_table
+            .iter()
+            .filter_map(|(table, v)| v.as_u64().map(|count| (table.clone(), count)))
+            .collect(),
+        Some(value) => value
+            .as_u64()
+            .map(|count| BTreeMap::from([(DatabaseId::Action.as_str().to_string(), count)]))
+            .unwrap_or_default(),
+        None => BTreeMap::new(),
     };
     WorkerProbe {
         up: body.get("status").and_then(|v| v.as_str()) == Some("ok"),

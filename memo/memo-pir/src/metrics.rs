@@ -27,11 +27,7 @@ use prometheus::{
 };
 
 use crate::coordinator::CoordinatorPhase;
-use crate::types::DatabaseId;
-use crate::types::{
-    ACTIVATION_HEIGHT, CONFIRMATIONS, RECORDS_PER_ROW, RECORD_BYTES, SHARDS_PER_WORKER,
-    SHARD_POSITIONS, SHARD_ROWS,
-};
+use crate::types::{DatabaseId, ACTIVATION_HEIGHT, CONFIRMATIONS, SHARDS_PER_WORKER};
 
 struct Metrics {
     registry: Registry,
@@ -46,30 +42,44 @@ struct Metrics {
     snapshot_anchor_height: IntGauge,
     snapshot_generation: IntGauge,
     snapshot_ironwood_tree_size: IntGauge,
-    snapshot_used_rows: IntGauge,
-    snapshot_shards: IntGauge,
-    snapshot_workers: IntGauge,
-    snapshot_query_slots_available: IntGauge,
+    snapshot_retained_generations: IntGauge,
+    table_registered: IntGaugeVec,
+    table_record_bytes: IntGaugeVec,
+    table_records_per_row: IntGaugeVec,
+    table_shard_rows: IntGaugeVec,
+    table_shard_positions: IntGaugeVec,
+    table_shards_per_worker: IntGaugeVec,
+    table_pool_workers: IntGaugeVec,
+    table_query_slots_available: IntGaugeVec,
+    table_positions: IntGaugeVec,
+    table_used_rows: IntGaugeVec,
+    table_logical_rows: IntGaugeVec,
+    table_shards: IntGaugeVec,
+    table_sealed_shards: IntGaugeVec,
     worker_up: IntGaugeVec,
     worker_generation: IntGaugeVec,
-    worker_active_shards: IntGaugeVec,
-    worker_assigned_shards: IntGaugeVec,
-    worker_populated_positions: IntGaugeVec,
+    worker_table_index: IntGaugeVec,
+    worker_table_assigned_shards: IntGaugeVec,
+    worker_table_populated_positions: IntGaugeVec,
+    worker_table_active_shards: IntGaugeVec,
     worker_index: IntGaugeVec,
     worker_total_memory_bytes: IntGaugeVec,
     worker_available_memory_bytes: IntGaugeVec,
     worker_process_rss_bytes: IntGaugeVec,
-    layout_shard_positions: IntGauge,
-    layout_shard_rows: IntGauge,
-    layout_records_per_row: IntGauge,
-    layout_record_bytes: IntGauge,
-    layout_shards_per_worker: IntGauge,
     layout_confirmations: IntGauge,
     layout_activation_height: IntGauge,
 }
 
 fn worker_gauge(name: &str, help: &str) -> IntGaugeVec {
     IntGaugeVec::new(Opts::new(name, help), &["worker"]).expect("valid metric")
+}
+
+fn table_gauge(name: &str, help: &str) -> IntGaugeVec {
+    IntGaugeVec::new(Opts::new(name, help), &["table"]).expect("valid metric")
+}
+
+fn worker_table_gauge(name: &str, help: &str) -> IntGaugeVec {
+    IntGaugeVec::new(Opts::new(name, help), &["worker", "table"]).expect("valid metric")
 }
 
 fn gauge(name: &str, help: &str) -> IntGauge {
@@ -147,21 +157,59 @@ fn build_metrics() -> Metrics {
         "memo_snapshot_ironwood_tree_size",
         "Ironwood tree size covered by the served snapshot (0 if none).",
     );
-    let snapshot_used_rows = gauge(
-        "memo_snapshot_used_rows",
-        "Database rows holding real records in the served snapshot (0 if none).",
+    let snapshot_retained_generations = gauge(
+        "memo_snapshot_retained_generations",
+        "Generations still answerable (the newest plus the one before it).",
     );
-    let snapshot_shards = gauge(
-        "memo_snapshot_shards",
-        "Shards in the served snapshot (0 if none).",
+
+    // Per-table view. The `table` label is the wire name of a `DatabaseId`,
+    // so cardinality is fixed by the enum. Planned tables are exported too,
+    // with `registered` 0, so the dashboard can draw the whole design.
+    let table_registered = table_gauge(
+        "memo_table_registered",
+        "1 if the coordinator serves this table, 0 if it is only planned.",
     );
-    let snapshot_workers = gauge(
-        "memo_snapshot_workers",
-        "Workers configured on this coordinator.",
+    let table_record_bytes = table_gauge("memo_table_record_bytes", "Bytes in one record.");
+    let table_records_per_row = table_gauge(
+        "memo_table_records_per_row",
+        "Records packed into one PIR row.",
     );
-    let snapshot_query_slots_available = gauge(
-        "memo_snapshot_query_slots_available",
-        "Free concurrent query slots; queries are shed with 503 when this reaches 0.",
+    let table_shard_rows = table_gauge("memo_table_shard_rows", "PIR rows in one shard.");
+    let table_shard_positions = table_gauge(
+        "memo_table_shard_positions",
+        "Positions (records) covered by one shard.",
+    );
+    let table_shards_per_worker = table_gauge(
+        "memo_table_shards_per_worker",
+        "Fixed number of shard ids each worker in the table's pool owns.",
+    );
+    let table_pool_workers = table_gauge(
+        "memo_table_pool_workers",
+        "Workers in the table's ordered pool.",
+    );
+    let table_query_slots_available = table_gauge(
+        "memo_table_query_slots_available",
+        "Free concurrent query slots for the table; queries are shed with 503 at 0.",
+    );
+    let table_positions = table_gauge(
+        "memo_table_positions",
+        "Positions published for the table in the newest generation.",
+    );
+    let table_used_rows = table_gauge(
+        "memo_table_used_rows",
+        "Rows holding real records in the newest generation.",
+    );
+    let table_logical_rows = table_gauge(
+        "memo_table_logical_rows",
+        "Public database size in rows (power of two) in the newest generation.",
+    );
+    let table_shards = table_gauge(
+        "memo_table_shards",
+        "Shards published for the table in the newest generation.",
+    );
+    let table_sealed_shards = table_gauge(
+        "memo_table_sealed_shards",
+        "Published shards that are full and will never be rebuilt.",
     );
 
     // Per-worker fleet view. The `worker` label is the operator-assigned
@@ -174,22 +222,28 @@ fn build_metrics() -> Metrics {
         "memo_worker_generation",
         "Generation the worker reports as active (0 if unknown).",
     );
-    let worker_active_shards = worker_gauge(
-        "memo_worker_active_shards",
-        "Shards the worker reports as active in its current generation.",
+    // Per-worker, per-table ownership: shard id spaces and pool order are
+    // per table, so these are only meaningful with both labels.
+    let worker_table_index = worker_table_gauge(
+        "memo_worker_table_index",
+        "Zero-based position of the worker in this table's pool; fixes which shards it owns.",
     );
-    let worker_assigned_shards = worker_gauge(
-        "memo_worker_assigned_shards",
-        "Shards the served snapshot assigns to this worker.",
+    let worker_table_assigned_shards = worker_table_gauge(
+        "memo_worker_table_assigned_shards",
+        "Shards of this table the newest generation assigns to the worker.",
     );
-    let worker_populated_positions = worker_gauge(
-        "memo_worker_populated_positions",
-        "Ironwood positions held by the shards assigned to this worker.",
+    let worker_table_populated_positions = worker_table_gauge(
+        "memo_worker_table_populated_positions",
+        "Positions held by the worker's shards of this table.",
+    );
+    let worker_table_active_shards = worker_table_gauge(
+        "memo_worker_table_active_shards",
+        "Shards of this table the worker reports active in its newest generation.",
     );
 
     let worker_index = worker_gauge(
         "memo_worker_index",
-        "Zero-based position of the worker in the inventory; fixes which shards it owns.",
+        "Zero-based position of the worker across all pools, first seen first.",
     );
     let worker_total_memory_bytes = worker_gauge(
         "memo_worker_total_memory_bytes",
@@ -204,22 +258,8 @@ fn build_metrics() -> Metrics {
         "Resident memory of the worker process, as reported by its health probe.",
     );
 
-    // Fixed layout facts, exported so the dashboard's explainer and capacity
-    // maths never hardcode a number that lives in `types.rs`.
-    let layout_shard_positions = gauge(
-        "memo_layout_shard_positions",
-        "Ironwood positions covered by one shard.",
-    );
-    let layout_shard_rows = gauge("memo_layout_shard_rows", "PIR rows in one shard.");
-    let layout_records_per_row = gauge(
-        "memo_layout_records_per_row",
-        "Action records packed into one PIR row.",
-    );
-    let layout_record_bytes = gauge("memo_layout_record_bytes", "Bytes in one action record.");
-    let layout_shards_per_worker = gauge(
-        "memo_layout_shards_per_worker",
-        "Fixed number of shard ids each worker owns.",
-    );
+    // Chain-level constants, exported so the dashboard's explainer never
+    // hardcodes a number that lives in `types.rs`.
     let layout_confirmations = gauge(
         "memo_layout_confirmations",
         "Confirmations a block needs before its actions are ingested.",
@@ -241,24 +281,30 @@ fn build_metrics() -> Metrics {
         Box::new(snapshot_anchor_height.clone()),
         Box::new(snapshot_generation.clone()),
         Box::new(snapshot_ironwood_tree_size.clone()),
-        Box::new(snapshot_used_rows.clone()),
-        Box::new(snapshot_shards.clone()),
-        Box::new(snapshot_workers.clone()),
-        Box::new(snapshot_query_slots_available.clone()),
+        Box::new(snapshot_retained_generations.clone()),
+        Box::new(table_registered.clone()),
+        Box::new(table_record_bytes.clone()),
+        Box::new(table_records_per_row.clone()),
+        Box::new(table_shard_rows.clone()),
+        Box::new(table_shard_positions.clone()),
+        Box::new(table_shards_per_worker.clone()),
+        Box::new(table_pool_workers.clone()),
+        Box::new(table_query_slots_available.clone()),
+        Box::new(table_positions.clone()),
+        Box::new(table_used_rows.clone()),
+        Box::new(table_logical_rows.clone()),
+        Box::new(table_shards.clone()),
+        Box::new(table_sealed_shards.clone()),
         Box::new(worker_up.clone()),
         Box::new(worker_generation.clone()),
-        Box::new(worker_active_shards.clone()),
-        Box::new(worker_assigned_shards.clone()),
-        Box::new(worker_populated_positions.clone()),
+        Box::new(worker_table_index.clone()),
+        Box::new(worker_table_assigned_shards.clone()),
+        Box::new(worker_table_populated_positions.clone()),
+        Box::new(worker_table_active_shards.clone()),
         Box::new(worker_index.clone()),
         Box::new(worker_total_memory_bytes.clone()),
         Box::new(worker_available_memory_bytes.clone()),
         Box::new(worker_process_rss_bytes.clone()),
-        Box::new(layout_shard_positions.clone()),
-        Box::new(layout_shard_rows.clone()),
-        Box::new(layout_records_per_row.clone()),
-        Box::new(layout_record_bytes.clone()),
-        Box::new(layout_shards_per_worker.clone()),
         Box::new(layout_confirmations.clone()),
         Box::new(layout_activation_height.clone()),
     ] {
@@ -284,24 +330,30 @@ fn build_metrics() -> Metrics {
         snapshot_anchor_height,
         snapshot_generation,
         snapshot_ironwood_tree_size,
-        snapshot_used_rows,
-        snapshot_shards,
-        snapshot_workers,
-        snapshot_query_slots_available,
+        snapshot_retained_generations,
+        table_registered,
+        table_record_bytes,
+        table_records_per_row,
+        table_shard_rows,
+        table_shard_positions,
+        table_shards_per_worker,
+        table_pool_workers,
+        table_query_slots_available,
+        table_positions,
+        table_used_rows,
+        table_logical_rows,
+        table_shards,
+        table_sealed_shards,
         worker_up,
         worker_generation,
-        worker_active_shards,
-        worker_assigned_shards,
-        worker_populated_positions,
+        worker_table_index,
+        worker_table_assigned_shards,
+        worker_table_populated_positions,
+        worker_table_active_shards,
         worker_index,
         worker_total_memory_bytes,
         worker_available_memory_bytes,
         worker_process_rss_bytes,
-        layout_shard_positions,
-        layout_shard_rows,
-        layout_records_per_row,
-        layout_record_bytes,
-        layout_shards_per_worker,
         layout_confirmations,
         layout_activation_height,
     }
@@ -437,21 +489,46 @@ pub async fn track_request(
 /// Point-in-time view of the coordinator used to populate the snapshot gauges.
 /// Built by the coordinator right before each exposition so the ingest path
 /// never has to remember to update a gauge.
+/// One table as the coordinator sees it at scrape time. Layout fields come
+/// from the table's constant `DatabaseLayout`; the rest are zero for a table
+/// that is planned but not registered, or not yet published.
+#[derive(Clone, Debug)]
+pub struct TableObservation {
+    pub table: DatabaseId,
+    pub registered: bool,
+    pub pool_workers: u64,
+    pub query_slots_available: u64,
+    pub positions: u64,
+    pub used_rows: u64,
+    pub logical_rows: u64,
+    pub shards: u64,
+    pub sealed_shards: u64,
+}
+
+/// One worker's share of one table.
+#[derive(Clone, Debug)]
+pub struct WorkerTableObservation {
+    pub table: DatabaseId,
+    /// Position in this table's pool; the shard ids it owns derive from it.
+    pub index: u64,
+    pub assigned_shards: u64,
+    pub populated_positions: u64,
+    pub active_shards: u64,
+}
+
 /// What the coordinator knows about one worker at scrape time.
 #[derive(Clone, Debug, Default)]
 pub struct WorkerObservation {
     pub name: String,
-    /// Zero-based inventory position; shard ownership derives from it.
+    /// Zero-based position across all pools, first seen first.
     pub index: u64,
     /// `false` when the probe failed or timed out.
     pub up: bool,
     pub generation: u64,
-    pub active_shards: u64,
-    pub assigned_shards: u64,
-    pub populated_positions: u64,
     pub total_memory_bytes: u64,
     pub available_memory_bytes: u64,
     pub process_rss_bytes: u64,
+    pub tables: Vec<WorkerTableObservation>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -460,10 +537,8 @@ pub struct Observation {
     pub anchor_height: u64,
     pub generation: u64,
     pub ironwood_tree_size: u64,
-    pub used_rows: u64,
-    pub shards: u64,
-    pub workers: u64,
-    pub query_slots_available: u64,
+    pub retained_generations: u64,
+    pub tables: Vec<TableObservation>,
     pub worker_details: Vec<WorkerObservation>,
 }
 
@@ -492,11 +567,51 @@ pub fn record_observation(observation: &Observation) {
     m.snapshot_generation.set(clamp(observation.generation));
     m.snapshot_ironwood_tree_size
         .set(clamp(observation.ironwood_tree_size));
-    m.snapshot_used_rows.set(clamp(observation.used_rows));
-    m.snapshot_shards.set(clamp(observation.shards));
-    m.snapshot_workers.set(clamp(observation.workers));
-    m.snapshot_query_slots_available
-        .set(clamp(observation.query_slots_available));
+    m.snapshot_retained_generations
+        .set(clamp(observation.retained_generations));
+    for table in &observation.tables {
+        let layout = table.table.layout();
+        let label = [table.table.as_str()];
+        m.table_registered
+            .with_label_values(&label)
+            .set(i64::from(table.registered));
+        m.table_record_bytes
+            .with_label_values(&label)
+            .set(clamp(layout.record_bytes as u64));
+        m.table_records_per_row
+            .with_label_values(&label)
+            .set(clamp(layout.records_per_row as u64));
+        m.table_shard_rows
+            .with_label_values(&label)
+            .set(clamp(layout.shard_rows as u64));
+        m.table_shard_positions
+            .with_label_values(&label)
+            .set(clamp(layout.shard_positions() as u64));
+        m.table_shards_per_worker
+            .with_label_values(&label)
+            .set(clamp(SHARDS_PER_WORKER));
+        m.table_pool_workers
+            .with_label_values(&label)
+            .set(clamp(table.pool_workers));
+        m.table_query_slots_available
+            .with_label_values(&label)
+            .set(clamp(table.query_slots_available));
+        m.table_positions
+            .with_label_values(&label)
+            .set(clamp(table.positions));
+        m.table_used_rows
+            .with_label_values(&label)
+            .set(clamp(table.used_rows));
+        m.table_logical_rows
+            .with_label_values(&label)
+            .set(clamp(table.logical_rows));
+        m.table_shards
+            .with_label_values(&label)
+            .set(clamp(table.shards));
+        m.table_sealed_shards
+            .with_label_values(&label)
+            .set(clamp(table.sealed_shards));
+    }
     for worker in &observation.worker_details {
         let label = [worker.name.as_str()];
         m.worker_up
@@ -505,15 +620,6 @@ pub fn record_observation(observation: &Observation) {
         m.worker_generation
             .with_label_values(&label)
             .set(clamp(worker.generation));
-        m.worker_active_shards
-            .with_label_values(&label)
-            .set(clamp(worker.active_shards));
-        m.worker_assigned_shards
-            .with_label_values(&label)
-            .set(clamp(worker.assigned_shards));
-        m.worker_populated_positions
-            .with_label_values(&label)
-            .set(clamp(worker.populated_positions));
         m.worker_index
             .with_label_values(&label)
             .set(clamp(worker.index));
@@ -526,12 +632,22 @@ pub fn record_observation(observation: &Observation) {
         m.worker_process_rss_bytes
             .with_label_values(&label)
             .set(clamp(worker.process_rss_bytes));
+        for share in &worker.tables {
+            let label = [worker.name.as_str(), share.table.as_str()];
+            m.worker_table_index
+                .with_label_values(&label)
+                .set(clamp(share.index));
+            m.worker_table_assigned_shards
+                .with_label_values(&label)
+                .set(clamp(share.assigned_shards));
+            m.worker_table_populated_positions
+                .with_label_values(&label)
+                .set(clamp(share.populated_positions));
+            m.worker_table_active_shards
+                .with_label_values(&label)
+                .set(clamp(share.active_shards));
+        }
     }
-    m.layout_shard_positions.set(clamp(SHARD_POSITIONS as u64));
-    m.layout_shard_rows.set(clamp(SHARD_ROWS as u64));
-    m.layout_records_per_row.set(clamp(RECORDS_PER_ROW as u64));
-    m.layout_record_bytes.set(clamp(RECORD_BYTES as u64));
-    m.layout_shards_per_worker.set(clamp(SHARDS_PER_WORKER));
     m.layout_confirmations.set(clamp(CONFIRMATIONS));
     m.layout_activation_height.set(clamp(ACTIVATION_HEIGHT));
 }
@@ -690,7 +806,6 @@ mod tests {
                 current_height: 10,
                 target_height: 20,
             }),
-            workers: 2,
             ..Default::default()
         });
         let m = metrics();
@@ -698,27 +813,53 @@ mod tests {
         assert_eq!(m.snapshot_sync_current_height.get(), 10);
         assert_eq!(m.snapshot_sync_target_height.get(), 20);
 
+        let action_layout = DatabaseId::Action.layout();
         record_observation(&Observation {
             phase: Some(CoordinatorPhase::Serving),
             anchor_height: 3_000_000,
             generation: 3_000_000,
             ironwood_tree_size: u64::MAX,
-            used_rows: 7,
-            shards: 3,
-            workers: 2,
-            query_slots_available: 2,
+            retained_generations: 2,
+            tables: vec![
+                TableObservation {
+                    table: DatabaseId::Action,
+                    registered: true,
+                    pool_workers: 2,
+                    query_slots_available: 2,
+                    positions: 138_124,
+                    used_rows: 17_266,
+                    logical_rows: 32_768,
+                    shards: 3,
+                    sealed_shards: 2,
+                },
+                TableObservation {
+                    table: DatabaseId::Witness,
+                    registered: false,
+                    pool_workers: 0,
+                    query_slots_available: 0,
+                    positions: 0,
+                    used_rows: 0,
+                    logical_rows: 0,
+                    shards: 0,
+                    sealed_shards: 0,
+                },
+            ],
             worker_details: vec![
                 WorkerObservation {
                     name: "worker-1".into(),
                     index: 0,
                     up: true,
                     generation: 3_000_000,
-                    active_shards: 2,
-                    assigned_shards: 2,
-                    populated_positions: 100,
                     total_memory_bytes: 64 << 30,
                     available_memory_bytes: 60 << 30,
                     process_rss_bytes: 1 << 30,
+                    tables: vec![WorkerTableObservation {
+                        table: DatabaseId::Action,
+                        index: 0,
+                        assigned_shards: 2,
+                        populated_positions: 131_072,
+                        active_shards: 2,
+                    }],
                 },
                 WorkerObservation {
                     name: "worker-2".into(),
@@ -732,22 +873,37 @@ mod tests {
         assert_eq!(m.snapshot_sync_current_height.get(), 0);
         assert_eq!(m.snapshot_anchor_height.get(), 3_000_000);
         assert_eq!(m.snapshot_ironwood_tree_size.get(), i64::MAX);
-        assert_eq!(m.snapshot_query_slots_available.get(), 2);
+        assert_eq!(m.snapshot_retained_generations.get(), 2);
         let (_, _, body) = encode();
         assert!(body.contains("memo_snapshot_phase_code 2"));
-        assert!(body.contains("memo_snapshot_shards 3"));
+        assert!(body.contains("memo_table_registered{table=\"action\"} 1"));
+        assert!(body.contains("memo_table_registered{table=\"witness\"} 0"));
+        assert!(body.contains("memo_table_shards{table=\"action\"} 3"));
+        assert!(body.contains("memo_table_sealed_shards{table=\"action\"} 2"));
+        assert!(body.contains(&format!(
+            "memo_table_shard_positions{{table=\"action\"}} {}",
+            action_layout.shard_positions()
+        )));
+        assert!(body.contains(&format!(
+            "memo_table_record_bytes{{table=\"witness\"}} {}",
+            DatabaseId::Witness.layout().record_bytes
+        )));
+        assert!(body.contains(&format!(
+            "memo_table_shards_per_worker{{table=\"action\"}} {}",
+            SHARDS_PER_WORKER
+        )));
         assert!(body.contains("memo_worker_up{worker=\"worker-1\"} 1"));
         assert!(body.contains("memo_worker_up{worker=\"worker-2\"} 0"));
-        assert!(body.contains("memo_worker_assigned_shards{worker=\"worker-1\"} 2"));
         assert!(body.contains("memo_worker_index{worker=\"worker-2\"} 1"));
+        assert!(body
+            .contains("memo_worker_table_assigned_shards{table=\"action\",worker=\"worker-1\"} 2"));
+        assert!(body.contains("memo_worker_table_index{table=\"action\",worker=\"worker-1\"} 0"));
         assert!(body.contains(&format!(
             "memo_worker_total_memory_bytes{{worker=\"worker-1\"}} {}",
             64u64 << 30
         )));
-        assert!(body.contains(&format!("memo_layout_shard_positions {}", SHARD_POSITIONS)));
-        assert!(body.contains(&format!(
-            "memo_layout_shards_per_worker {}",
-            SHARDS_PER_WORKER
-        )));
+        assert!(body.contains(&format!("memo_layout_confirmations {}", CONFIRMATIONS)));
+        assert!(!body.contains("memo_layout_shard_positions"));
+        assert!(!body.contains("memo_snapshot_workers"));
     }
 }

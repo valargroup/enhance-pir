@@ -162,6 +162,12 @@ async fn scrape_loop(
             view.layout = latest
                 .map(|snapshot| snapshot.layout.clone())
                 .unwrap_or_default();
+            view.tables = latest
+                .map(|snapshot| snapshot.tables.clone())
+                .unwrap_or_default();
+            view.worker_tables = latest
+                .map(|snapshot| snapshot.worker_tables.clone())
+                .unwrap_or_default();
             view.process_resident_memory_bytes =
                 latest.and_then(|snapshot| snapshot.resident_memory_bytes);
             view.host = host;

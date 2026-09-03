@@ -36,6 +36,8 @@ pub struct DashboardData {
     pub snapshot_gauges: BTreeMap<String, f64>,
     pub workers: BTreeMap<String, BTreeMap<String, f64>>,
     pub layout: BTreeMap<String, f64>,
+    pub tables: BTreeMap<String, BTreeMap<String, f64>>,
+    pub worker_tables: BTreeMap<String, BTreeMap<String, BTreeMap<String, f64>>>,
     pub process_resident_memory_bytes: Option<f64>,
     pub host: HostHealth,
     pub active_alerts: Vec<Alert>,
@@ -64,6 +66,8 @@ impl DashboardData {
             snapshot_gauges: BTreeMap::new(),
             workers: BTreeMap::new(),
             layout: BTreeMap::new(),
+            tables: BTreeMap::new(),
+            worker_tables: BTreeMap::new(),
             process_resident_memory_bytes: None,
             host,
             active_alerts: Vec::new(),
@@ -212,7 +216,17 @@ word-break:break-all;line-height:1.5}
 max-width:340px;text-align:center}
 .node .desc{font-size:11.5px;color:var(--p62);margin:7px 0 0;line-height:1.45}
 .node .meta.warn{color:var(--warn)}.node .meta.bad{color:var(--bad)}
-.topo .capacity{width:100%;max-width:560px;margin-top:26px}
+.tables{width:100%;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+gap:12px;margin-top:26px}
+.tables .node{min-width:0;max-width:none;text-align:left;padding:12px 14px}
+.tables .node .meter{margin-top:10px}
+.tables .node .meter-foot{margin-top:6px}
+.node.planned{opacity:.55;border-style:dashed}
+.node .kv{font-family:var(--mono);font-size:11.5px;color:var(--p62);margin:4px 0 0;
+overflow-wrap:anywhere}
+.node .kv b{color:var(--p85);font-weight:500}
+.topo .section{width:100%;margin-top:24px;font-size:10.5px;letter-spacing:.13em;
+text-transform:uppercase;color:var(--p42);text-align:left}
 .explain{margin:0;display:grid;grid-template-columns:minmax(120px,180px) 1fr;gap:14px 22px;
 font-size:13.5px}
 .explain dt{color:var(--ink);font-family:var(--mono);font-size:12.5px;padding-top:2px}
@@ -356,21 +370,44 @@ fn status_chip(label: &str, code: Option<u16>) -> String {
     }
 }
 
-fn kpis(data: &DashboardData) -> String {
-    let schema = &data.schema;
-    let windows: Vec<&EndpointWindow> = schema
+/// Endpoints in display order: configured first, then anything the server
+/// labelled that the config did not list.
+fn ordered_endpoints(data: &DashboardData) -> Vec<(&str, EndpointWindow)> {
+    let mut out: Vec<(&str, EndpointWindow)> = data
+        .schema
         .endpoints
         .iter()
-        .filter_map(|endpoint| data.endpoints.get(endpoint))
+        .map(|endpoint| {
+            (
+                endpoint.as_str(),
+                data.endpoints.get(endpoint).cloned().unwrap_or_default(),
+            )
+        })
         .collect();
+    out.extend(
+        data.endpoints
+            .iter()
+            .filter(|(name, _)| !data.schema.knows(name))
+            .map(|(name, window)| (name.as_str(), window.clone())),
+    );
+    out
+}
+
+fn uses_processing(data: &DashboardData, endpoint: &str, window: &EndpointWindow) -> bool {
+    data.schema.uses_processing(endpoint) || window.processing_available
+}
+
+fn kpis(data: &DashboardData) -> String {
+    let ordered = ordered_endpoints(data);
+    let windows: Vec<&EndpointWindow> = ordered.iter().map(|(_, window)| window).collect();
     let total_qps: f64 = windows.iter().map(|window| window.qps).sum();
-    let worst_p95 = schema
-        .endpoints
+    let worst_p95 = ordered
         .iter()
-        .filter_map(|endpoint| {
-            data.endpoints
-                .get(endpoint)
-                .and_then(|window| window.alert_latency(schema.uses_processing(endpoint)).p95)
+        .filter(|(endpoint, _)| !data.schema.is_informational(endpoint))
+        .filter_map(|(endpoint, window)| {
+            window
+                .alert_latency(uses_processing(data, endpoint, window))
+                .p95
         })
         .fold(None::<f64>, |acc, value| {
             Some(acc.map_or(value, |current: f64| current.max(value)))
@@ -438,13 +475,14 @@ fn class_suffix(tone: &str) -> String {
 }
 
 fn endpoint_table(data: &DashboardData) -> String {
-    let rows = data
-        .schema
-        .endpoints
-        .iter()
-        .map(|endpoint| {
-            let values = data.endpoints.get(endpoint).cloned().unwrap_or_default();
-            let budget = latency_budget(&data.schema, endpoint);
+    let rows = ordered_endpoints(data)
+        .into_iter()
+        .map(|(endpoint, values)| {
+            let budget = if uses_processing(data, endpoint, &values) {
+                None
+            } else {
+                latency_budget(&data.schema, endpoint)
+            };
             format!(
                 "<tr><th>{name}</th><td>{qps:.3}</td><td>{in_flight:.0}</td>\
 <td>{requests:.0}</td>{p50}{p95}{p99}<td>{errors}</td></tr>",
@@ -469,11 +507,10 @@ fn endpoint_table(data: &DashboardData) -> String {
 
 /// One "latency split" card per endpoint that is paged on processing time.
 fn processing_latency_splits(data: &DashboardData) -> String {
-    data.schema
-        .endpoints
-        .iter()
-        .filter(|endpoint| data.schema.uses_processing(endpoint))
-        .map(|endpoint| processing_latency_split(data, endpoint))
+    ordered_endpoints(data)
+        .into_iter()
+        .filter(|(endpoint, window)| uses_processing(data, endpoint, window))
+        .map(|(endpoint, _)| processing_latency_split(data, endpoint))
         .collect()
 }
 
@@ -560,16 +597,51 @@ fn error_cell(values: &EndpointWindow) -> String {
     )
 }
 
-/// Coordinator-to-workers topology drawn from the `<prefix>_worker_*` gauges,
-/// with each node's job spelled out. Only inventory names are shown; worker
-/// addresses never reach the page.
+/// Display order for tables: the coordinator's registration order is fixed
+/// by the `DatabaseId` enum; anything unknown sorts after it.
+const TABLE_ORDER: [&str; 4] = ["action", "witness", "nf-cold", "nf-warm"];
+
+fn table_rank(name: &str) -> usize {
+    TABLE_ORDER
+        .iter()
+        .position(|known| *known == name)
+        .unwrap_or(TABLE_ORDER.len())
+}
+
+fn ordered_tables(data: &DashboardData) -> Vec<(&String, &BTreeMap<String, f64>)> {
+    let mut tables: Vec<_> = data.tables.iter().collect();
+    tables.sort_by(|(a, _), (b, _)| table_rank(a).cmp(&table_rank(b)).then_with(|| a.cmp(b)));
+    tables
+}
+
+/// `shards a–b` for a pool position, or empty when the inputs are missing.
+fn owned_shards(index: Option<f64>, per_worker: Option<f64>) -> String {
+    match (index, per_worker) {
+        (Some(index), Some(per_worker)) if per_worker >= 1.0 => {
+            let first = index * per_worker;
+            let last = first + per_worker - 1.0;
+            if per_worker == 1.0 {
+                format!("shard {}", format_number(first))
+            } else {
+                format!(
+                    "shards {}&ndash;{}",
+                    format_number(first),
+                    format_number(last)
+                )
+            }
+        }
+        _ => String::new(),
+    }
+}
+
+/// Chain source → coordinator → workers, then one card per PIR table. Only
+/// inventory names are shown; worker addresses never reach the page.
 fn fleet_card(data: &DashboardData) -> String {
     let gauge = |name: &str| {
         data.snapshot_gauges
             .get(&format!("{}{name}", data.schema.gauge_prefix))
             .copied()
     };
-    let layout = |name: &str| data.layout.get(name).copied();
     let phase = gauge("phase_code").map(phase_label).unwrap_or("unknown");
     let generation = gauge("generation").unwrap_or(0.0);
     let coordinator_meta = format!(
@@ -580,28 +652,28 @@ fn fleet_card(data: &DashboardData) -> String {
         generation = format_number(generation),
     );
     let coordinator_meta2 = [
+        gauge("retained_generations")
+            .map(|v| format!("{} generations answerable", format_number(v))),
         gauge("ironwood_tree_size").map(|v| format!("{} actions indexed", format_number(v))),
-        gauge("query_slots_available").map(|v| format!("{} query slots free", format_number(v))),
     ]
     .into_iter()
     .flatten()
     .collect::<Vec<_>>()
     .join(" &middot; ");
-    let shards_per_worker = layout("shards_per_worker").filter(|v| *v >= 1.0);
 
-    let mut ordered: Vec<(&String, &BTreeMap<String, f64>)> = data.workers.iter().collect();
-    ordered.sort_by(|(a_name, a), (b_name, b)| {
+    let mut workers: Vec<(&String, &BTreeMap<String, f64>)> = data.workers.iter().collect();
+    workers.sort_by(|(a_name, a), (b_name, b)| {
         let a_index = a.get("index").copied().unwrap_or(f64::INFINITY);
         let b_index = b.get("index").copied().unwrap_or(f64::INFINITY);
         a_index.total_cmp(&b_index).then_with(|| a_name.cmp(b_name))
     });
 
-    let leaves = if ordered.is_empty() {
+    let leaves = if workers.is_empty() {
         "<div class=\"leaf\"><div class=\"node\"><p class=\"role\">Workers</p>\
 <p class=\"id muted\">none reported yet</p></div></div>"
             .to_string()
     } else {
-        ordered
+        workers
             .iter()
             .map(|(name, gauges)| {
                 let up = gauges.get("up").copied();
@@ -620,46 +692,39 @@ fn fleet_card(data: &DashboardData) -> String {
                     Some(_) => ("is-bad", "unreachable"),
                     None => ("", "unknown"),
                 };
-                let owned = match (gauges.get("index"), shards_per_worker) {
-                    (Some(index), Some(per_worker)) => {
-                        let first = index * per_worker;
-                        let last = first + per_worker - 1.0;
-                        if per_worker == 1.0 {
-                            format!("owns shard {}", format_number(first))
-                        } else {
-                            format!(
-                                "owns shards {}&ndash;{}",
-                                format_number(first),
-                                format_number(last)
-                            )
-                        }
-                    }
-                    _ => String::new(),
-                };
-                let counts = [
-                    ("assigned_shards", "assigned"),
-                    ("active_shards", "active"),
-                    ("populated_positions", "positions"),
-                ]
-                .iter()
-                .filter_map(|(key, label)| {
-                    gauges
-                        .get(*key)
-                        .map(|value| format!("{} {label}", format_number(*value)))
-                })
-                .collect::<Vec<_>>()
-                .join(" &middot; ");
-                let meta = [owned, counts]
-                    .into_iter()
-                    .filter(|part| !part.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" &middot; ");
+                let mut shares: Vec<(&String, &BTreeMap<String, f64>)> = data
+                    .worker_tables
+                    .get(*name)
+                    .map(|tables| tables.iter().collect())
+                    .unwrap_or_default();
+                shares.sort_by(|(a, _), (b, _)| {
+                    table_rank(a).cmp(&table_rank(b)).then_with(|| a.cmp(b))
+                });
+                let share_lines = shares
+                    .iter()
+                    .map(|(table, share)| {
+                        let per_worker = data
+                            .tables
+                            .get(*table)
+                            .and_then(|t| t.get("shards_per_worker").copied());
+                        let owned = owned_shards(share.get("index").copied(), per_worker);
+                        let assigned = share.get("assigned_shards").copied().unwrap_or(0.0);
+                        let positions = share.get("populated_positions").copied().unwrap_or(0.0);
+                        format!(
+                            "<p class=\"kv\"><b>{table}</b> {owned} &middot; {assigned} assigned \
+&middot; {positions} positions</p>",
+                            table = escape(table),
+                            assigned = format_number(assigned),
+                            positions = format_number(positions),
+                        )
+                    })
+                    .collect::<String>();
                 let ram = worker_ram_line(gauges);
                 format!(
                     "<div class=\"leaf\"><div class=\"node {tone}\"><p class=\"role\">Worker</p>\
 <p class=\"id\">{name}</p>\
 <p class=\"desc\">Holds sealed iPIR artifacts for its shards and evaluates its slice of every query.</p>\
-<p class=\"meta\">{meta}</p>{ram}\
+{share_lines}{ram}\
 <span class=\"state\">{state}</span></div></div>",
                     name = escape(name),
                 )
@@ -667,22 +732,22 @@ fn fleet_card(data: &DashboardData) -> String {
             .collect::<String>()
     };
 
-    let capacity = fleet_capacity_meter(data);
+    let tables = tables_section(data);
 
     format!(
         "<section class=\"card\"><p class=\"eyebrow\">Fleet topology</p>\
 <div class=\"topo\">\
 <div class=\"node\"><p class=\"role\">Chain source</p><p class=\"id\">zakurad archive node</p>\
-<p class=\"desc\">Runs on the coordinator host and is reached over loopback RPC. It serves finalized blocks and the Ironwood tree size; the coordinator trusts nothing else about the chain.</p></div>\
+<p class=\"desc\">Same host, loopback RPC. The only source of finalized blocks and the Ironwood tree size.</p></div>\
 <div class=\"trunk\"></div>\
 <div class=\"node coord\"><p class=\"role\">Coordinator</p><p class=\"id\">{hostname}</p>\
-<p class=\"desc\">Ingests every finalized Ironwood action into a local journal, publishes a new generation per block, splits each client query across the workers, and packs the answer. Clients reach it over HTTPS through Caddy; workers are private.</p>\
+<p class=\"desc\">Ingests finalized actions into per-table journals, publishes one generation per block, and fans each query out to the workers. Clients enter over HTTPS through Caddy.</p>\
 <p class=\"meta\">{coordinator_meta}</p>{coordinator_meta2}</div>\
 <div class=\"trunk\"></div>\
-<div class=\"bus\">{leaves}</div>{capacity}</div>\
+<div class=\"bus\">{leaves}</div>{tables}</div>\
 <p class=\"note\">Workers are probed by the coordinator on each scrape over the private network; \
-only their inventory names are shown here. A worker whose generation trails the coordinator's \
-is still serving the previous snapshot.</p></section>",
+only their inventory names are shown. A worker whose generation trails the coordinator's is still \
+serving the previous snapshot.</p></section>",
         hostname = escape(&data.hostname),
         coordinator_meta2 = if coordinator_meta2.is_empty() {
             String::new()
@@ -730,29 +795,112 @@ fn worker_ram_line(gauges: &BTreeMap<String, f64>) -> String {
     )
 }
 
-/// How full the fleet is: positions indexed against
-/// `workers × shards_per_worker × shard_positions`.
-fn fleet_capacity_meter(data: &DashboardData) -> String {
-    let gauge = |name: &str| {
-        data.snapshot_gauges
-            .get(&format!("{}{name}", data.schema.gauge_prefix))
-            .copied()
-    };
-    let (Some(workers), Some(per_worker), Some(shard_positions), Some(tree_size)) = (
-        gauge("workers"),
-        data.layout.get("shards_per_worker").copied(),
-        data.layout.get("shard_positions").copied(),
-        gauge("ironwood_tree_size"),
+/// One compact card per PIR table the coordinator knows about. Planned tables
+/// (registered = 0) are drawn dimmed with just their layout.
+fn tables_section(data: &DashboardData) -> String {
+    let tables = ordered_tables(data);
+    if tables.is_empty() {
+        return String::new();
+    }
+    let cards = tables
+        .iter()
+        .map(|(name, gauges)| {
+            let g = |key: &str| gauges.get(key).copied();
+            let registered = g("registered").is_some_and(|v| v >= 1.0);
+            let layout = match (
+                g("records_per_row"),
+                g("record_bytes"),
+                g("shard_rows"),
+                g("shard_positions"),
+            ) {
+                (Some(rpr), Some(rb), Some(rows), Some(positions)) => format!(
+                    "<p class=\"kv\">{rpr} &times; {rb} B per row &middot; {rows} rows per shard \
+&middot; <b>{positions}</b> positions per shard</p>",
+                    rpr = format_number(rpr),
+                    rb = format_number(rb),
+                    rows = format_number(rows),
+                    positions = format_number(positions),
+                ),
+                _ => String::new(),
+            };
+            if !registered {
+                return format!(
+                    "<div class=\"node planned\"><p class=\"role\">Table</p><p class=\"id\">{name}</p>\
+{layout}<span class=\"state\">planned &middot; not registered</span></div>",
+                    name = escape(name),
+                );
+            }
+            let shards = g("shards").unwrap_or(0.0);
+            let sealed = g("sealed_shards").unwrap_or(0.0);
+            let positions = g("positions").unwrap_or(0.0);
+            let pool = g("pool_workers").unwrap_or(0.0);
+            let slots = g("query_slots_available").unwrap_or(0.0);
+            let usage = format!(
+                "<p class=\"kv\"><b>{shards}</b> shards ({sealed} sealed) &middot; <b>{positions}</b> \
+positions &middot; {pool} workers &middot; {slots} query slots free</p>",
+                shards = format_number(shards),
+                sealed = format_number(sealed),
+                positions = format_number(positions),
+                pool = format_number(pool),
+                slots = format_number(slots),
+            );
+            let per_worker = g("shards_per_worker");
+            let mut holders: Vec<(String, f64)> = data
+                .worker_tables
+                .iter()
+                .filter_map(|(worker, tables)| {
+                    tables
+                        .get(*name)
+                        .and_then(|share| share.get("index").copied())
+                        .map(|index| (worker.clone(), index))
+                })
+                .collect();
+            holders.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+            let holders = holders
+                .iter()
+                .map(|(worker, index)| {
+                    format!(
+                        "{}: {}",
+                        escape(worker),
+                        owned_shards(Some(*index), per_worker)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" &middot; ");
+            let holders = if holders.is_empty() {
+                String::new()
+            } else {
+                format!("<p class=\"kv\">{holders}</p>")
+            };
+            format!(
+                "<div class=\"node is-ok\"><p class=\"role\">Table</p><p class=\"id\">{name}</p>\
+{layout}{usage}{holders}{capacity}</div>",
+                name = escape(name),
+                capacity = table_capacity_meter(gauges),
+            )
+        })
+        .collect::<String>();
+    format!("<p class=\"section\">Tables</p><div class=\"tables\">{cards}</div>")
+}
+
+/// How full one table is: positions published against
+/// `pool_workers × shards_per_worker × shard_positions`.
+fn table_capacity_meter(gauges: &BTreeMap<String, f64>) -> String {
+    let (Some(pool), Some(per_worker), Some(shard_positions), Some(positions)) = (
+        gauges.get("pool_workers").copied(),
+        gauges.get("shards_per_worker").copied(),
+        gauges.get("shard_positions").copied(),
+        gauges.get("positions").copied(),
     ) else {
         return String::new();
     };
-    if workers <= 0.0 || per_worker <= 0.0 || shard_positions <= 0.0 {
+    if pool <= 0.0 || per_worker <= 0.0 || shard_positions <= 0.0 {
         return String::new();
     }
-    let shard_capacity = workers * per_worker;
+    let shard_capacity = pool * per_worker;
     let position_capacity = shard_capacity * shard_positions;
-    let ratio = tree_size / position_capacity;
-    let shards_used = (tree_size / shard_positions).ceil();
+    let ratio = positions / position_capacity;
+    let shards_used = (positions / shard_positions).ceil();
     let tone = if ratio > 0.90 {
         "bad"
     } else if ratio > 0.75 {
@@ -760,73 +908,89 @@ fn fleet_capacity_meter(data: &DashboardData) -> String {
     } else {
         ""
     };
-    format!(
-        "<div class=\"capacity\">{meter}\
-<p class=\"meter-foot\">Append a worker to the inventory before the tree reaches capacity; \
-ownership of existing shards never moves.</p></div>",
-        meter = meter(
-            "Fleet capacity",
-            &format!(
-                "{} of {} positions &middot; {} of {} shards",
-                format_number(tree_size),
-                format_number(position_capacity),
-                format_number(shards_used),
-                format_number(shard_capacity),
-            ),
-            ratio,
-            tone,
+    meter(
+        "Capacity",
+        &format!(
+            "{} of {} positions &middot; {} of {} shards &middot; append a worker before this fills",
+            format_number(positions),
+            format_number(position_capacity),
+            format_number(shards_used),
+            format_number(shard_capacity),
         ),
+        ratio,
+        tone,
     )
 }
 
-/// Plain-language summary of how the fleet works, with every number taken
-/// from the `<prefix>_layout_*` gauges so it cannot drift from the binary.
-/// Rendered only when the layout family is present (the memo profile).
+/// Plain-language summary of how the fleet works. Every number comes from the
+/// `<prefix>_table_*` and `<prefix>_layout_*` gauges, so the text cannot drift
+/// from the binary. Rendered only when the coordinator exports tables.
 fn explainer_card(data: &DashboardData) -> String {
-    if data.layout.is_empty() {
+    let tables = ordered_tables(data);
+    if tables.is_empty() {
         return String::new();
     }
-    let n = |name: &str| {
+    let chain = |name: &str| {
         data.layout
             .get(name)
             .map(|value| format_number(*value))
             .unwrap_or_else(|| "?".to_string())
     };
-    let per_worker = data.layout.get("shards_per_worker").copied().unwrap_or(0.0);
+    let layout_rows = tables
+        .iter()
+        .map(|(name, g)| {
+            let n = |key: &str| g.get(key).map(|v| format_number(*v)).unwrap_or_else(|| "?".into());
+            let state = if g.get("registered").is_some_and(|v| *v >= 1.0) {
+                "serving"
+            } else {
+                "planned"
+            };
+            format!(
+                "<tr><th>{name}</th><td>{rpr} &times; {rb} B</td><td>{rows}</td><td>{positions}</td>\
+<td class=\"muted\">{state}</td></tr>",
+                name = escape(name),
+                rpr = n("records_per_row"),
+                rb = n("record_bytes"),
+                rows = n("shard_rows"),
+                positions = n("shard_positions"),
+            )
+        })
+        .collect::<String>();
+    let per_worker = tables
+        .iter()
+        .find_map(|(_, g)| g.get("shards_per_worker").copied())
+        .unwrap_or(0.0);
     let ownership = if per_worker >= 1.0 {
         format!(
-            "Worker <b>n</b> owns shards <b>n&times;{spw}</b> to <b>n&times;{spw}+{last}</b>.",
+            "Worker <b>n</b> of a table's pool owns shards <b>n&times;{spw}</b> to \
+<b>n&times;{spw}+{last}</b>; pools are append-only, so adding a worker never moves a shard.",
             spw = format_number(per_worker),
             last = format_number(per_worker - 1.0),
         )
     } else {
-        "Each worker owns a fixed range of shard ids.".to_string()
+        "Each worker owns a fixed range of shard ids; pools are append-only.".to_string()
     };
     format!(
         "<section class=\"card\"><p class=\"eyebrow\">How this fleet works</p>\
 <dl class=\"explain\">\
 <dt>Ingest</dt><dd>The coordinator alone reads the chain. It polls the local archive node, waits \
-<b>{confirmations}</b> confirmations, and appends each finalized block's actions to an append-only \
-journal that starts at Ironwood activation, height <b>{activation}</b>. Workers never talk to the chain.</dd>\
-<dt>Generations</dt><dd>Every new finalized block publishes a new generation named by its height. \
-Only the shard whose rows changed (the unsealed tail) is re-uploaded and rebuilt on its worker; \
-sealed shards are reused from the worker's on-disk cache, so a rebuild usually touches one shard \
-and takes seconds. Workers keep the previous generation active so in-flight queries still finish.</dd>\
-<dt>Shard layout</dt><dd>The database is indexed directly by Ironwood note position. A row packs \
-<b>{records_per_row}</b> records of <b>{record_bytes}</b> bytes, a shard is <b>{shard_rows}</b> rows, \
-so one shard covers <b>{shard_positions}</b> positions. {ownership} The inventory is append-only, \
-so adding a worker never moves a published shard.</dd>\
-<dt>Queries</dt><dd>A client fetches the public parameters and sends one query for the whole \
-database. The coordinator slices it per shard, fans the slices out to the owning workers in \
-parallel, sums the partial answers, and packs a single response. It admits two queries at a time \
-and sheds the rest with a 503.</dd>\
+<b>{confirmations}</b> confirmations, and appends each finalized block to one append-only journal \
+per table, starting at Ironwood activation, height <b>{activation}</b>. Workers never touch the chain.</dd>\
+<dt>Generations</dt><dd>Every finalized block publishes a new generation, named by its height, whose \
+manifest describes every table at that one anchor. A wallet pins one generation for a whole sync \
+pass. The two newest generations stay answerable, so a query built just before a publish still \
+succeeds. Only shards whose rows changed are rebuilt; sealed shards are reused from the worker's \
+cache.</dd>\
+<dt>Layout</dt><dd>Every table is indexed directly by position. {ownership}\
+<div class=\"wrap\"><table><thead><tr><th>Table</th><th>Row</th><th>Rows / shard</th>\
+<th>Positions / shard</th><th></th></tr></thead><tbody>{layout_rows}</tbody></table></div></dd>\
+<dt>Queries</dt><dd>A client fetches a table's public parameters and sends one query for the whole \
+table to <code>/v1/&lt;table&gt;/query</code>. The coordinator slices it per shard, fans the slices \
+out to that table's workers in parallel, sums the partial answers, and packs a single response. \
+Admission is per table; excess queries are shed with a 503.</dd>\
 </dl></section>",
-        confirmations = n("confirmations"),
-        activation = n("activation_height"),
-        records_per_row = n("records_per_row"),
-        record_bytes = n("record_bytes"),
-        shard_rows = n("shard_rows"),
-        shard_positions = n("shard_positions"),
+        confirmations = chain("confirmations"),
+        activation = chain("activation_height"),
     )
 }
 
@@ -1164,9 +1328,12 @@ mod tests {
     }
 
     #[test]
-    fn unknown_endpoints_have_no_latency_budget() {
+    fn latency_budgets_follow_endpoint_kind() {
         let schema = Schema::memo_default();
-        assert!(latency_budget(&schema, "nope").is_none());
+        // Discovered endpoints get the default budget; informational and
+        // processing endpoints get none in the observed table.
+        assert_eq!(latency_budget(&schema, "nope"), Some(1.0));
+        assert!(latency_budget(&schema, "health").is_none());
         assert!(latency_budget(&schema, "query").is_none());
         assert_eq!(latency_budget(&schema, "public_params"), Some(2.0));
         assert!(!latency_cell(Some(99.0), None).contains("bad"));
@@ -1235,47 +1402,6 @@ mod tests {
         assert!(html.contains("<code>{&quot;phase&quot;"));
     }
 
-    #[test]
-    fn fleet_card_draws_each_worker_with_its_health() {
-        let mut data = sample();
-        data.snapshot_gauges
-            .insert("memo_snapshot_phase_code".into(), 2.0);
-        data.snapshot_gauges
-            .insert("memo_snapshot_generation".into(), 100.0);
-        data.snapshot_gauges
-            .insert("memo_snapshot_anchor_height".into(), 100.0);
-        data.workers.insert(
-            "worker-1".into(),
-            BTreeMap::from([
-                ("up".to_string(), 1.0),
-                ("generation".to_string(), 100.0),
-                ("assigned_shards".to_string(), 2.0),
-            ]),
-        );
-        data.workers
-            .insert("worker-2".into(), BTreeMap::from([("up".to_string(), 0.0)]));
-        data.workers.insert(
-            "worker-3".into(),
-            BTreeMap::from([("up".to_string(), 1.0), ("generation".to_string(), 99.0)]),
-        );
-        let html = render(&data);
-        assert!(html.contains("Fleet topology"));
-        assert!(html.contains("serving &middot; anchor 100 &middot; generation 100"));
-        assert!(html.contains("<p class=\"id\">worker-1</p>"));
-        assert!(html.contains("2 assigned"));
-        assert!(html.contains("zakurad archive node"));
-        assert!(html.contains("Ingests every finalized Ironwood action"));
-        assert!(html.contains("Holds sealed iPIR artifacts"));
-        assert_eq!(html.matches("class=\"node is-ok\"").count(), 1);
-        assert_eq!(html.matches("class=\"node is-bad\"").count(), 1);
-        assert_eq!(html.matches("class=\"node is-warn\"").count(), 1);
-        assert!(html.contains("unreachable"));
-        assert!(html.contains("generation lag"));
-
-        let empty = render(&sample());
-        assert!(empty.contains("none reported yet"));
-    }
-
     fn fleet_sample() -> DashboardData {
         let mut data = sample();
         data.snapshot_gauges
@@ -1283,16 +1409,36 @@ mod tests {
         data.snapshot_gauges
             .insert("memo_snapshot_generation".into(), 100.0);
         data.snapshot_gauges
-            .insert("memo_snapshot_workers".into(), 2.0);
+            .insert("memo_snapshot_anchor_height".into(), 100.0);
+        data.snapshot_gauges
+            .insert("memo_snapshot_retained_generations".into(), 2.0);
         data.snapshot_gauges
             .insert("memo_snapshot_ironwood_tree_size".into(), 138_124.0);
-        data.layout.insert("shards_per_worker".into(), 2.0);
-        data.layout.insert("shard_positions".into(), 65_536.0);
-        data.layout.insert("shard_rows".into(), 8_192.0);
-        data.layout.insert("records_per_row".into(), 8.0);
-        data.layout.insert("record_bytes".into(), 792.0);
         data.layout.insert("confirmations".into(), 10.0);
         data.layout.insert("activation_height".into(), 3_428_143.0);
+        let action = BTreeMap::from([
+            ("registered".to_string(), 1.0),
+            ("records_per_row".to_string(), 8.0),
+            ("record_bytes".to_string(), 792.0),
+            ("shard_rows".to_string(), 8_192.0),
+            ("shard_positions".to_string(), 65_536.0),
+            ("shards_per_worker".to_string(), 2.0),
+            ("pool_workers".to_string(), 2.0),
+            ("query_slots_available".to_string(), 2.0),
+            ("positions".to_string(), 138_124.0),
+            ("shards".to_string(), 3.0),
+            ("sealed_shards".to_string(), 2.0),
+        ]);
+        let witness = BTreeMap::from([
+            ("registered".to_string(), 0.0),
+            ("records_per_row".to_string(), 256.0),
+            ("record_bytes".to_string(), 32.0),
+            ("shard_rows".to_string(), 8_192.0),
+            ("shard_positions".to_string(), 2_097_152.0),
+            ("shards_per_worker".to_string(), 2.0),
+        ]);
+        data.tables.insert("witness".into(), witness);
+        data.tables.insert("action".into(), action);
         data.workers.insert(
             "worker-b".into(),
             BTreeMap::from([
@@ -1313,17 +1459,67 @@ mod tests {
             "worker-a".into(),
             BTreeMap::from([("up".to_string(), 1.0), ("index".to_string(), 1.0)]),
         );
+        data.worker_tables.insert(
+            "worker-b".into(),
+            BTreeMap::from([(
+                "action".to_string(),
+                BTreeMap::from([
+                    ("index".to_string(), 0.0),
+                    ("assigned_shards".to_string(), 2.0),
+                    ("populated_positions".to_string(), 131_072.0),
+                ]),
+            )]),
+        );
+        data.worker_tables.insert(
+            "worker-a".into(),
+            BTreeMap::from([(
+                "action".to_string(),
+                BTreeMap::from([
+                    ("index".to_string(), 1.0),
+                    ("assigned_shards".to_string(), 1.0),
+                    ("populated_positions".to_string(), 7_052.0),
+                ]),
+            )]),
+        );
         data
     }
 
     #[test]
-    fn workers_are_ordered_by_inventory_index_and_show_owned_shards() {
+    fn fleet_card_draws_each_worker_with_its_health() {
+        let mut data = fleet_sample();
+        data.workers
+            .insert("worker-c".into(), BTreeMap::from([("up".to_string(), 0.0)]));
+        data.workers.insert(
+            "worker-d".into(),
+            BTreeMap::from([("up".to_string(), 1.0), ("generation".to_string(), 99.0)]),
+        );
+        let html = render(&data);
+        assert!(html.contains("Fleet topology"));
+        assert!(html.contains("serving &middot; anchor 100 &middot; generation 100"));
+        assert!(html.contains("2 generations answerable"));
+        assert!(html.contains("zakurad archive node"));
+        assert!(html.contains("Ingests finalized actions"));
+        assert!(html.contains("Holds sealed iPIR artifacts"));
+        assert_eq!(html.matches("class=\"node is-ok\"").count(), 3); // 2 workers + action table
+        assert_eq!(html.matches("class=\"node is-bad\"").count(), 1);
+        assert_eq!(html.matches("class=\"node is-warn\"").count(), 1);
+        assert!(html.contains("unreachable"));
+        assert!(html.contains("generation lag"));
+        assert!(render(&sample()).contains("none reported yet"));
+    }
+
+    #[test]
+    fn workers_are_ordered_by_index_and_list_per_table_shares() {
         let html = render(&fleet_sample());
         let b = html.find("<p class=\"id\">worker-b</p>").unwrap();
         let a = html.find("<p class=\"id\">worker-a</p>").unwrap();
         assert!(b < a, "index 0 must render before index 1");
-        assert!(html.contains("owns shards 0&ndash;1"));
-        assert!(html.contains("owns shards 2&ndash;3"));
+        assert!(html.contains(
+            "<b>action</b> shards 0&ndash;1 &middot; 2 assigned &middot; 131072 positions"
+        ));
+        assert!(html.contains(
+            "<b>action</b> shards 2&ndash;3 &middot; 1 assigned &middot; 7052 positions"
+        ));
     }
 
     #[test]
@@ -1354,29 +1550,71 @@ mod tests {
     }
 
     #[test]
-    fn capacity_meter_uses_layout_and_worker_count() {
-        let mut data = fleet_sample();
-        let html = render(&data);
-        assert!(html.contains("Fleet capacity"));
-        assert!(html.contains("138124 of 262144 positions &middot; 3 of 4 shards"));
-        assert!(!fleet_capacity_meter(&data).contains("warn"));
-
-        data.snapshot_gauges
-            .insert("memo_snapshot_ironwood_tree_size".into(), 210_000.0);
-        assert!(fleet_capacity_meter(&data).contains("warn"));
-        data.layout.clear();
-        assert!(fleet_capacity_meter(&data).is_empty());
+    fn tables_render_in_fixed_order_with_planned_ones_dimmed() {
+        let html = render(&fleet_sample());
+        let action = html.find("<p class=\"id\">action</p>").unwrap();
+        let witness = html.find("<p class=\"id\">witness</p>").unwrap();
+        assert!(action < witness);
+        assert!(html.contains("8 &times; 792 B per row &middot; 8192 rows per shard"));
+        assert!(html.contains("<b>3</b> shards (2 sealed) &middot; <b>138124</b> positions"));
+        assert!(html.contains("worker-b: shards 0&ndash;1 &middot; worker-a: shards 2&ndash;3"));
+        assert_eq!(html.matches("class=\"node planned\"").count(), 1);
+        assert!(html.contains("planned &middot; not registered"));
+        assert!(html.contains("2097152</b> positions per shard"));
     }
 
     #[test]
-    fn explainer_substitutes_layout_numbers_and_hides_without_them() {
+    fn table_capacity_meter_uses_pool_and_layout() {
+        let data = fleet_sample();
+        let html = render(&data);
+        assert!(html.contains("138124 of 262144 positions &middot; 3 of 4 shards"));
+        let mut action = data.tables["action"].clone();
+        assert!(!table_capacity_meter(&action).contains("warn"));
+        action.insert("positions".to_string(), 210_000.0);
+        assert!(table_capacity_meter(&action).contains("warn"));
+        action.insert("positions".to_string(), 250_000.0);
+        assert!(table_capacity_meter(&action).contains("bad"));
+        // A planned table has no pool: no meter.
+        assert!(table_capacity_meter(&data.tables["witness"]).is_empty());
+    }
+
+    #[test]
+    fn explainer_lists_every_table_and_hides_without_them() {
         let html = render(&fleet_sample());
         assert!(html.contains("How this fleet works"));
-        assert!(html.contains("<b>65536</b> positions"));
         assert!(html.contains("<b>10</b> confirmations"));
         assert!(html.contains("height <b>3428143</b>"));
         assert!(html.contains("n&times;2+1"));
+        assert!(
+            html.contains("<tr><th>action</th><td>8 &times; 792 B</td><td>8192</td><td>65536</td>")
+        );
+        assert!(html.contains("<tr><th>witness</th><td>256 &times; 32 B</td>"));
+        assert!(html.contains("two newest generations stay answerable"));
         assert!(!render(&sample()).contains("How this fleet works"));
+    }
+
+    #[test]
+    fn discovered_endpoints_appear_after_configured_ones() {
+        let mut data = sample();
+        data.endpoints.insert(
+            "witness_query".to_string(),
+            EndpointWindow {
+                qps: 0.5,
+                requests: 10.0,
+                processing: LatencyWindow {
+                    samples: 10.0,
+                    p99: Some(0.2),
+                    ..Default::default()
+                },
+                processing_available: true,
+                ..Default::default()
+            },
+        );
+        let html = render(&data);
+        let query = html.find("<th>query</th>").unwrap();
+        let witness = html.find("<th>witness_query</th>").unwrap();
+        assert!(query < witness);
+        assert!(html.contains("witness_query latency split"));
     }
 
     #[test]

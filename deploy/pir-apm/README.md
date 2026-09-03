@@ -32,11 +32,12 @@ All variables are optional; the defaults describe the memo coordinator.
 | --- | --- | --- |
 | `PIR_APM_SCRAPE_URL` | `http://127.0.0.1:8080` | Base URL of the server being watched |
 | `PIR_APM_METRICS_PATH` | `/metrics` | Prometheus text exposition (must return 2xx) |
-| `PIR_APM_HEALTH_PATH` | `/memo/health` | Body is shown on the dashboard; status is informational |
+| `PIR_APM_HEALTH_PATH` | `/memo/health` | Body is shown on the dashboard; status is informational. Production uses `/v1/health` |
 | `PIR_APM_READY_PATH` | `/ready` | Non-2xx for 5 continuous minutes fires the `ready` alert |
 | `PIR_APM_LISTEN` | `127.0.0.1:3002` | Dashboard listener |
 | `PIR_APM_METRIC_PREFIX` | `memo` | Family prefix: `<prefix>_http_*` and `<prefix>_snapshot_*` |
-| `PIR_APM_ENDPOINTS` | `metadata,params,public_params,query` | `endpoint` label values to track and alert on |
+| `PIR_APM_ENDPOINTS` | `health,metadata,generation,params,public_params,query` | Seed list of `endpoint` labels; others are discovered from the exposition |
+| `PIR_APM_INFORMATIONAL_ENDPOINTS` | `health` | Shown but never alerted on |
 | `PIR_APM_PROCESSING_ENDPOINTS` | `query` | Endpoints paged on `*_processing_duration_seconds` p99 instead of observed p99 |
 | `PIR_APM_LATENCY_P99_SECONDS` | `1.0` | Default p99 budget |
 | `PIR_APM_LATENCY_P99_OVERRIDES` | `query=5.0,public_params=2.0` | Per-endpoint p99 budgets, `name=seconds,...` |
@@ -49,31 +50,32 @@ All variables are optional; the defaults describe the memo coordinator.
 
 ## Fleet topology
 
-The dashboard draws the coordinator and every worker it knows about. The
-coordinator probes each remote worker's `/internal/health` (2 s timeout) on
-every `/metrics` scrape and exports, per inventory name:
+The dashboard draws the chain source, the coordinator, every worker, and one
+card per PIR table the coordinator knows about, followed by a short "How this
+fleet works" explainer. Everything is sourced from these gauge families, all
+with closed label sets:
 
-| Family | Meaning |
-| --- | --- |
-| `memo_worker_up{worker}` | 1 if the probe succeeded, else 0 |
-| `memo_worker_generation{worker}` | Generation the worker reports active |
-| `memo_worker_active_shards{worker}` | Shards the worker reports active |
-| `memo_worker_assigned_shards{worker}` | Shards the served snapshot assigns to it |
-| `memo_worker_populated_positions{worker}` | Ironwood positions held by those shards |
+| Family | Labels | Meaning |
+| --- | --- | --- |
+| `memo_snapshot_*` | none | Coordinator state: phase, sync heights, anchor, generation, tree size, retained generations |
+| `memo_layout_*` | none | Chain constants: confirmations, activation height |
+| `memo_table_*` | `table` | Per table: `registered`, layout (`record_bytes`, `records_per_row`, `shard_rows`, `shard_positions`, `shards_per_worker`), `pool_workers`, `query_slots_available`, and the newest generation's `positions`, `used_rows`, `logical_rows`, `shards`, `sealed_shards`. Planned tables are exported with `registered` 0 |
+| `memo_worker_*` | `worker` | Per worker: `up`, `generation`, `index`, host memory and process RSS from its health probe |
+| `memo_worker_table_*` | `worker`, `table` | Per worker and table: `index` in that table's pool, `assigned_shards`, `populated_positions`, `active_shards` |
 
-| `memo_worker_index{worker}` | Inventory position; the card orders workers by it and derives the shard ids each owns |
-| `memo_worker_total_memory_bytes{worker}`, `memo_worker_available_memory_bytes{worker}`, `memo_worker_process_rss_bytes{worker}` | Host and process memory reported by the worker's health probe |
+Each table card carries its own capacity meter
+(`pool_workers × shards_per_worker × shard_positions` against published
+positions; amber above 75 %, red above 90 %). Worker addresses never appear
+on the page.
 
-The sidecar reads any `<prefix>_worker_*` family with a `worker` label, so the
-card needs no extra configuration. Worker addresses never appear on the page.
-
-The coordinator also exports fixed geometry under `memo_layout_*`
-(`shard_positions`, `shard_rows`, `records_per_row`, `record_bytes`,
-`shards_per_worker`, `confirmations`, `activation_height`). When that family
-is present the card adds a fleet-capacity meter
-(`workers × shards_per_worker × shard_positions`) and a "How this fleet works"
-explainer whose numbers are taken from those gauges. The explainer's prose is
-memo-specific; deployments without the layout family show neither.
+**Endpoints are discovered.** `PIR_APM_ENDPOINTS` is only a seed list for
+ordering and budgets: any `endpoint` label the coordinator exports on its
+`memo_http_*` families (for example `witness_query` once that table ships)
+gets a row and an alert automatically, using `PIR_APM_LATENCY_P99_OVERRIDES`
+when listed and the default budget otherwise. An endpoint that reports a
+processing histogram is paged on processing p99. Endpoints in
+`PIR_APM_INFORMATIONAL_ENDPOINTS` (default `health`) are shown but never
+page, since `/v1/health` returns 503 by design while syncing.
 
 ## Alerts
 
@@ -127,9 +129,8 @@ is enough to exercise the sidecar end to end.
 
 ## Privacy
 
-The sidecar reads only the fixed endpoint labels the coordinator emits
-(`metadata`, `params`, `public_params`, `query`, `health`), the `memo_snapshot_*`
-gauges, the per-worker `memo_worker_*` gauges (labelled by inventory name only),
-and process memory. It never sees request bodies, query contents,
+The sidecar reads only the closed set of endpoint labels the coordinator
+emits, the coordinator-level and per-table gauges, the per-worker gauges
+(labelled by inventory name only), and process memory. It never sees request bodies, query contents,
 client addresses, or headers, and the dashboard is rendered entirely
 server-side from those aggregates.
