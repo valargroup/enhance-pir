@@ -18,6 +18,13 @@ environment variables:
 | `MEMO_SSH_KNOWN_HOSTS` | Pinned OpenSSH host-key lines for every configured host |
 | `MEMO_WORKERS_JSON` | Ordered worker deployment and private-service inventory |
 
+The deployment job runs on the repository-scoped coordinator runner labeled
+`memo-pir-deploy`. Build and pull-request jobs remain on GitHub-hosted runners.
+The coordinator runner reaches itself over loopback and workers over their
+private VPC addresses, so fleet SSH does not need to be exposed to GitHub's
+public runner address ranges. Do not use the deployment runner from a
+`pull_request`-triggered workflow; this repository is public.
+
 Configure this GitHub Environment secret:
 
 | Secret | Meaning |
