@@ -4,6 +4,7 @@ use memo_pir::coordinator::{
     FRONTIER_UPDATES_RETAINED,
 };
 use memo_pir::ingest::Journals;
+use memo_pir::nullifier::NullifierTables;
 use memo_pir::types::{DatabaseId, ACTIVATION_HEIGHT, COLD_CHECKPOINT_INTERVAL, CONFIRMATIONS};
 use memo_pir::worker::WorkerState;
 use memo_pir::zakura::ZakuraClient;
@@ -144,17 +145,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     let state = CoordinatorState::new(
-        [
-            DatabaseId::Action,
-            DatabaseId::Witness,
-            DatabaseId::WitnessRoots,
-        ]
-        .into_iter()
-        .map(|table| TableSetup {
-            table,
-            pool: workers.clone(),
-        })
-        .collect(),
+        DatabaseId::ALL
+            .into_iter()
+            .map(|table| TableSetup {
+                table,
+                pool: workers.clone(),
+            })
+            .collect(),
     )?;
     let ingest_state = state.clone();
     let ingest_cli = cli.clone();
@@ -200,6 +197,7 @@ async fn ingest(
         }
     }
 
+    let mut nullifier_tables: Option<NullifierTables> = None;
     loop {
         let tip = zakura.tip_height().await?;
         let target = tip.saturating_sub(CONFIRMATIONS);
@@ -257,6 +255,19 @@ async fn ingest(
                 let witness = TableJournal::new(DatabaseId::Witness, &journals.witness)?;
                 let witness_roots =
                     TableJournal::new(DatabaseId::WitnessRoots, &journals.witness_roots)?;
+                let checkpoint = target - target % COLD_CHECKPOINT_INTERVAL;
+                if nullifier_tables
+                    .as_ref()
+                    .is_none_or(|tables| tables.checkpoint != checkpoint)
+                {
+                    nullifier_tables =
+                        Some(NullifierTables::build(&journals.nullifiers, checkpoint)?);
+                } else {
+                    // The cold table is unchanged; only the warm side moves.
+                    let fresh = NullifierTables::build(&journals.nullifiers, checkpoint)?;
+                    nullifier_tables = Some(fresh);
+                }
+                let tables = nullifier_tables.as_ref().expect("built above");
                 let witness_cap = journals.witness_cap(target)?;
                 let frontier = journals.frontier_updates(
                     target.saturating_sub(FRONTIER_UPDATES_RETAINED as u64 - 1),
@@ -264,11 +275,17 @@ async fn ingest(
                 )?;
                 state
                     .publish(
-                        &[&action, &witness, &witness_roots],
+                        &[
+                            &action,
+                            &witness,
+                            &witness_roots,
+                            &tables.cold,
+                            &tables.warm,
+                        ],
                         Anchor {
                             height: target,
                             hash,
-                            cold_checkpoint_height: target - target % COLD_CHECKPOINT_INTERVAL,
+                            cold_checkpoint_height: checkpoint,
                             witness_cap: Some(witness_cap),
                             frontier,
                         },
