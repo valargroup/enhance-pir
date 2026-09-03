@@ -2,9 +2,10 @@
 //! widening it later rebuilds every sealed shard. Pin every offset here, and
 //! pin that a record survives the journal and the padded shard read unchanged.
 
-use memo_pir::store::MemoStore;
+use memo_pir::store::RecordJournal;
 use memo_pir::types::{
-    ActionRecord, ActionRecordParts, RECORDS_PER_ROW, RECORD_BYTES, ROW_BYTES, SHARD_ROWS,
+    ActionRecord, ActionRecordParts, DatabaseId, ACTION_LAYOUT, RECORDS_PER_ROW, RECORD_BYTES,
+    ROW_BYTES, SHARD_ROWS,
 };
 
 fn sample(seed: u8) -> ActionRecord {
@@ -37,14 +38,15 @@ fn field_offsets_are_pinned() {
 #[test]
 fn records_survive_the_journal_and_padded_shard_read() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut store = MemoStore::open(dir.path(), 0).expect("open");
+    let mut store =
+        RecordJournal::open(dir.path(), DatabaseId::Action, ACTION_LAYOUT).expect("open");
     let records: Vec<ActionRecord> = (0..(RECORDS_PER_ROW as u8 + 3)).map(sample).collect();
     store
         .append_block(3_428_143, "hash".to_string(), &records)
         .expect("append");
     drop(store);
 
-    let store = MemoStore::open(dir.path(), 0).expect("reopen");
+    let store = RecordJournal::open(dir.path(), DatabaseId::Action, ACTION_LAYOUT).expect("reopen");
     let shard = store.read_shard_rows(0).expect("shard");
     assert_eq!(shard.len(), SHARD_ROWS * ROW_BYTES);
     for (position, expected) in records.iter().enumerate() {

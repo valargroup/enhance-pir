@@ -1,9 +1,7 @@
 use clap::{Parser, ValueEnum};
 use memo_pir::coordinator::{router, CoordinatorPhase, CoordinatorState, WorkerTarget};
-use memo_pir::store::MemoStore;
-use memo_pir::types::{
-    Coverage, ACTIVATION_HEIGHT, CONFIRMATIONS, DEFAULT_LOOKBACK_BLOCKS, DEFAULT_MAX_ACTIVE_SHARDS,
-};
+use memo_pir::store::RecordJournal;
+use memo_pir::types::{DatabaseId, ACTION_LAYOUT, ACTIVATION_HEIGHT, CONFIRMATIONS};
 use memo_pir::worker::WorkerState;
 use memo_pir::zakura::ZakuraClient;
 use serde::Deserialize;
@@ -15,8 +13,11 @@ use tracing_subscriber::EnvFilter;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum Mode {
-    DistributedFull,
-    EmbeddedWindowed,
+    /// Production: at least two remote workers, full pool from activation.
+    #[value(alias = "distributed-full")]
+    Distributed,
+    /// Development only: one in-process worker, full pool from activation.
+    Embedded,
 }
 
 #[derive(Parser, Clone)]
@@ -25,7 +26,7 @@ enum Mode {
     about = "Standalone Ironwood memo PIR coordinator"
 )]
 struct Cli {
-    #[arg(long, value_enum, default_value_t = Mode::EmbeddedWindowed)]
+    #[arg(long, value_enum, default_value_t = Mode::Distributed)]
     mode: Mode,
     #[arg(long, default_value = "127.0.0.1:8080")]
     listen: SocketAddr,
@@ -41,10 +42,6 @@ struct Cli {
     /// that adding capacity never changes sealed shard ownership.
     #[arg(long, conflicts_with = "worker_urls")]
     worker_config: Option<PathBuf>,
-    #[arg(long, default_value_t = DEFAULT_LOOKBACK_BLOCKS)]
-    lookback_blocks: u64,
-    #[arg(long, default_value_t = DEFAULT_MAX_ACTIVE_SHARDS)]
-    max_active_shards: u32,
     #[arg(long, default_value_t = 10)]
     poll_seconds: u64,
 }
@@ -78,7 +75,7 @@ fn remote_workers(cli: &Cli) -> Result<Vec<WorkerTarget>, Box<dyn std::error::Er
     };
 
     if configured.len() < 2 {
-        return Err("distributed-full mode requires at least two workers".into());
+        return Err("distributed mode requires at least two workers".into());
     }
 
     let mut names = HashSet::new();
@@ -134,11 +131,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
     let cli = Cli::parse();
     let workers = match cli.mode {
-        Mode::DistributedFull => remote_workers(&cli)?,
-        Mode::EmbeddedWindowed => vec![WorkerTarget::Embedded {
-            name: "embedded".to_string(),
-            state: WorkerState::new(cli.data_dir.join("embedded-worker"))?,
-        }],
+        Mode::Distributed => remote_workers(&cli)?,
+        Mode::Embedded => {
+            tracing::warn!("embedded mode runs one in-process worker; not for production");
+            vec![WorkerTarget::Embedded {
+                name: "embedded".to_string(),
+                state: WorkerState::new(cli.data_dir.join("embedded-worker"))?,
+            }]
+        }
     };
     let state = CoordinatorState::new(workers)?;
     let ingest_state = state.clone();
@@ -166,24 +166,14 @@ async fn ingest(
     cli: Cli,
     state: CoordinatorState,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    if cli.lookback_blocks == 0 || cli.max_active_shards == 0 {
-        return Err("lookback and max-active-shards must be nonzero".into());
-    }
     let zakura = ZakuraClient::from_cookie_file(&cli.zakura_rpc_url, &cli.zakura_cookie)?;
     let tip = zakura.tip_height().await?;
     let finalized = tip.saturating_sub(CONFIRMATIONS);
     if finalized < ACTIVATION_HEIGHT {
         return Err("Zakura has not reached Ironwood activation plus confirmations".into());
     }
-    let (initial_height, initial_base) = match cli.mode {
-        Mode::DistributedFull => (ACTIVATION_HEIGHT, 0),
-        Mode::EmbeddedWindowed => {
-            zakura
-                .window_start(finalized, cli.lookback_blocks, cli.max_active_shards)
-                .await?
-        }
-    };
-    let mut store = MemoStore::open(&cli.data_dir, initial_base)?;
+    let initial_height = ACTIVATION_HEIGHT;
+    let mut store = RecordJournal::open(&cli.data_dir, DatabaseId::Action, ACTION_LAYOUT)?;
     if let Some(last) = store.last_block() {
         let canonical = zakura.block(last.height).await?;
         if canonical.hash != last.hash {
@@ -263,36 +253,12 @@ async fn ingest(
         }
 
         if let Some(anchor) = store.last_block().filter(|block| block.height == target) {
-            let coverage = match cli.mode {
-                Mode::DistributedFull => Coverage::Full {
-                    covered_position_start: 0,
-                },
-                Mode::EmbeddedWindowed => {
-                    let (computed_height, computed_position) = zakura
-                        .window_start(target, cli.lookback_blocks, cli.max_active_shards)
-                        .await?;
-                    let covered_position_start = computed_position.max(store.base_position());
-                    let effective_start_height = if covered_position_start == computed_position {
-                        computed_height
-                    } else {
-                        store
-                            .effective_height_for_position(covered_position_start)
-                            .unwrap_or(initial_height)
-                    };
-                    Coverage::Windowed {
-                        requested_lookback_blocks: cli.lookback_blocks,
-                        max_active_shards: cli.max_active_shards,
-                        covered_position_start,
-                        effective_start_height,
-                    }
-                }
-            };
             let already_published = state
                 .metadata()
                 .is_some_and(|metadata| metadata.anchor_height == anchor.height);
             if !already_published {
                 state
-                    .publish_from_store(&store, coverage, anchor.height, anchor.hash.clone())
+                    .publish_from_store(&store, anchor.height, anchor.hash.clone())
                     .await?;
                 tracing::info!(
                     anchor_height = anchor.height,
@@ -311,15 +277,13 @@ mod tests {
 
     fn cli(worker_config: Option<PathBuf>, worker_urls: Vec<String>) -> Cli {
         Cli {
-            mode: Mode::DistributedFull,
+            mode: Mode::Distributed,
             listen: "127.0.0.1:8080".parse().unwrap(),
             zakura_rpc_url: "http://127.0.0.1:8232".to_string(),
             zakura_cookie: PathBuf::from("cookie"),
             data_dir: PathBuf::from("data"),
             worker_urls,
             worker_config,
-            lookback_blocks: DEFAULT_LOOKBACK_BLOCKS,
-            max_active_shards: DEFAULT_MAX_ACTIVE_SHARDS,
             poll_seconds: 10,
         }
     }

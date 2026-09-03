@@ -18,7 +18,7 @@ private workers:
 memo-pir-worker --listen 0.0.0.0:8091 --data-dir /srv/memo-pir/artifacts
 
 memo-pir-server \
-  --mode distributed-full \
+  --mode distributed \
   --zakura-cookie /root/.cache/zakura/.cookie \
   --data-dir /srv/zakura/memo-data \
   --worker-url http://worker-1:8091 \

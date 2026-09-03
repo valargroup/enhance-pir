@@ -13,7 +13,7 @@ use ipir_sp::server::{
 use ipir_sp::IPIRClient;
 use memo_pir::coordinator::memo_setup_seed_bytes;
 use memo_pir::ipir::{global_parameters, RowPlaintextIter, ShardRuntime};
-use memo_pir::store::MemoStore;
+use memo_pir::store::RecordJournal;
 use memo_pir::types::{ACTION_LAYOUT, ROW_BYTES, SHARD_ROWS};
 
 fn synthetic_rows(seed: u64) -> Vec<u8> {
@@ -43,7 +43,7 @@ fn two_shards_equal_one_monolithic_server() {
         &ACTION_LAYOUT,
         0,
         0,
-        MemoStore::rows_digest(&rows0),
+        RecordJournal::rows_digest(&rows0),
         &rows0,
         &rlwe,
         &setup,
@@ -53,7 +53,7 @@ fn two_shards_equal_one_monolithic_server() {
         &ACTION_LAYOUT,
         1,
         SHARD_ROWS,
-        MemoStore::rows_digest(&rows1),
+        RecordJournal::rows_digest(&rows1),
         &rows1,
         &rlwe,
         &setup,

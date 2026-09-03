@@ -4,8 +4,10 @@
 
 use memo_pir::client::{record_in_row, QuerySession};
 use memo_pir::coordinator::{CoordinatorState, WorkerTarget};
-use memo_pir::store::MemoStore;
-use memo_pir::types::{ActionRecord, ActionRecordParts, Coverage, SHARD_POSITIONS, SHARD_ROWS};
+use memo_pir::store::RecordJournal;
+use memo_pir::types::{
+    ActionRecord, ActionRecordParts, DatabaseId, ACTION_LAYOUT, SHARD_POSITIONS, SHARD_ROWS,
+};
 use memo_pir::wire::{EvaluateRequest, ShardQuery};
 use memo_pir::worker::WorkerState;
 use std::path::Path;
@@ -35,8 +37,9 @@ fn record(position: u64) -> ActionRecord {
     })
 }
 
-fn store_with(dir: &Path, count: u64, height: u64) -> MemoStore {
-    let mut store = MemoStore::open(dir, 0).expect("open journal");
+fn store_with(dir: &Path, count: u64, height: u64) -> RecordJournal {
+    let mut store =
+        RecordJournal::open(dir, DatabaseId::Action, ACTION_LAYOUT).expect("open journal");
     let records: Vec<_> = (0..count).map(record).collect();
     store
         .append_block(height, format!("{height:064x}"), &records)
@@ -76,14 +79,7 @@ async fn publishes_two_shards_and_answers_boundary_positions() {
     let worker = WorkerState::new(dir.path().join("worker")).expect("worker");
     let state = coordinator(&worker);
     state
-        .publish_from_store(
-            &store,
-            Coverage::Full {
-                covered_position_start: 0,
-            },
-            3_428_143,
-            format!("{:064x}", 3_428_143),
-        )
+        .publish_from_store(&store, 3_428_143, format!("{:064x}", 3_428_143))
         .await
         .expect("publish");
 
@@ -164,16 +160,8 @@ async fn previous_generation_is_still_answered_after_a_publish() {
     let mut store = store_with(&dir.path().join("journal"), first, 3_428_143);
     let worker = WorkerState::new(dir.path().join("worker")).expect("worker");
     let state = coordinator(&worker);
-    let coverage = Coverage::Full {
-        covered_position_start: 0,
-    };
     state
-        .publish_from_store(
-            &store,
-            coverage.clone(),
-            3_428_143,
-            format!("{:064x}", 3_428_143),
-        )
+        .publish_from_store(&store, 3_428_143, format!("{:064x}", 3_428_143))
         .await
         .expect("first publish");
     let old_session = session(&state);
@@ -184,7 +172,7 @@ async fn previous_generation_is_still_answered_after_a_publish() {
         .append_block(3_428_144, format!("{:064x}", 3_428_144), &more)
         .expect("append");
     state
-        .publish_from_store(&store, coverage, 3_428_144, format!("{:064x}", 3_428_144))
+        .publish_from_store(&store, 3_428_144, format!("{:064x}", 3_428_144))
         .await
         .expect("second publish");
     assert_eq!(state.metadata().expect("metadata").generation, 3_428_144);

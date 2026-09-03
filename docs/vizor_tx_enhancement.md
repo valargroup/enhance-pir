@@ -538,11 +538,12 @@ Ironwood tree size, coverage, record and shard geometry, `used_rows`, `logical_r
 generation, `parameter_id`, `public_params_epoch` and digest, and a per-shard descriptor
 carrying `rows_sha256`, `sealed`, and the owning worker.
 
-Two modes exist. `distributed-full` requires at least two workers, starts at Ironwood
+Two modes exist. `distributed` requires at least two workers, starts at Ironwood
 activation (height 3,428,143), and refuses to publish unless the entire finalized pool is
-continuous and queryable. `embedded-windowed` runs one in-process worker over a bounded
-window; it is an explicitly non-production development mode, it advertises its exact
-coverage start in metadata, and it cannot satisfy the full-pool goal.
+continuous and queryable. `embedded` runs one in-process worker over the same full pool
+and exists for tests and local development only; the earlier windowed development mode,
+which advertised a bounded coverage window, was removed because every client rejects
+partial coverage.
 
 ---
 

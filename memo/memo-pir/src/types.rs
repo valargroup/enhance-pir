@@ -131,8 +131,6 @@ pub const SHARD_POSITIONS: usize = ACTION_LAYOUT.shard_positions();
 /// Appending workers therefore never moves an already-published shard.
 pub const SHARDS_PER_WORKER: u64 = 2;
 pub const ITEM_SIZE_BITS: u64 = ACTION_LAYOUT.item_size_bits();
-pub const DEFAULT_LOOKBACK_BLOCKS: u64 = 210_240;
-pub const DEFAULT_MAX_ACTIVE_SHARDS: u32 = 16;
 
 pub const RECORD_NULLIFIER_OFFSET: usize = 0;
 pub const RECORD_EPHEMERAL_KEY_OFFSET: usize = 32;
@@ -144,6 +142,12 @@ pub const RECORD_HEIGHT_OFFSET: usize = 788;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActionRecord(pub [u8; RECORD_BYTES]);
+
+impl AsRef<[u8]> for ActionRecord {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
 
 pub struct ActionRecordParts {
     pub nullifier: [u8; 32],
@@ -221,29 +225,25 @@ impl ActionRecord {
     }
 }
 
+/// Positions a snapshot represents. Only full coverage from position zero is
+/// served; the tagged shape is kept because clients pin it on the wire.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Coverage {
-    Full {
-        covered_position_start: u64,
-    },
-    Windowed {
-        requested_lookback_blocks: u64,
-        max_active_shards: u32,
-        covered_position_start: u64,
-        effective_start_height: u64,
-    },
+    Full { covered_position_start: u64 },
 }
 
 impl Coverage {
+    pub const fn full() -> Self {
+        Self::Full {
+            covered_position_start: 0,
+        }
+    }
+
     pub fn covered_position_start(&self) -> u64 {
         match self {
             Self::Full {
                 covered_position_start,
-            }
-            | Self::Windowed {
-                covered_position_start,
-                ..
             } => *covered_position_start,
         }
     }

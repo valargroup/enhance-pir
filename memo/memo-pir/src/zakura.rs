@@ -1,4 +1,4 @@
-use crate::types::{ActionRecord, ActionRecordParts, ACTIVATION_HEIGHT, SHARD_POSITIONS};
+use crate::types::{ActionRecord, ActionRecordParts};
 use reqwest::StatusCode;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -146,53 +146,6 @@ impl ZakuraClient {
             records,
             tree_size,
         })
-    }
-
-    pub async fn window_start(
-        &self,
-        finalized_height: u64,
-        lookback_blocks: u64,
-        max_active_shards: u32,
-    ) -> Result<(u64, u64), ZakuraError> {
-        let requested_height = finalized_height
-            .saturating_sub(lookback_blocks.saturating_sub(1))
-            .max(ACTIVATION_HEIGHT);
-        let time_position = if requested_height == ACTIVATION_HEIGHT {
-            0
-        } else {
-            self.tree_size(requested_height - 1).await?
-        };
-        let time_base = time_position / SHARD_POSITIONS as u64 * SHARD_POSITIONS as u64;
-        let tip_size = self.tree_size(finalized_height).await?;
-        let shard_count = tip_size.div_ceil(SHARD_POSITIONS as u64);
-        let capacity_first_shard = shard_count.saturating_sub(max_active_shards as u64);
-        let capacity_base = capacity_first_shard * SHARD_POSITIONS as u64;
-        let base_position = time_base.max(capacity_base);
-        let effective_height = self
-            .first_height_after_position(base_position, finalized_height)
-            .await?;
-        Ok((effective_height, base_position))
-    }
-
-    async fn first_height_after_position(
-        &self,
-        position: u64,
-        finalized_height: u64,
-    ) -> Result<u64, ZakuraError> {
-        if position == 0 {
-            return Ok(ACTIVATION_HEIGHT);
-        }
-        let mut low = ACTIVATION_HEIGHT;
-        let mut high = finalized_height;
-        while low < high {
-            let middle = low + (high - low) / 2;
-            if self.tree_size(middle).await? > position {
-                high = middle;
-            } else {
-                low = middle + 1;
-            }
-        }
-        Ok(low)
     }
 
     async fn call<T: DeserializeOwned>(

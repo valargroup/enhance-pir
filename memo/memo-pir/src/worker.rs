@@ -1,5 +1,5 @@
 use crate::ipir::{global_parameters, ShardRuntime};
-use crate::store::MemoStore;
+use crate::store::RecordJournal;
 use crate::types::{DatabaseId, ACTION_LAYOUT, ITEM_SIZE_BITS, ROW_BYTES, SHARD_ROWS};
 use crate::wire::{
     decode_evaluate_request, encode_crs_blocks, encode_evaluate_response, EvaluateRequest,
@@ -86,7 +86,7 @@ impl WorkerState {
         rows_sha256: String,
         rows: Vec<u8>,
     ) -> Result<bool, String> {
-        if MemoStore::rows_digest(&rows) != rows_sha256 {
+        if RecordJournal::rows_digest(&rows) != rows_sha256 {
             return Err("row digest mismatch".to_string());
         }
         if let Some(existing) = self.shards.read().await.get(&shard_id) {

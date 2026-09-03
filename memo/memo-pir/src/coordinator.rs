@@ -1,6 +1,6 @@
 use crate::ipir::global_parameters;
 use crate::metrics;
-use crate::store::MemoStore;
+use crate::store::RecordJournal;
 use crate::types::{
     logical_rows_for, worker_index_for_shard, Coverage, MemoSnapshotMetadata, ShardDescriptor,
     ACTION_LAYOUT, NETWORK, POOL, RECORDS_PER_ROW, RECORD_BYTES, ROW_BYTES, SCHEMA_VERSION,
@@ -224,13 +224,12 @@ impl CoordinatorState {
 
     pub async fn publish_from_store(
         &self,
-        store: &MemoStore,
-        coverage: Coverage,
+        store: &RecordJournal,
         anchor_height: u64,
         anchor_hash: String,
     ) -> Result<(), String> {
-        if store.tree_size() <= store.base_position() {
-            return Err("cannot publish an empty memo database".to_string());
+        if store.tree_size() == 0 {
+            return Err("cannot publish an empty database".to_string());
         }
         self.set_phase(CoordinatorPhase::Building { anchor_height })
             .await;
@@ -243,11 +242,7 @@ impl CoordinatorState {
         }
 
         let generation = anchor_height;
-        let first_covered_shard = coverage.covered_position_start() / SHARD_POSITIONS as u64;
-        let shard_ids: Vec<_> = store
-            .shard_ids()
-            .filter(|shard_id| *shard_id >= first_covered_shard)
-            .collect();
+        let shard_ids: Vec<_> = store.shard_ids().collect();
         let mut descriptors = Vec::with_capacity(shard_ids.len());
         let mut assignments: BTreeMap<String, Vec<ActivateShard>> = BTreeMap::new();
         let mut combined_crs: Option<Vec<CrsBlock>> = None;
@@ -268,7 +263,7 @@ impl CoordinatorState {
                 )
             })?;
             let rows = store.read_shard_rows(shard_id).map_err(|e| e.to_string())?;
-            let digest = MemoStore::rows_digest(&rows);
+            let digest = RecordJournal::rows_digest(&rows);
             let query_row_start = shard_id as usize * SHARD_ROWS;
             let cache_key = format!("{}:{shard_id}:{query_row_start}:{digest}", worker.name());
             let cached_hint = {
@@ -349,14 +344,14 @@ impl CoordinatorState {
             anchor_height,
             anchor_block_hash: anchor_hash,
             ironwood_tree_size: store.tree_size(),
-            coverage,
+            coverage: Coverage::full(),
             record_bytes: RECORD_BYTES as u32,
             records_per_row: RECORDS_PER_ROW as u32,
             row_bytes: ROW_BYTES as u32,
             shard_rows: SHARD_ROWS as u32,
             used_rows: global_used_rows,
             logical_rows,
-            first_global_row: store.base_position() / RECORDS_PER_ROW as u64,
+            first_global_row: 0,
             generation,
             parameter_id,
             setup_seed: MEMO_SETUP_SEED,
