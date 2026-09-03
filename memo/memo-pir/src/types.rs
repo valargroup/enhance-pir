@@ -16,15 +16,121 @@ pub const CONFIRMATIONS: u64 = 10;
 /// allow outgoing recovery under the OVK. `txid` is in internal (little-endian)
 /// byte order. Everything a wallet needs to reconstruct the action except the
 /// proof and signature is here; `cm_x` is recomputed from the decrypted note.
-pub const RECORD_BYTES: usize = 792;
-pub const RECORDS_PER_ROW: usize = 8;
-pub const ROW_BYTES: usize = RECORD_BYTES * RECORDS_PER_ROW;
-pub const SHARD_ROWS: usize = 8_192;
-pub const SHARD_POSITIONS: usize = SHARD_ROWS * RECORDS_PER_ROW;
+/// Row geometry of one PIR table. Every table the coordinator serves has its
+/// own layout; the iPIR parameters, shard sizes, and artifact shapes derive
+/// from it, so it is the one value that must agree between ingest, workers,
+/// coordinator, and clients.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct DatabaseLayout {
+    /// Bytes in one logical record.
+    pub record_bytes: usize,
+    /// Records packed into one PIR row.
+    pub records_per_row: usize,
+    /// Rows in one independently published shard. Must be a multiple of the
+    /// RLWE degree so a shard's setup polynomials are a contiguous slice.
+    pub shard_rows: usize,
+}
+
+impl DatabaseLayout {
+    pub const fn row_bytes(&self) -> usize {
+        self.record_bytes * self.records_per_row
+    }
+
+    pub const fn shard_positions(&self) -> usize {
+        self.shard_rows * self.records_per_row
+    }
+
+    /// iPIR item size for one row.
+    pub const fn item_size_bits(&self) -> u64 {
+        (self.row_bytes() * 8) as u64
+    }
+
+    pub const fn shard_bytes(&self) -> usize {
+        self.shard_rows * self.row_bytes()
+    }
+
+    pub fn used_rows_for(&self, positions: u64) -> u64 {
+        positions.div_ceil(self.records_per_row as u64)
+    }
+
+    /// Public capacity: a power of two, never below one shard, so growth only
+    /// extends the prefix-stable setup and sealed shards keep their CRS.
+    pub fn logical_rows_for(&self, used_rows: u64) -> u64 {
+        used_rows.max(self.shard_rows as u64).next_power_of_two()
+    }
+
+    pub fn row_for_position(&self, position: u64) -> (u64, usize) {
+        (
+            position / self.records_per_row as u64,
+            (position % self.records_per_row as u64) as usize,
+        )
+    }
+}
+
+/// Identity of one PIR table. The wire name (`as_str`) appears in URLs,
+/// artifact paths, and the generation manifest, so it is fixed forever.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DatabaseId {
+    Action,
+    Witness,
+    NfCold,
+    NfWarm,
+}
+
+impl DatabaseId {
+    pub const ALL: [DatabaseId; 4] = [
+        DatabaseId::Action,
+        DatabaseId::Witness,
+        DatabaseId::NfCold,
+        DatabaseId::NfWarm,
+    ];
+
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            DatabaseId::Action => "action",
+            DatabaseId::Witness => "witness",
+            DatabaseId::NfCold => "nf-cold",
+            DatabaseId::NfWarm => "nf-warm",
+        }
+    }
+}
+
+impl std::fmt::Display for DatabaseId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for DatabaseId {
+    type Err = String;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        DatabaseId::ALL
+            .into_iter()
+            .find(|id| id.as_str() == name)
+            .ok_or_else(|| format!("unknown PIR table: {name:?}"))
+    }
+}
+
+/// The ACTION table: one Ironwood action per record, eight per row.
+pub const ACTION_LAYOUT: DatabaseLayout = DatabaseLayout {
+    record_bytes: 792,
+    records_per_row: 8,
+    shard_rows: 8_192,
+};
+
+// Projections of `ACTION_LAYOUT` kept for the ACTION-specific code paths
+// (record parsing, the journal) that are not yet layout-parameterized.
+pub const RECORD_BYTES: usize = ACTION_LAYOUT.record_bytes;
+pub const RECORDS_PER_ROW: usize = ACTION_LAYOUT.records_per_row;
+pub const ROW_BYTES: usize = ACTION_LAYOUT.row_bytes();
+pub const SHARD_ROWS: usize = ACTION_LAYOUT.shard_rows;
+pub const SHARD_POSITIONS: usize = ACTION_LAYOUT.shard_positions();
 /// Fixed placement quantum. Worker `n` owns shard IDs `n * 2..(n + 1) * 2`.
 /// Appending workers therefore never moves an already-published shard.
 pub const SHARDS_PER_WORKER: u64 = 2;
-pub const ITEM_SIZE_BITS: u64 = (ROW_BYTES * 8) as u64;
+pub const ITEM_SIZE_BITS: u64 = ACTION_LAYOUT.item_size_bits();
 pub const DEFAULT_LOOKBACK_BLOCKS: u64 = 210_240;
 pub const DEFAULT_MAX_ACTIVE_SHARDS: u32 = 16;
 
@@ -192,7 +298,7 @@ impl MemoSnapshotMetadata {
 }
 
 pub fn logical_rows_for(used_rows: u64) -> u64 {
-    used_rows.max(SHARD_ROWS as u64).next_power_of_two()
+    ACTION_LAYOUT.logical_rows_for(used_rows)
 }
 
 pub fn worker_index_for_shard(shard_id: u64, worker_count: usize) -> Option<usize> {
@@ -247,6 +353,31 @@ mod tests {
         assert_eq!(record.out_ciphertext(), &[5; 80]);
         assert_eq!(record.txid(), &[6; 32]);
         assert_eq!(record.height(), 0x0403_0201);
+    }
+
+    #[test]
+    fn layout_derivations_match_the_action_constants() {
+        assert_eq!(ACTION_LAYOUT.row_bytes(), 6_336);
+        assert_eq!(ACTION_LAYOUT.shard_positions(), 65_536);
+        assert_eq!(ACTION_LAYOUT.item_size_bits(), 50_688);
+        assert_eq!(ACTION_LAYOUT.shard_bytes(), 51_904_512);
+        assert_eq!(ACTION_LAYOUT.used_rows_for(0), 0);
+        assert_eq!(ACTION_LAYOUT.used_rows_for(9), 2);
+        assert_eq!(ACTION_LAYOUT.row_for_position(65_537), (8_192, 1));
+        assert!(ACTION_LAYOUT.shard_rows.is_multiple_of(2_048));
+    }
+
+    #[test]
+    fn table_names_are_fixed_and_round_trip() {
+        for id in DatabaseId::ALL {
+            assert_eq!(id.as_str().parse::<DatabaseId>().unwrap(), id);
+            assert_eq!(
+                serde_json::to_string(&id).unwrap(),
+                format!("{:?}", id.as_str())
+            );
+        }
+        assert_eq!(DatabaseId::NfCold.as_str(), "nf-cold");
+        assert!("memo".parse::<DatabaseId>().is_err());
     }
 
     #[test]

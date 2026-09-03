@@ -3,8 +3,8 @@ use crate::metrics;
 use crate::store::MemoStore;
 use crate::types::{
     logical_rows_for, worker_index_for_shard, Coverage, MemoSnapshotMetadata, ShardDescriptor,
-    NETWORK, POOL, RECORDS_PER_ROW, RECORD_BYTES, ROW_BYTES, SCHEMA_VERSION, SHARD_POSITIONS,
-    SHARD_ROWS,
+    ACTION_LAYOUT, NETWORK, POOL, RECORDS_PER_ROW, RECORD_BYTES, ROW_BYTES, SCHEMA_VERSION,
+    SHARD_POSITIONS, SHARD_ROWS,
 };
 use crate::wire::{
     decode_crs_blocks, decode_evaluate_response, encode_evaluate_request, EvaluateRequest,
@@ -36,7 +36,7 @@ use tokio::sync::{RwLock, Semaphore};
 /// `SHA-256("zcash/ironwood-memo-pir/setup-seed/v1")`.
 pub const MEMO_SETUP_SEED: u64 = 0xaf1a_e284_ec07_131a;
 
-pub(crate) fn memo_setup_seed_bytes() -> [u8; 32] {
+pub fn memo_setup_seed_bytes() -> [u8; 32] {
     let mut seed = [0; 32];
     seed[..8].copy_from_slice(&MEMO_SETUP_SEED.to_le_bytes());
     seed
@@ -110,7 +110,8 @@ impl CoordinatorState {
         if names.windows(2).any(|pair| pair[0] == pair[1]) {
             return Err("worker names must be unique".to_string());
         }
-        let (rlwe, _) = global_parameters(SHARD_ROWS as u64).map_err(|e| e.to_string())?;
+        let (rlwe, _) =
+            global_parameters(SHARD_ROWS as u64, &ACTION_LAYOUT).map_err(|e| e.to_string())?;
         let rlwe = Box::leak(Box::new(rlwe));
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
@@ -158,6 +159,19 @@ impl CoordinatorState {
             .map(|snapshot| snapshot.metadata.clone())
     }
 
+    /// Scheme parameters of the live snapshot, as served by `/memo/params`.
+    pub fn params(&self) -> Option<YpirSchemeParams> {
+        self.live.load_full().map(|snapshot| snapshot.ypir.clone())
+    }
+
+    /// Published packing material of the live snapshot, as served by
+    /// `/memo/public-params`.
+    pub fn public_params(&self) -> Option<Vec<u8>> {
+        self.live
+            .load_full()
+            .map(|snapshot| snapshot.public_params.clone())
+    }
+
     pub async fn publish_from_store(
         &self,
         store: &MemoStore,
@@ -172,7 +186,8 @@ impl CoordinatorState {
             .await;
         let global_used_rows = store.tree_size().div_ceil(RECORDS_PER_ROW as u64);
         let logical_rows = logical_rows_for(global_used_rows);
-        let (global_rlwe, ypir) = global_parameters(logical_rows).map_err(|e| e.to_string())?;
+        let (global_rlwe, ypir) =
+            global_parameters(logical_rows, &ACTION_LAYOUT).map_err(|e| e.to_string())?;
         if global_rlwe.d != self.rlwe.d || global_rlwe.q != self.rlwe.q {
             return Err("global RLWE parameters changed unexpectedly".to_string());
         }
@@ -459,7 +474,10 @@ impl CoordinatorState {
         }
     }
 
-    async fn answer_query(&self, body: &[u8]) -> Result<Vec<u8>, String> {
+    /// Answers one opaque client query against the live snapshot. Exposed so
+    /// in-process tests can drive the coordinator without HTTP; the `/memo/query`
+    /// handler is a thin wrapper that adds admission control and metrics.
+    pub async fn answer_query(&self, body: &[u8]) -> Result<Vec<u8>, String> {
         let live = self
             .live
             .load_full()
@@ -593,16 +611,28 @@ async fn handle_metrics(State(state): State<CoordinatorState>) -> Response {
         .into_response()
 }
 
-/// `GET /ready`: 200 only while the coordinator is serving a live snapshot.
-/// Deploy tooling and the sidecar use this as the readiness gate; `/memo/health`
+/// `GET /ready`: 200 while queries can be answered from a live snapshot.
+///
+/// The previous generation keeps serving during a `building` rebuild, so
+/// readiness follows the live snapshot rather than the `serving` phase; only
+/// a failed ingest, or having nothing published yet, reports 503. Deploy
+/// tooling and the sidecar use this as the readiness gate; `/memo/health`
 /// stays the richer JSON view.
 async fn ready(State(state): State<CoordinatorState>) -> Response {
     let phase = state.phase.read().await.clone();
-    if matches!(phase, CoordinatorPhase::Serving) && state.live.load().is_some() {
+    if is_ready(&phase, state.live.load().is_some()) {
         (StatusCode::OK, "ready\n").into_response()
     } else {
         (StatusCode::SERVICE_UNAVAILABLE, "not ready\n").into_response()
     }
+}
+
+fn is_ready(phase: &CoordinatorPhase, has_live_snapshot: bool) -> bool {
+    has_live_snapshot
+        && matches!(
+            phase,
+            CoordinatorPhase::Serving | CoordinatorPhase::Building { .. }
+        )
 }
 
 async fn health(State(state): State<CoordinatorState>) -> Response {
@@ -662,5 +692,26 @@ async fn query(State(state): State<CoordinatorState>, body: Bytes) -> Response {
             tracing::warn!(%error, "memo PIR query failed");
             StatusCode::SERVICE_UNAVAILABLE.into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_ready, CoordinatorPhase};
+
+    #[test]
+    fn readiness_follows_the_live_snapshot() {
+        let building = CoordinatorPhase::Building { anchor_height: 1 };
+        let syncing = CoordinatorPhase::Syncing {
+            current_height: 0,
+            target_height: 1,
+        };
+        let failed = CoordinatorPhase::Failed { reason: "x".into() };
+        assert!(is_ready(&CoordinatorPhase::Serving, true));
+        assert!(is_ready(&building, true));
+        assert!(!is_ready(&CoordinatorPhase::Serving, false));
+        assert!(!is_ready(&building, false));
+        assert!(!is_ready(&syncing, true));
+        assert!(!is_ready(&failed, true));
     }
 }

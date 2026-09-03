@@ -1,4 +1,4 @@
-use crate::types::{ITEM_SIZE_BITS, ROW_BYTES, SHARD_ROWS};
+use crate::types::{DatabaseId, DatabaseLayout};
 use crate::wire::{decode_crs_blocks, encode_crs_blocks};
 use inspiring::{InspiringError, RlweParams};
 use ipir_sp::server::{CrsBlock, IPIRServer};
@@ -7,15 +7,18 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 // Version 2 bound cached shard preprocessing to the domain-separated memo setup seed.
-// Version 3 moves to 792-byte action records (6,336-byte rows).
-const ARTIFACT_VERSION: u16 = 3;
+// Version 3 moved to 792-byte action records (6,336-byte rows).
+// Version 4 names the table: artifacts live under `{table}/shard-{id}` and
+// record which table they belong to, so several tables share one worker.
+const ARTIFACT_VERSION: u16 = 4;
 
 #[derive(Serialize, Deserialize)]
 struct ArtifactMetadata {
     version: u16,
+    table: String,
     rlwe_degree: usize,
     rlwe_modulus: u64,
     db_rows: usize,
@@ -36,16 +39,29 @@ pub struct ShardRuntime {
     pub crs_blocks: Vec<CrsBlock>,
 }
 
+/// Directory holding one shard's artifacts, namespaced by table so several
+/// tables can share a worker's artifact root.
+pub fn shard_artifact_dir(artifact_root: &Path, table: DatabaseId, shard_id: u64) -> PathBuf {
+    artifact_root
+        .join(table.as_str())
+        .join(format!("shard-{shard_id:08}"))
+}
+
 impl ShardRuntime {
+    #[allow(clippy::too_many_arguments)]
     pub fn load_cached(
         artifact_root: &Path,
+        table: DatabaseId,
+        layout: &DatabaseLayout,
         shard_id: u64,
         query_row_start: usize,
         rows_sha256: &str,
         rlwe: &RlweParams,
     ) -> Result<Self, String> {
         Self::load(
-            &artifact_root.join(format!("shard-{shard_id:08}")),
+            &shard_artifact_dir(artifact_root, table, shard_id),
+            table,
+            layout,
             shard_id,
             query_row_start,
             rows_sha256,
@@ -53,8 +69,11 @@ impl ShardRuntime {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn load_or_build(
         artifact_root: &Path,
+        table: DatabaseId,
+        layout: &DatabaseLayout,
         shard_id: u64,
         query_row_start: usize,
         rows_sha256: String,
@@ -62,11 +81,20 @@ impl ShardRuntime {
         rlwe: &RlweParams,
         global_setup: &[Vec<u64>],
     ) -> Result<(Self, bool), String> {
-        let directory = artifact_root.join(format!("shard-{shard_id:08}"));
-        if let Ok(runtime) = Self::load(&directory, shard_id, query_row_start, &rows_sha256, rlwe) {
+        let directory = shard_artifact_dir(artifact_root, table, shard_id);
+        if let Ok(runtime) = Self::load(
+            &directory,
+            table,
+            layout,
+            shard_id,
+            query_row_start,
+            &rows_sha256,
+            rlwe,
+        ) {
             return Ok((runtime, false));
         }
         let runtime = Self::build(
+            layout,
             shard_id,
             query_row_start,
             rows_sha256,
@@ -76,12 +104,13 @@ impl ShardRuntime {
         )
         .map_err(|error| error.to_string())?;
         runtime
-            .persist(&directory, rlwe)
+            .persist(&directory, table, rlwe)
             .map_err(|error| error.to_string())?;
         Ok((runtime, true))
     }
 
     pub fn build(
+        layout: &DatabaseLayout,
         shard_id: u64,
         query_row_start: usize,
         rows_sha256: String,
@@ -89,10 +118,10 @@ impl ShardRuntime {
         rlwe: &RlweParams,
         global_setup: &[Vec<u64>],
     ) -> Result<Self, InspiringError> {
-        if rows.len() != SHARD_ROWS * ROW_BYTES {
+        if rows.len() != layout.shard_bytes() {
             return Err(InspiringError::PreprocessMismatch(format!(
-                "memo shard must be {} bytes, got {}",
-                SHARD_ROWS * ROW_BYTES,
+                "shard must be {} bytes, got {}",
+                layout.shard_bytes(),
                 rows.len()
             )));
         }
@@ -102,17 +131,17 @@ impl ShardRuntime {
             ));
         }
 
-        let (_, local_params) = ipir_sp::params_for_simplepir(SHARD_ROWS as u64, ITEM_SIZE_BITS)?;
+        let (_, local_params) = shard_parameters(layout)?;
         let coefficients = RowPlaintextIter::new(
             rows,
-            ROW_BYTES,
+            layout.row_bytes(),
             local_params.db_rows,
             local_params.db_cols,
             local_params.p.trailing_zeros() as usize,
         );
         let server = IPIRServer::<u16>::new_auto_kernel(local_params, coefficients, false, true);
         let first_poly = query_row_start / rlwe.d;
-        let poly_count = SHARD_ROWS / rlwe.d;
+        let poly_count = layout.shard_rows / rlwe.d;
         let setup = global_setup
             .get(first_poly..first_poly + poly_count)
             .ok_or_else(|| {
@@ -132,9 +161,10 @@ impl ShardRuntime {
     }
 
     pub fn evaluate(&self, rlwe: &RlweParams, query: &[u64]) -> Result<Vec<u64>, InspiringError> {
-        if query.len() != SHARD_ROWS {
+        let shard_rows = self.server.params().db_rows;
+        if query.len() != shard_rows {
             return Err(InspiringError::LweShape(format!(
-                "shard query must contain {SHARD_ROWS} coefficients, got {}",
+                "shard query must contain {shard_rows} coefficients, got {}",
                 query.len()
             )));
         }
@@ -146,8 +176,11 @@ impl ShardRuntime {
         Ok(self.server.multiply_query(rlwe, query))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn load(
         directory: &Path,
+        table: DatabaseId,
+        layout: &DatabaseLayout,
         shard_id: u64,
         query_row_start: usize,
         rows_sha256: &str,
@@ -158,6 +191,7 @@ impl ShardRuntime {
         )
         .map_err(|e| e.to_string())?;
         if metadata.version != ARTIFACT_VERSION
+            || metadata.table != table.as_str()
             || metadata.rlwe_degree != rlwe.d
             || metadata.rlwe_modulus != rlwe.q
             || metadata.shard_id != shard_id
@@ -166,8 +200,7 @@ impl ShardRuntime {
         {
             return Err("artifact metadata mismatch".to_string());
         }
-        let (_, local_params) = ipir_sp::params_for_simplepir(SHARD_ROWS as u64, ITEM_SIZE_BITS)
-            .map_err(|e| e.to_string())?;
+        let (_, local_params) = shard_parameters(layout).map_err(|e| e.to_string())?;
         if metadata.db_rows != local_params.db_rows
             || metadata.db_cols != local_params.db_cols
             || metadata.plaintext_modulus != local_params.p
@@ -207,7 +240,12 @@ impl ShardRuntime {
         })
     }
 
-    fn persist(&self, directory: &Path, rlwe: &RlweParams) -> Result<(), std::io::Error> {
+    fn persist(
+        &self,
+        directory: &Path,
+        table: DatabaseId,
+        rlwe: &RlweParams,
+    ) -> Result<(), std::io::Error> {
         fs::create_dir_all(directory)?;
         let mut database = Vec::with_capacity(self.server.db().len() * 2);
         for coefficient in self.server.db() {
@@ -218,6 +256,7 @@ impl ShardRuntime {
         write_atomic(directory, "partial-crs.bin", &hint)?;
         let metadata = ArtifactMetadata {
             version: ARTIFACT_VERSION,
+            table: table.as_str().to_string(),
             rlwe_degree: rlwe.d,
             rlwe_modulus: rlwe.q,
             db_rows: self.server.params().db_rows,
@@ -245,10 +284,22 @@ fn write_atomic(directory: &Path, name: &str, bytes: &[u8]) -> Result<(), std::i
     fs::rename(temporary, path)
 }
 
+/// iPIR parameters for the global (coordinator-facing) database of a table
+/// with `logical_rows` rows.
 pub fn global_parameters(
     logical_rows: u64,
+    layout: &DatabaseLayout,
 ) -> Result<(RlweParams, YpirSchemeParams), InspiringError> {
-    ipir_sp::params_for_simplepir(logical_rows, ITEM_SIZE_BITS)
+    ipir_sp::params_for_simplepir(logical_rows, layout.item_size_bits())
+}
+
+/// iPIR parameters for one shard of a table. Row sharding is sound because the
+/// column count derives from the row size, not the row count, so shard and
+/// global intermediates have the same width.
+pub fn shard_parameters(
+    layout: &DatabaseLayout,
+) -> Result<(RlweParams, YpirSchemeParams), InspiringError> {
+    ipir_sp::params_for_simplepir(layout.shard_rows as u64, layout.item_size_bits())
 }
 
 pub struct RowPlaintextIter<'a> {
@@ -303,15 +354,37 @@ impl Iterator for RowPlaintextIter<'_> {
 mod tests {
     use super::*;
 
+    /// Every served layout, with the instance count its rows need. One instance
+    /// carries d * log2(p) = 28,672 plaintext bits.
+    const LAYOUTS: &[(&str, DatabaseLayout, usize)] = &[("action", crate::types::ACTION_LAYOUT, 2)];
+
+    #[test]
+    fn every_layout_has_the_expected_instance_count() {
+        for (name, layout, instances) in LAYOUTS {
+            let (rlwe, shard) = shard_parameters(layout).expect("shard params");
+            let (global_rlwe, global) = global_parameters(
+                layout.logical_rows_for(layout.shard_rows as u64 * 4),
+                layout,
+            )
+            .expect("global params");
+            assert_eq!(rlwe.d, 2_048, "{name}");
+            assert_eq!(shard.p, 1 << 14, "{name}");
+            assert_eq!(shard.instances, *instances, "{name}");
+            assert_eq!(shard.db_cols, instances * rlwe.d, "{name}");
+            // Shard and global parameters must agree on everything but row count,
+            // or partials from shards could not be summed into the global answer.
+            assert_eq!((global_rlwe.d, global_rlwe.q), (rlwe.d, rlwe.q), "{name}");
+            assert_eq!(global.db_cols, shard.db_cols, "{name}");
+            assert!(layout.shard_rows.is_multiple_of(rlwe.d), "{name}");
+        }
+    }
+
     #[test]
     fn action_rows_use_two_ipir_instances() {
-        // A 6,336-byte row is 50,688 bits; one instance carries d * log2(p) = 28,672,
-        // so the widened record still fits two instances and the response size is
-        // unchanged from the 612-byte memo layout.
-        assert_eq!(ROW_BYTES, 6_336);
-        let (rlwe, params) = global_parameters(SHARD_ROWS as u64).expect("params");
-        assert_eq!(rlwe.d, 2_048);
-        assert_eq!(params.p, 1 << 14);
+        // A 6,336-byte row is 50,688 bits, which still fits two instances, so the
+        // response size is unchanged from the 612-byte memo layout.
+        assert_eq!(crate::types::ACTION_LAYOUT.row_bytes(), 6_336);
+        let (_, params) = shard_parameters(&crate::types::ACTION_LAYOUT).expect("params");
         assert_eq!(params.instances, 2);
         assert_eq!(params.db_cols, 4_096);
     }

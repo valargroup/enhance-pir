@@ -25,9 +25,10 @@ pub enum ClientError {
     Response(String),
 }
 
-pub struct MemoPirClient {
-    http: reqwest::Client,
-    base_url: String,
+/// Everything a client needs to build and decode queries against one published
+/// snapshot, independent of transport. `MemoPirClient` wraps it over HTTP; tests
+/// drive it straight into `CoordinatorState::answer_query`.
+pub struct QuerySession {
     metadata: MemoSnapshotMetadata,
     ypir: YpirSchemeParams,
     client: IPIRClient,
@@ -36,19 +37,33 @@ pub struct MemoPirClient {
     epoch: [u8; 8],
 }
 
-impl MemoPirClient {
-    pub async fn connect(base_url: &str) -> Result<Self, ClientError> {
-        let base_url = base_url.trim_end_matches('/').to_string();
-        let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
-            .build()?;
-        let metadata: MemoSnapshotMetadata = serde_json::from_slice(
-            &read_limited(
-                http.get(format!("{base_url}/memo/metadata")).send().await?,
-                1024 * 1024,
-            )
-            .await?,
-        )?;
+/// A query body bound to the randomness needed to decode its response. Single
+/// use: `decode` consumes it.
+pub struct PreparedQuery {
+    row: usize,
+    body: Vec<u8>,
+    seed: ipir_sp::IPIRSeed,
+}
+
+impl PreparedQuery {
+    pub fn body(&self) -> &[u8] {
+        &self.body
+    }
+
+    pub fn row(&self) -> usize {
+        self.row
+    }
+}
+
+impl QuerySession {
+    /// Validates the advertised snapshot against this protocol's pinned geometry,
+    /// seed, parameter generator, and public-parameter digest, exactly as
+    /// `MemoPirClient::connect` does after fetching the three documents.
+    pub fn new(
+        metadata: MemoSnapshotMetadata,
+        ypir: YpirSchemeParams,
+        public_params: &[u8],
+    ) -> Result<Self, ClientError> {
         if metadata.schema_version != SCHEMA_VERSION
             || metadata.network != NETWORK
             || metadata.pool != POOL
@@ -73,13 +88,6 @@ impl MemoPirClient {
                 "invalid database geometry".to_string(),
             ));
         }
-        let ypir: YpirSchemeParams = serde_json::from_slice(
-            &read_limited(
-                http.get(format!("{base_url}/memo/params")).send().await?,
-                64 * 1024,
-            )
-            .await?,
-        )?;
         let (rlwe, expected) = ipir_sp::params_for_simplepir(metadata.logical_rows, ITEM_SIZE_BITS)
             .map_err(|e| ClientError::Pir(e.to_string()))?;
         if ypir != expected {
@@ -87,14 +95,7 @@ impl MemoPirClient {
                 "server parameters do not match the pinned generator".to_string(),
             ));
         }
-        let public_params = read_limited(
-            http.get(format!("{base_url}/memo/public-params"))
-                .send()
-                .await?,
-            16 * 1024 * 1024,
-        )
-        .await?;
-        let digest = Sha256::digest(&public_params);
+        let digest = Sha256::digest(public_params);
         if hex::encode(digest) != metadata.public_params_sha256 {
             return Err(ClientError::Metadata(
                 "public parameter digest mismatch".to_string(),
@@ -115,12 +116,10 @@ impl MemoPirClient {
                 public_params.len()
             )));
         }
-        let published_c1 = recover_published_c1(&public_params, rlwe.d, blocks, rlwe.q);
+        let published_c1 = recover_published_c1(public_params, rlwe.d, blocks, rlwe.q);
         let client = IPIRClient::new(&rlwe, &ypir);
         let setup = client.generate_public_query_setup_simplepir_from_seed(memo_setup_seed_bytes());
         Ok(Self {
-            http,
-            base_url,
             metadata,
             ypir,
             client,
@@ -134,26 +133,37 @@ impl MemoPirClient {
         &self.metadata
     }
 
-    pub async fn query_position(&self, position: u64) -> Result<ActionRecord, ClientError> {
+    pub fn params(&self) -> &YpirSchemeParams {
+        &self.ypir
+    }
+
+    /// The seeded public setup polynomials, shared with every server shard.
+    pub fn setup(&self) -> &[Vec<u64>] {
+        &self.setup
+    }
+
+    pub fn published_c1(&self) -> &[Vec<u64>] {
+        &self.published_c1
+    }
+
+    /// Builds the query for the row holding `position`, returning the slot too.
+    pub fn prepare_position(&self, position: u64) -> Result<(PreparedQuery, usize), ClientError> {
         let (row, slot) = self
             .metadata
             .local_row_for_position(position)
             .ok_or(ClientError::OutsideCoverage(position))?;
-        let decoded = self.query_row(row).await?;
-        let start = slot * crate::types::RECORD_BYTES;
-        let bytes: [u8; crate::types::RECORD_BYTES] = decoded
-            [start..start + crate::types::RECORD_BYTES]
-            .try_into()
-            .expect("validated memo row bounds");
-        Ok(ActionRecord(bytes))
+        Ok((self.prepare_row(row)?, slot))
     }
 
-    pub async fn query_dummy(&self) -> Result<(), ClientError> {
-        let row = OsRng.gen_range(0..self.ypir.db_rows);
-        self.query_row(row).await.map(|_| ())
+    /// A cover query at a uniformly random logical row.
+    pub fn prepare_dummy(&self) -> Result<PreparedQuery, ClientError> {
+        self.prepare_row(OsRng.gen_range(0..self.ypir.db_rows))
     }
 
-    async fn query_row(&self, row: usize) -> Result<Vec<u8>, ClientError> {
+    pub fn prepare_row(&self, row: usize) -> Result<PreparedQuery, ClientError> {
+        if row >= self.ypir.db_rows {
+            return Err(ClientError::OutsideCoverage(row as u64));
+        }
         let (query, packing_keys, seed) =
             self.client.generate_fresh_query_simplepir(&self.setup, row);
         let mut body = self.metadata.generation.to_le_bytes().to_vec();
@@ -162,19 +172,11 @@ impl MemoPirClient {
                 .map_err(|e| ClientError::Pir(e.to_string()))?,
         );
         body.extend(query.to_switched_bytes(self.client.rlwe_params().q, self.ypir.query_bits));
-        let response = self
-            .http
-            .post(format!("{}/memo/query", self.base_url))
-            .body(body)
-            .send()
-            .await?;
-        if !response.status().is_success() {
-            return Err(ClientError::Response(format!(
-                "server returned {}",
-                response.status()
-            )));
-        }
-        let response = read_limited(response, 16 * 1024 * 1024).await?;
+        Ok(PreparedQuery { row, body, seed })
+    }
+
+    /// Validates the response framing and returns exactly one decoded row.
+    pub fn decode(&self, query: PreparedQuery, response: &[u8]) -> Result<Vec<u8>, ClientError> {
         let generation = response
             .get(..8)
             .ok_or_else(|| ClientError::Response("missing generation".to_string()))?;
@@ -200,7 +202,7 @@ impl MemoPirClient {
         }
         let decoded =
             self.client
-                .decode_response_simplepir(seed, &self.published_c1, &response[16..]);
+                .decode_response_simplepir(query.seed, &self.published_c1, &response[16..]);
         if decoded.len() < ROW_BYTES {
             return Err(ClientError::Response(format!(
                 "decoded row has {} bytes, expected at least {ROW_BYTES}",
@@ -208,6 +210,88 @@ impl MemoPirClient {
             )));
         }
         Ok(decoded[..ROW_BYTES].to_vec())
+    }
+}
+
+/// Extracts the record at `slot` from a decoded row.
+pub fn record_in_row(row: &[u8], slot: usize) -> ActionRecord {
+    let start = slot * RECORD_BYTES;
+    let bytes: [u8; RECORD_BYTES] = row[start..start + RECORD_BYTES]
+        .try_into()
+        .expect("validated memo row bounds");
+    ActionRecord(bytes)
+}
+
+pub struct MemoPirClient {
+    http: reqwest::Client,
+    base_url: String,
+    session: QuerySession,
+}
+
+impl MemoPirClient {
+    pub async fn connect(base_url: &str) -> Result<Self, ClientError> {
+        let base_url = base_url.trim_end_matches('/').to_string();
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()?;
+        let metadata: MemoSnapshotMetadata = serde_json::from_slice(
+            &read_limited(
+                http.get(format!("{base_url}/memo/metadata")).send().await?,
+                1024 * 1024,
+            )
+            .await?,
+        )?;
+        let ypir: YpirSchemeParams = serde_json::from_slice(
+            &read_limited(
+                http.get(format!("{base_url}/memo/params")).send().await?,
+                64 * 1024,
+            )
+            .await?,
+        )?;
+        let public_params = read_limited(
+            http.get(format!("{base_url}/memo/public-params"))
+                .send()
+                .await?,
+            16 * 1024 * 1024,
+        )
+        .await?;
+        let session = QuerySession::new(metadata, ypir, &public_params)?;
+        Ok(Self {
+            http,
+            base_url,
+            session,
+        })
+    }
+
+    pub fn metadata(&self) -> &MemoSnapshotMetadata {
+        self.session.metadata()
+    }
+
+    pub async fn query_position(&self, position: u64) -> Result<ActionRecord, ClientError> {
+        let (query, slot) = self.session.prepare_position(position)?;
+        let row = self.send(query).await?;
+        Ok(record_in_row(&row, slot))
+    }
+
+    pub async fn query_dummy(&self) -> Result<(), ClientError> {
+        self.send(self.session.prepare_dummy()?).await.map(|_| ())
+    }
+
+    async fn send(&self, query: PreparedQuery) -> Result<Vec<u8>, ClientError> {
+        let response = self
+            .http
+            .post(format!("{}/memo/query", self.base_url))
+            .body(query.body().to_vec())
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(ClientError::Response(format!(
+                "server returned {}",
+                response.status()
+            )));
+        }
+        let response = read_limited(response, 16 * 1024 * 1024).await?;
+        self.session.decode(query, &response)
     }
 }
 

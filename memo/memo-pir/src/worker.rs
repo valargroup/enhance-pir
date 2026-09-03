@@ -1,6 +1,6 @@
 use crate::ipir::{global_parameters, ShardRuntime};
 use crate::store::MemoStore;
-use crate::types::{ITEM_SIZE_BITS, ROW_BYTES, SHARD_ROWS};
+use crate::types::{DatabaseId, ACTION_LAYOUT, ITEM_SIZE_BITS, ROW_BYTES, SHARD_ROWS};
 use crate::wire::{
     decode_evaluate_request, encode_crs_blocks, encode_evaluate_response, EvaluateRequest,
 };
@@ -68,7 +68,7 @@ struct HealthResponse {
 
 impl WorkerState {
     pub fn new(artifact_dir: PathBuf) -> Result<Self, inspiring::InspiringError> {
-        let (rlwe, _) = global_parameters(SHARD_ROWS as u64)?;
+        let (rlwe, _) = global_parameters(SHARD_ROWS as u64, &ACTION_LAYOUT)?;
         Ok(Self {
             rlwe: Arc::new(rlwe),
             shards: Arc::new(RwLock::new(HashMap::new())),
@@ -95,7 +95,7 @@ impl WorkerState {
             }
         }
         let (global_rlwe, global_params) =
-            global_parameters(logical_rows).map_err(|e| e.to_string())?;
+            global_parameters(logical_rows, &ACTION_LAYOUT).map_err(|e| e.to_string())?;
         if global_rlwe.d != self.rlwe.d || global_rlwe.q != self.rlwe.q {
             return Err("global and worker RLWE parameters differ".to_string());
         }
@@ -108,6 +108,8 @@ impl WorkerState {
         let runtime = tokio::task::spawn_blocking(move || {
             ShardRuntime::load_or_build(
                 &artifact_dir,
+                DatabaseId::Action,
+                &ACTION_LAYOUT,
                 shard_id,
                 query_row_start,
                 rows_sha256,
@@ -143,6 +145,8 @@ impl WorkerState {
         let runtime = tokio::task::spawn_blocking(move || {
             ShardRuntime::load_cached(
                 &artifact_dir,
+                DatabaseId::Action,
+                &ACTION_LAYOUT,
                 shard_id,
                 query_row_start,
                 &rows_sha256,
@@ -352,5 +356,52 @@ async fn evaluate(State(state): State<WorkerState>, body: Bytes) -> Response {
             tracing::warn!(%error, "worker evaluation failed");
             StatusCode::SERVICE_UNAVAILABLE.into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::wire::ShardQuery;
+
+    #[tokio::test]
+    async fn evaluation_requires_an_active_generation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = WorkerState::new(dir.path().to_path_buf()).expect("worker");
+        let error = state
+            .evaluate_local(EvaluateRequest {
+                generation: 7,
+                shards: vec![ShardQuery {
+                    shard_id: 0,
+                    coefficients: vec![0; SHARD_ROWS],
+                }],
+            })
+            .await
+            .expect_err("nothing is active");
+        assert!(error.contains("generation mismatch"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn activation_requires_prepared_shards() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = WorkerState::new(dir.path().to_path_buf()).expect("worker");
+        assert!(state
+            .activate_local(ActivateRequest {
+                generation: 1,
+                shards: vec![],
+            })
+            .await
+            .is_err());
+        let error = state
+            .activate_local(ActivateRequest {
+                generation: 1,
+                shards: vec![ActivateShard {
+                    shard_id: 3,
+                    rows_sha256: "00".repeat(32),
+                }],
+            })
+            .await
+            .expect_err("shard 3 was never prepared");
+        assert!(error.contains("not prepared"), "{error}");
     }
 }
