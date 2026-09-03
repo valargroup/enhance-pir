@@ -18,8 +18,8 @@ pir-types = { path = "../../shared/pir-types" }
 orchard = { package = "zakura-orchard", version = "1.0", default-features = false }
 incrementalmerkletree = "0.8.2"
 ypir = { package = "valar-ypir", git = "https://github.com/valargroup/ypir.git", branch = "valar/artifact", default-features = false }
-ipir-sp = { git = "https://github.com/valargroup/ipir-sp.git", rev = "2bc1075aa72895fbaa99c83e964567aae317ea61", optional = true }
-inspiring = { git = "https://github.com/valargroup/ipir-sp.git", rev = "2bc1075aa72895fbaa99c83e964567aae317ea61", optional = true }
+ipir-sp = { git = "https://github.com/valargroup/ipir-sp.git", rev = "e875404cef33661906ab60af236dfb327e6b28b1", optional = true }
+inspiring = { git = "https://github.com/valargroup/ipir-sp.git", rev = "e875404cef33661906ab60af236dfb327e6b28b1", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 clap = { version = "4", features = ["derive"] }
 hex = "0.4"

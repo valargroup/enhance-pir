@@ -1,7 +1,7 @@
 use crate::coordinator::{memo_setup_seed_bytes, MEMO_SETUP_SEED};
 use crate::types::{
-    ActionRecord, MemoSnapshotMetadata, ITEM_SIZE_BITS, NETWORK, POOL, RECORDS_PER_ROW,
-    RECORD_BYTES, ROW_BYTES, SCHEMA_VERSION, SHARD_ROWS,
+    ActionRecord, DatabaseId, GenerationManifest, MemoSnapshotMetadata, ITEM_SIZE_BITS, NETWORK,
+    POOL, RECORDS_PER_ROW, RECORD_BYTES, ROW_BYTES, SCHEMA_VERSION, SHARD_ROWS,
 };
 use ipir_sp::modulus_switch::{published_c1_len, recover_published_c1, response_body_len};
 use ipir_sp::serialize::serialize_packing_keys;
@@ -234,22 +234,27 @@ impl MemoPirClient {
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .build()?;
-        let metadata: MemoSnapshotMetadata = serde_json::from_slice(
+        let manifest: GenerationManifest = serde_json::from_slice(
             &read_limited(
-                http.get(format!("{base_url}/memo/metadata")).send().await?,
+                http.get(format!("{base_url}/v1/generation")).send().await?,
                 1024 * 1024,
             )
             .await?,
         )?;
+        let metadata = MemoSnapshotMetadata::from_manifest(&manifest)
+            .ok_or_else(|| ClientError::Metadata("generation has no action table".to_string()))?;
+        let table = DatabaseId::Action;
         let ypir: YpirSchemeParams = serde_json::from_slice(
             &read_limited(
-                http.get(format!("{base_url}/memo/params")).send().await?,
+                http.get(format!("{base_url}/v1/{table}/params"))
+                    .send()
+                    .await?,
                 64 * 1024,
             )
             .await?,
         )?;
         let public_params = read_limited(
-            http.get(format!("{base_url}/memo/public-params"))
+            http.get(format!("{base_url}/v1/{table}/public-params"))
                 .send()
                 .await?,
             16 * 1024 * 1024,
@@ -280,7 +285,7 @@ impl MemoPirClient {
     async fn send(&self, query: PreparedQuery) -> Result<Vec<u8>, ClientError> {
         let response = self
             .http
-            .post(format!("{}/memo/query", self.base_url))
+            .post(format!("{}/v1/{}/query", self.base_url, DatabaseId::Action))
             .body(query.body().to_vec())
             .send()
             .await?;
