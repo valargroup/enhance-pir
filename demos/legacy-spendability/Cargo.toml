@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "shared/pir-types",
+    "shared/chain-ingest",
+    "nullifier/spend-types",
+    "nullifier/hashtable-pir",
+    "nullifier/nf-ingest",
+    "nullifier/spend-server",
+    "nullifier/spend-client",
+    "witness/witness-types",
+    "witness/commitment-ingest",
+    "witness/commitment-tree-db",
+    "witness/witness-server",
+    "witness/decryption-types",
+    "witness/witness-client",
+    "combined-server",
+]
+
+[patch.crates-io]
+valar-spiral-rs = { git = "https://github.com/valargroup/spiral-rs.git", branch = "valar/avoid-avx512" }
+
+[profile.dev.package.valar-spiral-rs]
+overflow-checks = false
+opt-level = 3
+
+[profile.test.package.valar-spiral-rs]
+overflow-checks = false
+opt-level = 3
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.test]
+opt-level = 1
+
+[profile.release-fast]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
