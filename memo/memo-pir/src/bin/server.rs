@@ -17,7 +17,8 @@ use tracing_subscriber::EnvFilter;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum Mode {
-    /// Production: at least two remote workers, full pool from activation.
+    /// Production: one or more remote workers, full pool from activation.
+    /// A single worker owns every shard; see `worker_index_for_shard`.
     #[value(alias = "distributed-full")]
     Distributed,
     /// Development only: one in-process worker, full pool from activation.
@@ -99,8 +100,8 @@ fn remote_workers(cli: &Cli) -> Result<Vec<WorkerTarget>, Box<dyn std::error::Er
             .collect()
     };
 
-    if configured.len() < 2 {
-        return Err("distributed mode requires at least two workers".into());
+    if configured.is_empty() {
+        return Err("distributed mode requires at least one worker".into());
     }
 
     let mut names = HashSet::new();

@@ -50,19 +50,15 @@ The worker inventory has this shape:
     "name": "worker-1",
     "ssh_host": "worker-1.example.net",
     "service_url": "http://10.142.0.4:8091"
-  },
-  {
-    "name": "worker-2",
-    "ssh_host": "worker-2.example.net",
-    "service_url": "http://10.142.0.2:8091"
   }
 ]
 ```
 
-The array is append-only. Never rename, reorder, remove, or change the private
-URL of an existing entry: shard ownership is derived from this order. Adding a
-machine means appending one object and ensuring the coordinator can reach its
-`service_url` through the private firewall.
+Production runs one worker, which owns every shard of every served table. The
+array is append-only: never rename, reorder, or change the private URL of an
+existing entry, because shard ownership is derived from this order. Appending
+the second worker is a shard migration; follow "Adding the second worker"
+below. Every append after that moves nothing.
 
 `MEMO_SSH_KNOWN_HOSTS` must be populated from host keys verified through an
 operator-controlled channel. The workflow deliberately never calls
@@ -138,6 +134,56 @@ Use `workflow_dispatch` with a full commit SHA that is reachable from `main` and
 already has a successful `CI` run. Leave `preflight_only` enabled to verify SSH,
 host architecture, disk space, topology, uploads, and checksums without stopping
 services. Disable it only to redeploy that exact tested revision.
+
+## Adding the second worker
+
+Production runs one worker and the placement rule (`worker_index_for_shard`)
+lets a single worker own every shard. Appending the second worker is therefore
+the one inventory change that moves published shards: every shard at or beyond
+`SHARDS_PER_WORKER` (2) is reassigned to the new worker and rebuilt there from
+the journal on the next publish. Shards 0 and 1 stay on worker-1 with their
+digests unchanged, so the wallet-visible bytes do not change. The rehearsal of
+this exact sequence is `memo/memo-pir/tests/worker_migration.rs`; run it before
+the real migration:
+
+```bash
+cargo test -p memo-pir --test worker_migration
+```
+
+Procedure, in order:
+
+1. Provision the host: add its name to `worker_names` in
+   `infra/digitalocean/production/main.tf`, apply, and confirm it carries the
+   private-worker firewall tag so only the coordinator reaches port 8091.
+2. Authorize the fleet public key for root on the new host and add its host key
+   line to `MEMO_SSH_KNOWN_HOSTS` (verified through an operator-controlled
+   channel, never `ssh-keyscan`).
+3. Append one object to `MEMO_WORKERS_JSON`. Do not touch the existing entry.
+4. Dispatch `Deploy PIR fleet` with `preflight_only` enabled for the current
+   `main` SHA. Preflight verifies SSH, architecture, disk, and uploads on both
+   workers without restarting anything.
+5. Dispatch again with `preflight_only` disabled. The rollout installs the
+   worker binary on the new host, restarts the coordinator with the two-entry
+   inventory, and the next finalized block publishes a generation in which the
+   manifest lists `worker-2` as the owner of shards 2 and up. Expect the
+   coordinator to sit in `building` for as long as one shard preprocess takes
+   (minutes at today's size) before it returns to `serving`.
+6. Verify: `GET /v1/generation` shows shards 0 and 1 on `worker-1` with the same
+   `rows_sha256` as before and the rest on `worker-2`; `memo-pir-cli dummy`
+   succeeds; the dashboard's fleet card shows both workers with their shard
+   counts.
+7. The artifacts for the moved shards remain in `/srv/memo-pir/artifacts` on
+   worker-1. They are inert (the worker only evaluates its active assignment)
+   and may be deleted at leisure.
+
+Rollback is the reverse: remove the appended entry and redeploy with the
+`allow_topology_change` input enabled (the script otherwise refuses any
+inventory that is not an append to the live one); the next publish moves the
+shards back to worker-1, again rebuilt from the journal. The same input was
+used once to shrink the proof-of-concept fleet from two workers to one.
+
+Every append after the second worker moves nothing; the standard append-only
+rule applies without a migration.
 
 ## Retired
 

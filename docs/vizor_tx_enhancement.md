@@ -469,8 +469,10 @@ retired.
 | Host | Size | Role |
 | --- | --- | --- |
 | `spendability-memo-pir-coordinator-01` | `m-8vcpu-64gb-intel` | Zakura archive, ingestion, publication, public query API |
-| `spendability-memo-pir-worker-01` | `m-8vcpu-64gb-intel` | Shards 0–1 |
-| `spendability-memo-pir-worker-02` | `m-8vcpu-64gb-intel` | Shards 2–3 |
+| `spendability-memo-pir-worker-01` | `m-8vcpu-64gb-intel` | Every shard of every served table |
+
+The proof of concept ran two workers at two shards each to exercise multi-worker placement;
+production runs one worker, which the placement rule treats as owning everything.
 
 All in `ams3` on a dedicated VPC `10.142.0.0/24`. The coordinator carries a 1 TiB XFS
 volume mounted at `/srv/zakura` for the archive and the memo journal.
@@ -560,7 +562,7 @@ Ironwood tree size, coverage, record and shard geometry, `used_rows`, `logical_r
 generation, `parameter_id`, `public_params_epoch` and digest, and a per-shard descriptor
 carrying `rows_sha256`, `sealed`, and the owning worker.
 
-Two modes exist. `distributed` requires at least two workers, starts at Ironwood
+Two modes exist. `distributed` requires at least one remote worker, starts at Ironwood
 activation (height 3,428,143), and refuses to publish unless the entire finalized pool is
 continuous and queryable. `embedded` runs one in-process worker over the same full pool
 and exists for tests and local development only; the earlier windowed development mode,

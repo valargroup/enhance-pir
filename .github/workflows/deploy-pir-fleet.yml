@@ -16,6 +16,11 @@ on:
         required: true
         default: true
         type: boolean
+      allow_topology_change:
+        description: Accept a worker inventory that is not an append to the live one (moved shards are rebuilt)
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -201,6 +206,7 @@ jobs:
           # Optional. Without it the sidecar logs alerts to the journal only.
           PIR_APM_SLACK_WEBHOOK_URL: ${{ secrets.PIR_APM_SLACK_WEBHOOK_URL }}
           PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
+          MEMO_ALLOW_TOPOLOGY_CHANGE: ${{ inputs.allow_topology_change }}
         run: |
           set -euo pipefail
           mode=deploy

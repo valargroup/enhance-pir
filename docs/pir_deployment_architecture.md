@@ -300,12 +300,12 @@ environment, one region, one table.
 
 ```text
                     ┌──────────── public edge: Caddy TLS on pir.<domain> ────────────┐
-  wallet ──────────►│  coordinator-01: Zakura archive (1 TiB), ingest, coordinator,   │
-                    │                  pir-apm sidecar                                 │
+  wallet ──────────►│  host A: Zakura archive (1 TiB), ingest, coordinator,           │
+                    │          Caddy, pir-apm sidecar                                  │
                     └──────────────────────────┬───────────────────────────────────────┘
                                                │  private VPC, worker port 8091 by tag
-                              worker-01 ───────┴─────── worker-02   (append-only list)
-                              ACTION shards, ownership = f(shard_id) over the list
+                                       host B: worker-01
+                                       every table, every shard
 ```
 
 ### 6.1 Roles
@@ -329,9 +329,12 @@ GET  /v1/health
 The witness and nullifier routes exist in the binary and return 503 or an absent-table
 error when their tables are not served.
 
-**workers.** Private port, firewalled by tag to the coordinator. One ordered list in
-`/etc/memo-pir/workers.json`; ownership is `f(shard_id)` over that list and the list is
-append-only. Sealed shards are immutable and hash-verified on load.
+**worker (host B).** One worker, private port, firewalled by tag to the coordinator. A
+single-worker pool owns every shard of every table (`worker_index_for_shard`), so there is
+no placement to reason about. Sealed shards are immutable and hash-verified on load. The
+inventory in `/etc/memo-pir/workers.json` can still grow: appending a second worker moves
+the shards at or beyond `SHARDS_PER_WORKER` to it and rebuilds them there once, and every
+append after that moves nothing. Growth is a bigger host B first, a second worker second.
 
 ### 6.2 Operations
 
@@ -354,12 +357,12 @@ artifacts roughly double the figure.
 
 | Positions | ACTION bytes | Hosts |
 | ---: | ---: | --- |
-| 136 K (today) | 107 MiB | 1 coordinator + 2 workers, as deployed |
-| 1 M | 786 MiB | same; load test before adding a worker |
-| 10 M | 7.7 GiB | add workers to the list; still one pool |
+| 136 K (today) | 107 MiB | host A + host B, as deployed |
+| 1 M | 786 MiB | same; load test before changing anything |
+| 10 M | 7.7 GiB | larger host B, or a second worker (one-off shard move) |
 
 Per-query server work is linear in the size of the table across the worker list. Choose
-worker counts from a load test, not from storage.
+host size and worker count from a load test, not from storage.
 
 The trigger that matters is not storage but the request: the SimplePIR first-dimension
 query grows linearly in `logical_rows`, and at roughly three Ironwood positions per block

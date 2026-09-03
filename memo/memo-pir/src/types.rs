@@ -233,8 +233,11 @@ pub fn logical_rows_for(used_rows: u64) -> u64 {
 }
 
 /// Which worker of an ordered pool owns a shard. A single-worker pool owns
-/// everything (development); otherwise ownership is a pure function of the
-/// shard id so appending workers never moves a published shard.
+/// everything (the production shape: one worker serves all tables and
+/// shards); otherwise ownership is a pure function of the shard id so
+/// appending workers never moves a published shard. The one exception is the
+/// step from one worker to two, which moves every shard at or beyond
+/// `SHARDS_PER_WORKER` to the new worker and rebuilds it there once.
 pub fn worker_index_for_shard<T>(shard_id: u64, pool: &[T]) -> Option<usize> {
     match pool.len() {
         0 => None,

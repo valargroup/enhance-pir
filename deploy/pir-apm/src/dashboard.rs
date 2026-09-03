@@ -978,7 +978,7 @@ fn explainer_card(data: &DashboardData) -> String {
 per table, starting at Ironwood activation, height <b>{activation}</b>. Workers never touch the chain.</dd>\
 <dt>Generations</dt><dd>Every finalized block publishes a new generation, named by its height, whose \
 manifest describes every table at that one anchor. A wallet pins one generation for a whole sync \
-pass. The two newest generations stay answerable, so a query built just before a publish still \
+pass. The eight newest generations stay answerable, so a query built just before a publish still \
 succeeds. Only shards whose rows changed are rebuilt; sealed shards are reused from the worker's \
 cache.</dd>\
 <dt>Layout</dt><dd>Every table is indexed directly by position. {ownership}\
@@ -1589,7 +1589,7 @@ mod tests {
             html.contains("<tr><th>action</th><td>8 &times; 792 B</td><td>8192</td><td>65536</td>")
         );
         assert!(html.contains("<tr><th>witness</th><td>256 &times; 32 B</td>"));
-        assert!(html.contains("two newest generations stay answerable"));
+        assert!(html.contains("eight newest generations stay answerable"));
         assert!(!render(&sample()).contains("How this fleet works"));
     }
 
