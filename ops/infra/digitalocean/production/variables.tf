@@ -4,6 +4,24 @@ variable "digitalocean_token" {
   sensitive   = true
 }
 
+variable "cloudflare_api_token" {
+  description = "Cloudflare API token with DNS edit access to valargroup.dev, supplied through TF_VAR_cloudflare_api_token."
+  type        = string
+  sensitive   = true
+}
+
+variable "cloudflare_zone_id" {
+  description = "Cloudflare zone ID for valargroup.dev."
+  type        = string
+  default     = "d3ac9657be6101818fed439c62fdcadf"
+}
+
+variable "coordinator_dns_ipv4" {
+  description = "Stable public IPv4 published for the production coordinator. Update this when the coordinator address changes."
+  type        = string
+  default     = "167.99.42.60"
+}
+
 variable "project_id" {
   description = "Existing spendability-pir DigitalOcean project ID."
   type        = string
