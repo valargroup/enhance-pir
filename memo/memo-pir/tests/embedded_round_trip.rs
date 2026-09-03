@@ -10,6 +10,7 @@ use memo_pir::types::{
 };
 use memo_pir::wire::{EvaluateRequest, ShardQuery};
 use memo_pir::worker::WorkerState;
+use memo_pir::worker::RETAINED_GENERATIONS;
 use std::path::Path;
 
 fn record(position: u64) -> ActionRecord {
@@ -209,22 +210,39 @@ async fn previous_generation_is_still_answered_after_a_publish() {
     let row = old_session.decode(old_query, &response).expect("decodes");
     assert_eq!(record_in_row(&row, slot), record(5));
 
+    // The first generation stays answerable until RETAINED_GENERATIONS newer
+    // ones have been published, then its queries are refused.
     let (stale_query, _) = old_session.prepare_position(6).expect("query");
-    let more: Vec<_> = (first + 40..first + 50).map(record).collect();
+    let mut next_position = first + 40;
+    for height in 3_428_145..3_428_143 + RETAINED_GENERATIONS as u64 {
+        assert!(state.generation(3_428_143).is_some(), "height {height}");
+        let more: Vec<_> = (next_position..next_position + 10).map(record).collect();
+        next_position += 10;
+        store
+            .append_block(height, hash(height), &more)
+            .expect("append");
+        state
+            .publish_from_store(&store, height, hash(height))
+            .await
+            .expect("publish");
+    }
+    assert!(state.generation(3_428_144).is_some());
+    let evicting = 3_428_143 + RETAINED_GENERATIONS as u64;
+    let more: Vec<_> = (next_position..next_position + 10).map(record).collect();
     store
-        .append_block(3_428_145, hash(3_428_145), &more)
+        .append_block(evicting, hash(evicting), &more)
         .expect("append");
     state
-        .publish_from_store(&store, 3_428_145, hash(3_428_145))
+        .publish_from_store(&store, evicting, hash(evicting))
         .await
-        .expect("third publish");
+        .expect("evicting publish");
     assert!(state.generation(3_428_143).is_none());
     assert!(state
         .answer_query(DatabaseId::Action, stale_query.body())
         .await
         .is_err());
-    // Two retained generations, one frontier shard each.
-    assert_eq!(worker.cached_shard_count().await, 2);
+    // Every retained generation holds one frontier shard.
+    assert_eq!(worker.cached_shard_count().await, RETAINED_GENERATIONS);
 }
 
 #[tokio::test]
