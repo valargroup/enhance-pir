@@ -121,6 +121,12 @@ resource "digitalocean_firewall" "worker" {
   name = "spendability-memo-pir-workers"
   tags = [digitalocean_tag.worker.name]
 
+  inbound_rule {
+    protocol    = "tcp"
+    port_range  = "22"
+    source_tags = [digitalocean_tag.coordinator.name]
+  }
+
   dynamic "inbound_rule" {
     for_each = var.allowed_ssh_cidrs
     content {

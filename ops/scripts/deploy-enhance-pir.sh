@@ -529,7 +529,7 @@ fi
 if [[ "$rollout_ok" -eq 1 ]]; then
   expected_workers="${#WORKER_HOSTS[@]}"
   if ! jq -e --argjson expected "$expected_workers" '
-    .phase.phase == "serving" and .workers == $expected
+    .phase.phase == "serving" and .tables.enhance.workers == $expected
   ' >/dev/null <<<"$health_json"; then
     rollout_ok=0
   fi
