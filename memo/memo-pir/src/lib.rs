@@ -14,6 +14,6 @@ pub mod worker;
 pub mod zakura;
 
 pub use types::{
-    Coverage, MemoRecord, MemoSnapshotMetadata, ShardDescriptor, RECORDS_PER_ROW, RECORD_BYTES,
-    ROW_BYTES, SHARD_POSITIONS, SHARD_ROWS,
+    ActionRecord, ActionRecordParts, Coverage, MemoSnapshotMetadata, ShardDescriptor,
+    RECORDS_PER_ROW, RECORD_BYTES, ROW_BYTES, SHARD_POSITIONS, SHARD_ROWS,
 };

@@ -1,7 +1,7 @@
 use crate::coordinator::{memo_setup_seed_bytes, MEMO_SETUP_SEED};
 use crate::types::{
-    MemoRecord, MemoSnapshotMetadata, ITEM_SIZE_BITS, NETWORK, POOL, RECORDS_PER_ROW, RECORD_BYTES,
-    ROW_BYTES, SCHEMA_VERSION, SHARD_ROWS,
+    ActionRecord, MemoSnapshotMetadata, ITEM_SIZE_BITS, NETWORK, POOL, RECORDS_PER_ROW,
+    RECORD_BYTES, ROW_BYTES, SCHEMA_VERSION, SHARD_ROWS,
 };
 use ipir_sp::modulus_switch::{published_c1_len, recover_published_c1, response_body_len};
 use ipir_sp::serialize::serialize_packing_keys;
@@ -134,7 +134,7 @@ impl MemoPirClient {
         &self.metadata
     }
 
-    pub async fn query_position(&self, position: u64) -> Result<MemoRecord, ClientError> {
+    pub async fn query_position(&self, position: u64) -> Result<ActionRecord, ClientError> {
         let (row, slot) = self
             .metadata
             .local_row_for_position(position)
@@ -145,7 +145,7 @@ impl MemoPirClient {
             [start..start + crate::types::RECORD_BYTES]
             .try_into()
             .expect("validated memo row bounds");
-        Ok(MemoRecord(bytes))
+        Ok(ActionRecord(bytes))
     }
 
     pub async fn query_dummy(&self) -> Result<(), ClientError> {

@@ -319,8 +319,10 @@ if [[ "$rollout_ok" -eq 1 ]]; then
 fi
 
 if [[ "$rollout_ok" -eq 1 ]]; then
+  # A record-layout change sets the journal aside and re-ingests from activation
+  # (~42K blocks at today's tip), so allow up to two hours before rolling back.
   serving=0
-  for _ in $(seq 1 270); do
+  for _ in $(seq 1 720); do
     if remote "$MEMO_COORDINATOR_HOST" "curl --fail --silent http://127.0.0.1:8080/memo/health | jq -e '.phase.phase == \"serving\"' >/dev/null"; then
       serving=1
       break

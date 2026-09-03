@@ -24,10 +24,11 @@ PIR, and no cuckoo hashing.
 Each record holds exactly what a compact block omits:
 
 ```text
-ephemeralKey[32] || encCiphertext[580]        = 612 bytes
+nf[32] || ephemeralKey[32] || encCiphertext[580] || cv_net[32] || outCiphertext[80] || txid[32] || height[4]
+                                                                              = 792 bytes
 ```
 
-Eight consecutive action records form one 4,896-byte PIR row. Given an Ironwood position
+Eight consecutive action records form one 6,336-byte PIR row. Given an Ironwood position
 `p`:
 
 ```text
@@ -132,12 +133,24 @@ authentication check is introduced anywhere in this design.
 
 ### 4.1 Record
 
-One logical record is 612 bytes (`memo/memo-pir/src/types.rs:24-29`):
+One logical record is 792 bytes (`ActionRecord` in `memo/memo-pir/src/types.rs`):
 
 | Offset | Size | Field |
 | ---: | ---: | --- |
-| 0 | 32 | Canonical Ironwood `ephemeralKey` encoding |
-| 32 | 580 | Complete Ironwood `encCiphertext` |
+| 0 | 32 | The action's spent nullifier `nf` (this is `rho` of the output note) |
+| 32 | 32 | Canonical Ironwood `ephemeralKey` encoding |
+| 64 | 580 | Complete Ironwood `encCiphertext` |
+| 644 | 32 | `cv_net` |
+| 676 | 80 | `outCiphertext` |
+| 756 | 32 | `txid`, internal (little-endian) byte order |
+| 788 | 4 | Block height, little-endian `u32` |
+
+The first three fields are what memo completion needs. The rest exist for DAG-sync
+([`pir_deployment_architecture.md`](pir_deployment_architecture.md) §3.1): `nf` lets a
+wallet trial-decrypt a note it has not seen, `cv_net` and `outCiphertext` allow outgoing
+recovery under the OVK, and `txid` plus height give history without any lightwalletd call.
+`cm_x` is omitted because the wallet recomputes it from the decrypted note. The record was
+widened before any wallet traffic because widening later invalidates every sealed shard.
 
 The ciphertext is the complete on-chain value. The compact block's first 52 bytes are not
 enough: the remaining 528 hold the encrypted 512-byte memo region and the 16-byte
@@ -148,22 +161,21 @@ The record deliberately repeats the compact prefix and the ephemeral key. That m
 pending memo recoverable after a restart from the note and position the wallet already
 persists, with no separate cache of ephemeral compact-block material.
 
-It carries no txid, nullifier, `cmx`, `cv`, or `outCiphertext`. The client already has the
-note, its `rho`, its position and its key scope. `cv` and `outCiphertext` are needed only
-for outgoing recovery — see §10.
+It carries no `cmx`. For memo completion the client already has the note, its `rho`, its
+position and its key scope, and ignores the other fields.
 
 ### 4.2 Row and logical capacity
 
 ```text
-RECORD_BYTES     = 612
+RECORD_BYTES     = 792
 RECORDS_PER_ROW  = 8
-ROW_BYTES        = 4,896
-record_offset    = slot * 612
+ROW_BYTES        = 6,336
+record_offset    = slot * 792
 ```
 
 Eight records keep the arithmetic exact and put the row comfortably above the SimplePIR
 minimum row size. The client validates the exact response length, decodes the padded
-plaintext, and treats only the first 4,896 bytes as the row.
+plaintext, and treats only the first 6,336 bytes as the row.
 
 Capacity is a public power of two (`types.rs:111-113`):
 
@@ -173,7 +185,7 @@ logical_rows = max(used_rows, 8_192).next_power_of_two()
 ```
 
 Rows past `used_rows`, and unused slots in the last used row, hold one canonical all-zero
-612-byte padding record. Padding is never eligible for decryption or persistence. The
+792-byte padding record. Padding is never eligible for decryption or persistence. The
 power of two reduces rebuild frequency and keeps shard boundaries predictable; it is not
 itself a privacy mechanism.
 
@@ -182,10 +194,10 @@ At the live snapshot (`ironwood_tree_size = 136,425`):
 ```text
 used_rows          = 17,054
 logical_rows       = 32,768        position capacity 262,144
-database bytes     = 32,768 * 4,896 = 160,432,128 = 153 MiB
+database bytes     = 32,768 * 6,336 = 207,618,048 = 198 MiB
 ```
 
-At 50 million positions, unpadded record data alone is ~28.5 GiB, before PIR
+At 50 million positions, unpadded record data alone is ~36.9 GiB, before PIR
 preprocessing.
 
 ### 4.3 Physical shards
@@ -194,7 +206,7 @@ preprocessing.
 | --- | ---: |
 | Rows per shard | 8,192 |
 | Positions per shard | 65,536 |
-| Raw padded bytes per shard | 40,108,032 (38.25 MiB) |
+| Raw padded bytes per shard | 51,904,512 (49.5 MiB) |
 | Shards per worker (POC) | 2 |
 
 Defined in `memo/memo-pir/src/types.rs:8-18`. Physical layout is invisible to the client;
@@ -204,8 +216,8 @@ it exists so ingestion, storage, preprocessing and evaluation can be parallelise
 
 Two files in the coordinator's data directory (`memo/memo-pir/src/store.rs:51-52`):
 
-- `records.bin` — a flat, unframed concatenation of 612-byte records starting at
-  `base_position`. Position to offset is `(position - base_position) * 612`.
+- `records.bin` — a flat, unframed concatenation of 792-byte records starting at
+  `base_position`. Position to offset is `(position - base_position) * 792`.
 - `manifest.json` — `{version, base_position, tree_size, blocks: [{height, hash,
   first_position, action_count}]}`.
 
@@ -216,7 +228,7 @@ committed length is a hard error; a longer one has its uncommitted tail truncate
 (`store.rs:73-89`). Shard reads are zero-padded to full geometry, so the frontier shard
 is deterministically filled (`store.rs:175-180`).
 
-`rows_digest` — hex SHA-256 over the full padded 40,108,032-byte shard buffer
+`rows_digest` — hex SHA-256 over the full padded 51,904,512-byte shard buffer
 (`store.rs:200-202`) — is the single identity threaded through prepare, activate, and the
 published metadata.
 
@@ -286,8 +298,10 @@ block must be exactly `d x d`.
 Two invariants carry the whole construction.
 
 **Shard outputs have the same width as the global one.** The column count
-`db_cols = instances * 2048` is derived from `ITEM_SIZE_BITS` — the 4,896-byte row — and
-not from the row count. For the memo shape `d = 2048`, `instances = 2`, `db_cols = 4096`
+`db_cols = instances * 2048` is derived from `ITEM_SIZE_BITS` — the 6,336-byte row — and
+not from the row count. One instance carries `d * log2(p) = 28,672` plaintext bits, so a
+50,688-bit row still needs `instances = 2`, `db_cols = 4096`, exactly as the original
+4,896-byte row did (test `action_rows_use_two_ipir_instances`)
 (`memo/memo-pir/src/ipir.rs:304-310`). A shard of 8,192 rows and the global database of
 32,768 rows therefore both produce a 4,096-wide intermediate, and the intermediates are
 simply addable modulo `q`.
@@ -480,12 +494,12 @@ size of the pool. Scaled out:
 
 | Pool size | Records | Shards | Workers at 2 shards each |
 | ---: | ---: | ---: | ---: |
-| 136 K (today) | 80 MiB | 3 | 2 |
-| 1 M | 584 MiB | 16 | 8 |
-| 50 M | 28.5 GiB | 763 | 382 |
+| 136 K (today) | 103 MiB | 3 | 2 |
+| 1 M | 755 MiB | 16 | 8 |
+| 50 M | 36.9 GiB | 763 | 382 |
 
 Two shards per worker is a POC constant chosen to exercise multi-worker placement, not a
-law — an `m-8vcpu-64gb-intel` host holds far more than 76.5 MiB of shard data. The table
+law — an `m-8vcpu-64gb-intel` host holds far more than 99 MiB of shard data. The table
 is the shape of the problem, not a procurement plan. What it does show is that at
 two orders of magnitude of growth the linear-work property, not the storage, is what
 needs a different construction.
@@ -653,7 +667,7 @@ Either would leak a coarse range containing the note.
 1. Verify schema, network, generation, geometry, and the exact response length.
 2. Verify the snapshot anchor against the local chain view and that each candidate
    position is below the tree size.
-3. Extract the 612-byte record from its expected slot.
+3. Extract the 792-byte record from its expected slot.
 4. Parse `ephemeralKey` with the canonical Ironwood parser; reject invalid encodings.
 5. Run the existing full Ironwood note decryption with `IronwoodDomain`, the complete
    580-byte ciphertext, the locally selected incoming viewing key scope, and the stored
@@ -718,7 +732,7 @@ class — it does not weaken the rule.
 
 No wallet client exists yet. `memo-pir-cli` (`memo/memo-pir/src/client.rs`) is the
 reference implementation: it fetches metadata and public parameters, generates a real or
-dummy global query, validates generation bindings, and decodes one 612-byte record from
+dummy global query, validates generation bindings, and decodes one 792-byte record from
 the returned row. Wallet integration would follow the shape described in
 [`pir_wallet_integration.md`](pir_wallet_integration.md).
 
@@ -728,10 +742,20 @@ the returned row. Wallet integration would follow the shape described in
 
 Sketches, not committed designs. Both are recorded here mainly for their cost.
 
+A fuller proposal now exists in [`pir_deployment_architecture.md`](pir_deployment_architecture.md):
+it widens this record for DAG-sync (including the second-column trade below), keeps the
+nullifier service separate on a cold/warm schedule, and shares ingestion, sharding and
+deployment across all three services. The sketches below are retained as the cost analysis
+that proposal starts from.
+
 ### 10.1 Outgoing recovery and full decryption
 
+*Resolved: the record now carries `cv_net`, `outCiphertext`, `nf`, `txid` and height
+(§4.1), taking the first shape below with the extra fields folded in at once. The
+analysis is kept for the cost it documents.*
+
 Recovering sent memos and recipients after a seed restore needs `cv_net` (32 B) and
-`outCiphertext` (80 B) in addition to what is stored today. That takes the record from
+`outCiphertext` (80 B) in addition to what the memo-only record stored. That takes the record from
 612 to 724 bytes — about 18% more bytes per position, and ~33.7 GiB at 50 M positions.
 
 Two shapes, with different costs:
@@ -784,7 +808,7 @@ compact-scan range scheduling and connection-level metadata.
 | Sealed artifact reload after worker restart with unchanged digests | Negative-case matrix: mutated ciphertext, wrong position, stale anchor, wrong network, truncated and oversized responses, padding records |
 | Atomic generation staging and swap; two-generation retention | Proof that every `MemoPirOnly` case makes zero `GetTransaction(txid)` calls, including legacy queued rows |
 | Append-stable shard placement; adding a worker moves no sealed shard | Production performance: preprocessing and steady-state memory, publish-within-one-block, mobile p95 |
-| Terraform apply with no post-apply drift | Independent cryptographic review of the pinned `e875404` revision and its parameters for a 4,896-byte row at each supported capacity |
+| Terraform apply with no post-apply drift | Independent cryptographic review of the pinned `e875404` revision and its parameters for a 6,336-byte row at each supported capacity |
 | Library-level algebra equivalence and malformed-contribution rejection | The `MemoPirOnly` classification proof (§9.5) |
 
 Rollout order follows that split: verify ingestion and publication; validate correctness,

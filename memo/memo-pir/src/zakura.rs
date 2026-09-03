@@ -1,4 +1,4 @@
-use crate::types::{MemoRecord, ACTIVATION_HEIGHT, SHARD_POSITIONS};
+use crate::types::{ActionRecord, ActionRecordParts, ACTIVATION_HEIGHT, SHARD_POSITIONS};
 use reqwest::StatusCode;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -39,7 +39,7 @@ pub struct ZakuraClient {
 pub struct CanonicalBlock {
     pub height: u64,
     pub hash: String,
-    pub records: Vec<MemoRecord>,
+    pub records: Vec<ActionRecord>,
     pub tree_size: u64,
 }
 
@@ -116,15 +116,27 @@ impl ZakuraClient {
         let block = Block::zcash_deserialize(raw.as_slice())
             .map_err(|error| ZakuraError::Block(error.to_string()))?;
         let hash = block.hash().to_string();
+        let record_height = u32::try_from(height)
+            .map_err(|_| ZakuraError::Block(format!("height {height} exceeds u32")))?;
         let records = block
             .transactions
             .iter()
-            .flat_map(|transaction| transaction.ironwood_actions())
-            .map(|action| {
-                MemoRecord::from_parts(
-                    <[u8; 32]>::from(&action.ephemeral_key),
-                    action.enc_ciphertext.into(),
-                )
+            .flat_map(|transaction| {
+                let txid = <[u8; 32]>::from(transaction.hash());
+                transaction
+                    .ironwood_actions()
+                    .map(move |action| (txid, action))
+            })
+            .map(|(txid, action)| {
+                ActionRecord::from_parts(ActionRecordParts {
+                    nullifier: action.nullifier.into(),
+                    ephemeral_key: <[u8; 32]>::from(&action.ephemeral_key),
+                    enc_ciphertext: action.enc_ciphertext.into(),
+                    cv_net: action.cv.into(),
+                    out_ciphertext: action.out_ciphertext.into(),
+                    txid,
+                    height: record_height,
+                })
             })
             .collect();
         let tree_size = self.tree_size(height).await?;
