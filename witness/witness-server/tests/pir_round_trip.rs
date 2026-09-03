@@ -31,10 +31,9 @@ use commitment_tree_db::CommitmentTreeDb;
 use pir_types::YpirScenario;
 use tokio::net::TcpListener;
 use witness_client::reconstruct::reconstruct_witness;
-use witness_client::WitnessClient;
 use witness_server::pir_ypir::YpirPirEngine;
 use witness_server::server::{build_router, run_sync_only};
-use witness_server::state::ServerConfig;
+use witness_server::state::{ServerConfig, WitnessMetadata};
 use witness_types::*;
 use ypir::client::YPIRClient;
 use ypir::params::params_for_scenario_simplepir;
@@ -364,12 +363,47 @@ async fn full_pir_round_trip() {
     let base_url = format!("http://{addr}");
     tracing::info!(url = %base_url, "server listening");
 
-    let client = WitnessClient::connect(&base_url)
+    // Fetch the YPIR server contract directly. `WitnessClient` selects IPIR
+    // whenever its `ipir` feature is unified into a workspace all-features
+    // build, so using it here would pair an IPIR client with this test's YPIR
+    // server and incorrectly expect IPIR-only `/public-params` bytes.
+    let http = reqwest::Client::new();
+    let server_scenario: YpirScenario = http
+        .get(format!("{base_url}/params"))
+        .send()
         .await
-        .expect("WitnessClient::connect failed");
+        .expect("GET /params failed")
+        .error_for_status()
+        .expect("GET /params returned an error")
+        .json()
+        .await
+        .expect("invalid /params response");
+    assert_eq!(server_scenario.num_items, scenario.num_items);
+    assert_eq!(server_scenario.item_size_bits, scenario.item_size_bits);
 
-    assert_eq!(client.anchor_height(), anchor_height);
-    let server_broadcast = client.broadcast().clone();
+    let metadata: WitnessMetadata = http
+        .get(format!("{base_url}/metadata"))
+        .send()
+        .await
+        .expect("GET /metadata failed")
+        .error_for_status()
+        .expect("GET /metadata returned an error")
+        .json()
+        .await
+        .expect("invalid /metadata response");
+    assert_eq!(metadata.anchor_height, anchor_height);
+    assert_eq!(metadata.pool, pir_types::POOL);
+
+    let server_broadcast: BroadcastData = http
+        .get(format!("{base_url}/broadcast"))
+        .send()
+        .await
+        .expect("GET /broadcast failed")
+        .error_for_status()
+        .expect("GET /broadcast returned an error")
+        .json()
+        .await
+        .expect("invalid /broadcast response");
     assert_eq!(
         server_broadcast.anchor_height, canonical.broadcast.anchor_height,
         "server broadcast anchor height should match canonical reference"

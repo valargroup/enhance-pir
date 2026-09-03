@@ -6,6 +6,8 @@ use memo_pir::types::{
 };
 use memo_pir::worker::WorkerState;
 use memo_pir::zakura::ZakuraClient;
+use serde::Deserialize;
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -35,12 +37,92 @@ struct Cli {
     data_dir: PathBuf,
     #[arg(long = "worker-url")]
     worker_urls: Vec<String>,
+    /// Ordered worker inventory. Existing entries must remain prefix-stable so
+    /// that adding capacity never changes sealed shard ownership.
+    #[arg(long, conflicts_with = "worker_urls")]
+    worker_config: Option<PathBuf>,
     #[arg(long, default_value_t = DEFAULT_LOOKBACK_BLOCKS)]
     lookback_blocks: u64,
     #[arg(long, default_value_t = DEFAULT_MAX_ACTIVE_SHARDS)]
     max_active_shards: u32,
     #[arg(long, default_value_t = 10)]
     poll_seconds: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerConfigFile {
+    workers: Vec<WorkerConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerConfig {
+    name: String,
+    url: String,
+}
+
+fn remote_workers(cli: &Cli) -> Result<Vec<WorkerTarget>, Box<dyn std::error::Error>> {
+    let configured = if let Some(path) = &cli.worker_config {
+        let bytes = std::fs::read(path)?;
+        parse_worker_config(&bytes)?
+    } else {
+        cli.worker_urls
+            .iter()
+            .enumerate()
+            .map(|(index, url)| WorkerConfig {
+                name: format!("worker-{}", index + 1),
+                url: url.clone(),
+            })
+            .collect()
+    };
+
+    if configured.len() < 2 {
+        return Err("distributed-full mode requires at least two workers".into());
+    }
+
+    let mut names = HashSet::new();
+    let mut urls = HashSet::new();
+    configured
+        .into_iter()
+        .map(|worker| {
+            if worker.name.is_empty()
+                || !worker
+                    .name
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '-')
+            {
+                return Err(format!("invalid worker name: {:?}", worker.name));
+            }
+            let parsed = reqwest::Url::parse(&worker.url)
+                .map_err(|error| format!("invalid URL for {}: {error}", worker.name))?;
+            if !matches!(parsed.scheme(), "http" | "https")
+                || parsed.host_str().is_none()
+                || parsed.username() != ""
+                || parsed.password().is_some()
+                || parsed.query().is_some()
+                || parsed.fragment().is_some()
+            {
+                return Err(format!("invalid URL for {}", worker.name));
+            }
+            let url = worker.url.trim_end_matches('/').to_string();
+            if !names.insert(worker.name.clone()) {
+                return Err(format!("duplicate worker name: {}", worker.name));
+            }
+            if !urls.insert(url.clone()) {
+                return Err(format!("duplicate worker URL: {url}"));
+            }
+            Ok(WorkerTarget::Remote {
+                name: worker.name,
+                base_url: url,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()
+        .map_err(Into::into)
+}
+
+fn parse_worker_config(bytes: &[u8]) -> Result<Vec<WorkerConfig>, serde_json::Error> {
+    serde_json::from_slice::<WorkerConfigFile>(bytes).map(|config| config.workers)
 }
 
 #[tokio::main]
@@ -52,21 +134,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
     let cli = Cli::parse();
     let workers = match cli.mode {
-        Mode::DistributedFull => {
-            if cli.worker_urls.len() < 2 {
-                return Err(
-                    "distributed-full mode requires at least two --worker-url values".into(),
-                );
-            }
-            cli.worker_urls
-                .iter()
-                .enumerate()
-                .map(|(index, base_url)| WorkerTarget::Remote {
-                    name: format!("worker-{}", index + 1),
-                    base_url: base_url.trim_end_matches('/').to_string(),
-                })
-                .collect()
-        }
+        Mode::DistributedFull => remote_workers(&cli)?,
         Mode::EmbeddedWindowed => vec![WorkerTarget::Embedded {
             name: "embedded".to_string(),
             state: WorkerState::new(cli.data_dir.join("embedded-worker"))?,
@@ -234,5 +302,53 @@ async fn ingest(
             }
         }
         tokio::time::sleep(Duration::from_secs(cli.poll_seconds)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cli(worker_config: Option<PathBuf>, worker_urls: Vec<String>) -> Cli {
+        Cli {
+            mode: Mode::DistributedFull,
+            listen: "127.0.0.1:8080".parse().unwrap(),
+            zakura_rpc_url: "http://127.0.0.1:8232".to_string(),
+            zakura_cookie: PathBuf::from("cookie"),
+            data_dir: PathBuf::from("data"),
+            worker_urls,
+            worker_config,
+            lookback_blocks: DEFAULT_LOOKBACK_BLOCKS,
+            max_active_shards: DEFAULT_MAX_ACTIVE_SHARDS,
+            poll_seconds: 10,
+        }
+    }
+
+    #[test]
+    fn parses_explicit_worker_names_in_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("workers.json");
+        std::fs::write(
+            &path,
+            br#"{"workers":[{"name":"worker-a","url":"http://10.0.0.2:8091"},{"name":"worker-b","url":"http://10.0.0.3:8091/"}]}"#,
+        )
+        .unwrap();
+
+        let workers = remote_workers(&cli(Some(path), vec![])).unwrap();
+        assert_eq!(workers[0].name(), "worker-a");
+        assert_eq!(workers[1].name(), "worker-b");
+    }
+
+    #[test]
+    fn rejects_duplicate_names_and_urls() {
+        let duplicate_name = br#"{"workers":[{"name":"same","url":"http://10.0.0.2:8091"},{"name":"same","url":"http://10.0.0.3:8091"}]}"#;
+        let duplicate_url = br#"{"workers":[{"name":"a","url":"http://10.0.0.2:8091"},{"name":"b","url":"http://10.0.0.2:8091/"}]}"#;
+
+        for config in [duplicate_name.as_slice(), duplicate_url.as_slice()] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("workers.json");
+            std::fs::write(&path, config).unwrap();
+            assert!(remote_workers(&cli(Some(path), vec![])).is_err());
+        }
     }
 }
