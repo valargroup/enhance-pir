@@ -31,8 +31,12 @@ pub struct MetricsSnapshot {
     pub snapshot_gauges: BTreeMap<String, f64>,
     /// worker name -> (gauge stem such as `up`, value)
     pub workers: BTreeMap<String, BTreeMap<String, f64>>,
-    /// gauge stem such as `shard_positions` -> value
+    /// gauge stem such as `confirmations` -> value
     pub layout: BTreeMap<String, f64>,
+    /// table name -> (gauge stem such as `shards`, value)
+    pub tables: BTreeMap<String, BTreeMap<String, f64>>,
+    /// worker name -> table name -> (gauge stem, value)
+    pub worker_tables: BTreeMap<String, BTreeMap<String, BTreeMap<String, f64>>>,
     pub resident_memory_bytes: Option<f64>,
     pub process_start_time_seconds: Option<f64>,
 }
@@ -55,6 +59,9 @@ pub struct EndpointWindow {
     pub processing: LatencyWindow,
     pub in_flight: f64,
     pub processing_in_flight: f64,
+    /// The server reported a processing histogram for this endpoint, so its
+    /// alert can use processing latency even without configuration.
+    pub processing_available: bool,
 }
 
 impl EndpointWindow {
@@ -104,11 +111,20 @@ impl RollingMetrics {
         let oldest = &self.snapshots[oldest_index];
         let elapsed = newest.at.duration_since(oldest.at).as_secs_f64().max(1.0);
 
-        self.schema
-            .endpoints
-            .iter()
+        // Configured endpoints always get a window; anything else the server
+        // labelled (its label set is closed) is appended so new tables show
+        // up without a config change.
+        let mut names: Vec<&str> = self.schema.endpoints.iter().map(String::as_str).collect();
+        names.extend(
+            newest
+                .endpoints
+                .keys()
+                .map(String::as_str)
+                .filter(|name| !self.schema.knows(name)),
+        );
+        names
+            .into_iter()
             .map(|endpoint| {
-                let endpoint = endpoint.as_str();
                 let current = newest.endpoints.get(endpoint).cloned().unwrap_or_default();
                 let mut requests = 0.0;
                 let mut errors = 0.0;
@@ -154,6 +170,7 @@ impl RollingMetrics {
                         ),
                         in_flight: current.in_flight,
                         processing_in_flight: current.processing_in_flight,
+                        processing_available: current.processing.count > 0.0,
                     },
                 )
             })
@@ -316,6 +333,9 @@ pub fn parse_prometheus(
     let mut snapshot_gauges = BTreeMap::new();
     let mut workers: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
     let mut layout: BTreeMap<String, f64> = BTreeMap::new();
+    let mut tables: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
+    let mut worker_tables: BTreeMap<String, BTreeMap<String, BTreeMap<String, f64>>> =
+        BTreeMap::new();
     let mut resident_memory_bytes = None;
     let mut process_start_time_seconds = None;
 
@@ -328,16 +348,14 @@ pub fn parse_prometheus(
             .map_err(|error| format!("line {}: {error}", line_number.saturating_add(1)))?;
         let name = sample.name.as_str();
         if name == schema.requests_total {
-            if let Some(endpoint) = sample.labels.get("endpoint") {
-                if let Some(values) = endpoints.get_mut(endpoint) {
-                    values.requests += sample.value;
-                    if sample
-                        .labels
-                        .get("status")
-                        .is_some_and(|status| status.starts_with('5'))
-                    {
-                        values.errors_5xx += sample.value;
-                    }
+            if let Some(values) = endpoint_entry(&mut endpoints, &sample) {
+                values.requests += sample.value;
+                if sample
+                    .labels
+                    .get("status")
+                    .is_some_and(|status| status.starts_with('5'))
+                {
+                    values.errors_5xx += sample.value;
                 }
             }
         } else if name == schema.duration_bucket {
@@ -386,6 +404,24 @@ pub fn parse_prometheus(
             process_start_time_seconds = Some(sample.value);
         } else if name.starts_with(&schema.gauge_prefix) {
             snapshot_gauges.insert(name.to_string(), sample.value);
+        } else if let Some(stem) = name.strip_prefix(&schema.worker_table_prefix) {
+            if let (Some(worker), Some(table)) =
+                (sample.labels.get("worker"), sample.labels.get("table"))
+            {
+                worker_tables
+                    .entry(worker.clone())
+                    .or_default()
+                    .entry(table.clone())
+                    .or_default()
+                    .insert(stem.to_string(), sample.value);
+            }
+        } else if let Some(stem) = name.strip_prefix(&schema.table_prefix) {
+            if let Some(table) = sample.labels.get("table") {
+                tables
+                    .entry(table.clone())
+                    .or_default()
+                    .insert(stem.to_string(), sample.value);
+            }
         } else if let Some(stem) = name.strip_prefix(&schema.worker_prefix) {
             if let Some(worker) = sample.labels.get("worker") {
                 workers
@@ -413,9 +449,40 @@ pub fn parse_prometheus(
         snapshot_gauges,
         workers,
         layout,
+        tables,
+        worker_tables,
         resident_memory_bytes,
         process_start_time_seconds,
     })
+}
+
+/// Most distinct endpoint labels accepted from one exposition. The server's
+/// label set is closed, so this only bounds a misbehaving scrape target.
+const MAX_ENDPOINTS: usize = 32;
+
+fn is_endpoint_label(label: &str) -> bool {
+    !label.is_empty()
+        && label.len() <= 40
+        && label
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+/// The cumulative slot for a sample's `endpoint` label, creating one for a
+/// label the config did not list as long as it is well formed and the cap
+/// has not been reached.
+fn endpoint_entry<'a>(
+    endpoints: &'a mut BTreeMap<String, EndpointCumulative>,
+    sample: &ParsedSample,
+) -> Option<&'a mut EndpointCumulative> {
+    let endpoint = sample.labels.get("endpoint")?;
+    if !endpoints.contains_key(endpoint) {
+        if !is_endpoint_label(endpoint) || endpoints.len() >= MAX_ENDPOINTS {
+            return None;
+        }
+        endpoints.insert(endpoint.clone(), EndpointCumulative::default());
+    }
+    endpoints.get_mut(endpoint)
 }
 
 fn set_histogram_bucket(
@@ -423,11 +490,10 @@ fn set_histogram_bucket(
     sample: &ParsedSample,
     histogram: fn(&mut EndpointCumulative) -> &mut HistogramCumulative,
 ) -> Result<(), String> {
-    let (Some(endpoint), Some(le)) = (sample.labels.get("endpoint"), sample.labels.get("le"))
-    else {
+    let Some(le) = sample.labels.get("le").cloned() else {
         return Ok(());
     };
-    let Some(values) = endpoints.get_mut(endpoint) else {
+    let Some(values) = endpoint_entry(endpoints, sample) else {
         return Ok(());
     };
     let upper = if le == "+Inf" {
@@ -446,11 +512,7 @@ fn set_histogram_value(
     histogram: fn(&mut EndpointCumulative) -> &mut HistogramCumulative,
     set: impl FnOnce(&mut HistogramCumulative),
 ) {
-    if let Some(values) = sample
-        .labels
-        .get("endpoint")
-        .and_then(|endpoint| endpoints.get_mut(endpoint))
-    {
+    if let Some(values) = endpoint_entry(endpoints, sample) {
         set(histogram(values));
     }
 }
@@ -460,11 +522,7 @@ fn set_endpoint_value(
     sample: &ParsedSample,
     set: impl FnOnce(&mut EndpointCumulative),
 ) {
-    if let Some(values) = sample
-        .labels
-        .get("endpoint")
-        .and_then(|endpoint| endpoints.get_mut(endpoint))
-    {
+    if let Some(values) = endpoint_entry(endpoints, sample) {
         set(values);
     }
 }
@@ -589,8 +647,14 @@ nf_snapshot_ignored 1
 memo_worker_up{worker="worker-1"} 1
 memo_worker_up{worker="worker-2"} 0
 memo_worker_assigned_shards{worker="worker-1"} 2
-memo_layout_shard_positions 65536
-memo_layout_shards_per_worker 2
+memo_layout_confirmations 10
+memo_table_registered{table="action"} 1
+memo_table_shards{table="action"} 3
+memo_worker_table_index{table="action",worker="worker-1"} 0
+memo_worker_table_assigned_shards{table="action",worker="worker-1"} 2
+memo_http_requests_total{endpoint="witness_query",method="POST",status="200"} 5
+memo_http_request_processing_duration_seconds_count{endpoint="witness_query"} 5
+memo_http_requests_total{endpoint="Bad Label",method="GET",status="200"} 1
 process_resident_memory_bytes 1048576
 process_start_time_seconds 1787880000
 "#;
@@ -612,11 +676,19 @@ process_start_time_seconds 1787880000
         assert_eq!(parsed.workers["worker-1"]["assigned_shards"], 2.0);
         assert_eq!(parsed.workers["worker-2"]["up"], 0.0);
         assert!(!parsed.snapshot_gauges.contains_key("memo_worker_up"));
-        assert_eq!(parsed.layout["shard_positions"], 65536.0);
-        assert_eq!(parsed.layout["shards_per_worker"], 2.0);
-        assert!(!parsed
-            .snapshot_gauges
-            .contains_key("memo_layout_shard_positions"));
+        assert_eq!(parsed.layout["confirmations"], 10.0);
+        assert_eq!(parsed.tables["action"]["registered"], 1.0);
+        assert_eq!(parsed.tables["action"]["shards"], 3.0);
+        assert_eq!(parsed.worker_tables["worker-1"]["action"]["index"], 0.0);
+        assert_eq!(
+            parsed.worker_tables["worker-1"]["action"]["assigned_shards"],
+            2.0
+        );
+        assert!(!parsed.workers["worker-1"].contains_key("table_index"));
+        // Discovered endpoint: not configured, but labelled by the server.
+        assert_eq!(parsed.endpoints["witness_query"].requests, 5.0);
+        assert_eq!(parsed.endpoints["witness_query"].processing.count, 5.0);
+        assert!(!parsed.endpoints.contains_key("Bad Label"));
         assert_eq!(parsed.resident_memory_bytes, Some(1_048_576.0));
         assert_eq!(parsed.process_start_time_seconds, Some(1_787_880_000.0));
     }
@@ -675,6 +747,8 @@ process_start_time_seconds 1787880000
                 snapshot_gauges: BTreeMap::new(),
                 workers: BTreeMap::new(),
                 layout: BTreeMap::new(),
+                tables: BTreeMap::new(),
+                worker_tables: BTreeMap::new(),
                 resident_memory_bytes: None,
                 process_start_time_seconds: None,
             });
@@ -745,6 +819,8 @@ process_start_time_seconds 1787880000
                 snapshot_gauges: BTreeMap::new(),
                 workers: BTreeMap::new(),
                 layout: BTreeMap::new(),
+                tables: BTreeMap::new(),
+                worker_tables: BTreeMap::new(),
                 resident_memory_bytes: None,
                 process_start_time_seconds: None,
             });
@@ -792,6 +868,8 @@ process_start_time_seconds 1787880000
                 snapshot_gauges: BTreeMap::new(),
                 workers: BTreeMap::new(),
                 layout: BTreeMap::new(),
+                tables: BTreeMap::new(),
+                worker_tables: BTreeMap::new(),
                 resident_memory_bytes: None,
                 process_start_time_seconds: Some(100.0 + index as f64),
             });
@@ -830,6 +908,7 @@ memo_http_request_duration_seconds_count{endpoint="query"} 20
             "nf",
             vec!["tier0".to_string()],
             Default::default(),
+            Default::default(),
             1.0,
             Default::default(),
         )
@@ -852,6 +931,65 @@ memo_snapshot_generation 1
     }
 
     #[test]
+    fn discovered_endpoints_get_windows_after_configured_ones() {
+        let schema = Schema::memo_default();
+        let mut rolling = RollingMetrics::new(schema.clone());
+        let mut endpoints = BTreeMap::new();
+        endpoints.insert(
+            "witness_query".to_string(),
+            EndpointCumulative {
+                requests: 5.0,
+                processing: HistogramCumulative {
+                    buckets: vec![(1.0, 5.0), (f64::INFINITY, 5.0)],
+                    sum: 2.0,
+                    count: 5.0,
+                },
+                ..Default::default()
+            },
+        );
+        rolling.push(MetricsSnapshot {
+            at: Instant::now(),
+            endpoints,
+            snapshot_gauges: BTreeMap::new(),
+            workers: BTreeMap::new(),
+            layout: BTreeMap::new(),
+            tables: BTreeMap::new(),
+            worker_tables: BTreeMap::new(),
+            resident_memory_bytes: None,
+            process_start_time_seconds: None,
+        });
+        let windows = rolling.windows();
+        assert_eq!(windows.len(), schema.endpoints.len() + 1);
+        assert!(windows["witness_query"].processing_available);
+        assert!(!windows["query"].processing_available);
+    }
+
+    #[test]
+    fn endpoint_discovery_is_capped_and_validated() {
+        let mut endpoints = BTreeMap::new();
+        for index in 0..MAX_ENDPOINTS {
+            let sample = ParsedSample {
+                name: "x".into(),
+                labels: HashMap::from([("endpoint".to_string(), format!("e{index}"))]),
+                value: 1.0,
+            };
+            assert!(endpoint_entry(&mut endpoints, &sample).is_some());
+        }
+        let overflow = ParsedSample {
+            name: "x".into(),
+            labels: HashMap::from([("endpoint".to_string(), "one_more".to_string())]),
+            value: 1.0,
+        };
+        assert!(endpoint_entry(&mut endpoints, &overflow).is_none());
+        let known = ParsedSample {
+            name: "x".into(),
+            labels: HashMap::from([("endpoint".to_string(), "e0".to_string())]),
+            value: 1.0,
+        };
+        assert!(endpoint_entry(&mut endpoints, &known).is_some());
+    }
+
+    #[test]
     fn handles_counter_reset_and_caps_history() {
         let start = Instant::now();
         let mut rolling = RollingMetrics::new(Schema::memo_default());
@@ -870,6 +1008,8 @@ memo_snapshot_generation 1
                 snapshot_gauges: BTreeMap::new(),
                 workers: BTreeMap::new(),
                 layout: BTreeMap::new(),
+                tables: BTreeMap::new(),
+                worker_tables: BTreeMap::new(),
                 resident_memory_bytes: None,
                 process_start_time_seconds: None,
             });

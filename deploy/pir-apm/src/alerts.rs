@@ -81,9 +81,12 @@ impl AlertEngine {
             ),
         );
 
-        for endpoint in &self.schema.endpoints {
+        for (endpoint, window) in input.endpoints {
             let endpoint = endpoint.as_str();
-            let window = input.endpoints.get(endpoint).cloned().unwrap_or_default();
+            if self.schema.is_informational(endpoint) {
+                continue;
+            }
+            let window = window.clone();
             conditions.insert(
                 format!("{endpoint}_5xx"),
                 (
@@ -102,12 +105,18 @@ impl AlertEngine {
                 ),
             );
             let latency_check = format!("{endpoint}_high_latency");
-            let latency_label = self.schema.latency_label(endpoint);
+            let uses_processing =
+                self.schema.uses_processing(endpoint) || window.processing_available;
+            let latency_label = if uses_processing {
+                "processing p99"
+            } else {
+                "p99"
+            };
             let latency_threshold = self
                 .schema
                 .latency_budget(endpoint)
                 .unwrap_or(thresholds::DEFAULT_LATENCY_P99_SECONDS);
-            let latency = window.alert_latency(self.schema.uses_processing(endpoint));
+            let latency = window.alert_latency(uses_processing);
             conditions.insert(
                 latency_check,
                 (
@@ -398,6 +407,55 @@ mod tests {
     }
 
     #[test]
+    fn discovered_and_informational_endpoints_follow_their_rules() {
+        let now = Instant::now();
+        let host = healthy_host();
+        let mut endpoints = BTreeMap::new();
+        // Not configured anywhere: pages on processing p99 at the default budget.
+        endpoints.insert(
+            "witness_query".into(),
+            EndpointWindow {
+                requests: 50.0,
+                observed: LatencyWindow {
+                    samples: 50.0,
+                    p99: Some(0.1),
+                    ..Default::default()
+                },
+                processing: LatencyWindow {
+                    samples: 50.0,
+                    p99: Some(1.5),
+                    ..Default::default()
+                },
+                processing_available: true,
+                ..Default::default()
+            },
+        );
+        // Informational: 100% 5xx and never pages.
+        endpoints.insert(
+            "health".into(),
+            EndpointWindow {
+                requests: 50.0,
+                errors_5xx: 50.0,
+                error_ratio: 1.0,
+                ..Default::default()
+            },
+        );
+        let mut engine = AlertEngine::new(Schema::memo_default());
+        let fired = engine.evaluate(AlertInput {
+            now,
+            scrape_ok: true,
+            ready_ok: true,
+            endpoints: &endpoints,
+            host: &host,
+        });
+        let [AlertTransition::Fired(alert)] = fired.as_slice() else {
+            panic!("expected exactly one alert, got {}", fired.len());
+        };
+        assert_eq!(alert.check, "witness_query_high_latency");
+        assert!(alert.observed.contains("processing p99"));
+    }
+
+    #[test]
     fn budgets_come_from_the_schema() {
         let now = Instant::now();
         let host = healthy_host();
@@ -429,6 +487,7 @@ mod tests {
         let tight = Schema::new(
             "memo",
             vec!["public_params".to_string()],
+            Default::default(),
             Default::default(),
             1.0,
             Default::default(),

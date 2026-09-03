@@ -12,6 +12,9 @@ pub struct Schema {
     pub prefix: String,
     pub endpoints: Vec<String>,
     pub processing_endpoints: BTreeSet<String>,
+    /// Shown in the endpoint table but never paged (e.g. a health probe that
+    /// returns 503 by design while syncing).
+    pub informational_endpoints: BTreeSet<String>,
     pub default_latency_p99: f64,
     pub latency_overrides: BTreeMap<String, f64>,
     pub requests_total: String,
@@ -26,8 +29,12 @@ pub struct Schema {
     pub gauge_prefix: String,
     /// Families like `<prefix>_worker_up{worker="..."}` describe the fleet.
     pub worker_prefix: String,
-    /// Unlabelled `<prefix>_layout_*` constants describing the database geometry.
+    /// Unlabelled `<prefix>_layout_*` chain-level constants.
     pub layout_prefix: String,
+    /// `<prefix>_table_*{table="..."}` families describing each PIR table.
+    pub table_prefix: String,
+    /// `<prefix>_worker_table_*{worker="...",table="..."}` ownership families.
+    pub worker_table_prefix: String,
 }
 
 impl Schema {
@@ -35,6 +42,7 @@ impl Schema {
         prefix: &str,
         endpoints: Vec<String>,
         processing_endpoints: BTreeSet<String>,
+        informational_endpoints: BTreeSet<String>,
         default_latency_p99: f64,
         latency_overrides: BTreeMap<String, f64>,
     ) -> Result<Self, String> {
@@ -53,11 +61,12 @@ impl Schema {
                 return Err(format!("duplicate endpoint {endpoint:?}"));
             }
         }
-        for endpoint in &processing_endpoints {
-            if !seen.contains(endpoint.as_str()) {
-                return Err(format!(
-                    "processing endpoint {endpoint:?} is not in the endpoint list"
-                ));
+        for endpoint in processing_endpoints
+            .iter()
+            .chain(informational_endpoints.iter())
+        {
+            if !is_identifier(endpoint) {
+                return Err(format!("endpoint {endpoint:?} must match [a-z0-9_]+"));
             }
         }
         for (endpoint, budget) in &latency_overrides {
@@ -86,9 +95,12 @@ impl Schema {
             gauge_prefix: format!("{prefix}_snapshot_"),
             worker_prefix: format!("{prefix}_worker_"),
             layout_prefix: format!("{prefix}_layout_"),
+            table_prefix: format!("{prefix}_table_"),
+            worker_table_prefix: format!("{prefix}_worker_table_"),
             prefix: prefix.to_string(),
             endpoints,
             processing_endpoints,
+            informational_endpoints,
             default_latency_p99,
             latency_overrides,
         })
@@ -98,11 +110,19 @@ impl Schema {
     pub fn memo_default() -> Self {
         Self::new(
             "memo",
-            ["metadata", "params", "public_params", "query"]
-                .into_iter()
-                .map(String::from)
-                .collect(),
+            [
+                "health",
+                "metadata",
+                "generation",
+                "params",
+                "public_params",
+                "query",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
             BTreeSet::from(["query".to_string()]),
+            BTreeSet::from(["health".to_string()]),
             crate::thresholds::DEFAULT_LATENCY_P99_SECONDS,
             BTreeMap::from([
                 ("query".to_string(), 5.0),
@@ -122,9 +142,15 @@ impl Schema {
         self.processing_endpoints.contains(endpoint)
     }
 
-    /// The p99 budget the alert engine applies to this endpoint.
+    /// Whether the endpoint is displayed but never paged.
+    pub fn is_informational(&self, endpoint: &str) -> bool {
+        self.informational_endpoints.contains(endpoint)
+    }
+
+    /// The p99 budget the alert engine applies to this endpoint. Endpoints
+    /// discovered from the exposition rather than configured get the default.
     pub fn latency_budget(&self, endpoint: &str) -> Option<f64> {
-        if !self.knows(endpoint) {
+        if self.is_informational(endpoint) {
             return None;
         }
         Some(
@@ -142,14 +168,6 @@ impl Schema {
             None
         } else {
             self.latency_budget(endpoint)
-        }
-    }
-
-    pub fn latency_label(&self, endpoint: &str) -> &'static str {
-        if self.uses_processing(endpoint) {
-            "processing p99"
-        } else {
-            "p99"
         }
     }
 }
@@ -178,10 +196,12 @@ mod tests {
         assert_eq!(schema.layout_prefix, "memo_layout_");
         assert_eq!(schema.latency_budget("query"), Some(5.0));
         assert_eq!(schema.latency_budget("metadata"), Some(1.0));
-        assert_eq!(schema.latency_budget("nope"), None);
+        assert_eq!(schema.latency_budget("witness_query"), Some(1.0));
+        assert_eq!(schema.latency_budget("health"), None);
+        assert!(schema.is_informational("health"));
+        assert_eq!(schema.table_prefix, "memo_table_");
+        assert_eq!(schema.worker_table_prefix, "memo_worker_table_");
         assert_eq!(schema.observed_budget("query"), None);
-        assert_eq!(schema.latency_label("query"), "processing p99");
-        assert_eq!(schema.latency_label("params"), "p99");
     }
 
     #[test]
@@ -191,22 +211,33 @@ mod tests {
             "Bad-Prefix",
             endpoints.clone(),
             BTreeSet::new(),
-            1.0,
-            BTreeMap::new()
-        )
-        .is_err());
-        assert!(Schema::new("ok", vec![], BTreeSet::new(), 1.0, BTreeMap::new()).is_err());
-        assert!(Schema::new(
-            "ok",
-            endpoints.clone(),
-            BTreeSet::from(["b".to_string()]),
+            BTreeSet::new(),
             1.0,
             BTreeMap::new()
         )
         .is_err());
         assert!(Schema::new(
             "ok",
+            vec![],
+            BTreeSet::new(),
+            BTreeSet::new(),
+            1.0,
+            BTreeMap::new()
+        )
+        .is_err());
+        assert!(Schema::new(
+            "ok",
             endpoints.clone(),
+            BTreeSet::from(["Bad Name".to_string()]),
+            BTreeSet::new(),
+            1.0,
+            BTreeMap::new()
+        )
+        .is_err());
+        assert!(Schema::new(
+            "ok",
+            endpoints.clone(),
+            BTreeSet::new(),
             BTreeSet::new(),
             1.0,
             BTreeMap::from([("b".to_string(), 1.0)])
@@ -216,6 +247,7 @@ mod tests {
             "ok",
             endpoints.clone(),
             BTreeSet::new(),
+            BTreeSet::new(),
             1.0,
             BTreeMap::from([("a".to_string(), 0.0)])
         )
@@ -224,10 +256,19 @@ mod tests {
             "ok",
             vec!["a".into(), "a".into()],
             BTreeSet::new(),
+            BTreeSet::new(),
             1.0,
             BTreeMap::new()
         )
         .is_err());
-        assert!(Schema::new("ok", endpoints, BTreeSet::new(), 1.0, BTreeMap::new()).is_ok());
+        assert!(Schema::new(
+            "ok",
+            endpoints,
+            BTreeSet::new(),
+            BTreeSet::new(),
+            1.0,
+            BTreeMap::new()
+        )
+        .is_ok());
     }
 }
