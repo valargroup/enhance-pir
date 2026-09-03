@@ -1,9 +1,10 @@
 # spendability-pir — working notes for agents
 
-Rust workspace, 14 crates, two PIR subsystems (`nullifier/`, `witness/`) plus a
-`combined-server/` that ships both. Toolchain is pinned to 1.91.0 by
-`rust-toolchain.toml`. `protoc` must be on PATH — `shared/chain-ingest` has a
-`tonic-build` build script.
+Rust workspace, 16 crates: two PIR subsystems (`nullifier/`, `witness/`) plus a
+`combined-server/` that ships both, the `memo/` PIR fleet, and `deploy/pir-apm`
+(the memo coordinator's monitoring sidecar; hermetic unit tests only).
+Toolchain is pinned to 1.91.0 by `rust-toolchain.toml`. `protoc` must be on
+PATH — `shared/chain-ingest` has a `tonic-build` build script.
 
 ## Tests: run `make test-fast`
 

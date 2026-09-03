@@ -147,6 +147,11 @@ Caddy is enabled on boot by default. The CI pipeline deploys the Caddyfile (with
 
 Ensure the server's DNS A record points to this host and that ports 80 and 443 are open (Caddy needs port 80 for the ACME HTTP challenge).
 
+For the memo PIR fleet the coordinator's Caddyfile is managed by
+`scripts/deploy-memo-pir.sh` instead: it renders
+`infra/digitalocean/memo-poc/deploy/Caddyfile`, validates it, installs it, and
+reloads Caddy on every deploy. See `docs/memo-pir-deploy.md`.
+
 ### Changing deploy path or restart command
 
 - **Deploy path**: Edit the `env.DEPLOY_PATH` in `.github/workflows/deploy.yml` (default `/opt/spend-server`).

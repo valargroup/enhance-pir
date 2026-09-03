@@ -16,6 +16,7 @@ members = [
     "witness/witness-client",
     "memo/memo-pir",
     "combined-server",
+    "deploy/pir-apm",
 ]
 
 [patch.crates-io]

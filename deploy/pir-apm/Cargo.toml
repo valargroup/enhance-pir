@@ -1,0 +1,17 @@
+[package]
+name = "pir-apm"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91"
+license = "MIT OR Apache-2.0"
+description = "Local APM dashboard and alerting sidecar for a PIR server"
+
+[dependencies]
+anyhow = "1"
+axum = "0.7"
+chrono = "0.4"
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde_json = "1"
+sysinfo = "0.36"
+tokio = { version = "1", features = ["full"] }

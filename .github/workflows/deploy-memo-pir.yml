@@ -103,7 +103,7 @@ jobs:
       - name: Build release binaries
         env:
           RUSTFLAGS: -C target-cpu=x86-64-v3
-        run: cargo build --locked --release -p memo-pir --bins
+        run: cargo build --locked --release -p memo-pir -p pir-apm --bins
 
       - name: Assemble checksummed artifact
         env:
@@ -114,10 +114,17 @@ jobs:
           install -m 0755 target/release/memo-pir-server artifact/
           install -m 0755 target/release/memo-pir-worker artifact/
           install -m 0755 target/release/memo-pir-cli artifact/
+          install -m 0755 target/release/pir-apm artifact/
           cp infra/digitalocean/memo-poc/deploy/memo-pir-server.service artifact/
           cp infra/digitalocean/memo-poc/deploy/memo-pir-worker.service artifact/
+          cp infra/digitalocean/memo-poc/deploy/pir-apm.service artifact/
+          cp infra/digitalocean/memo-poc/deploy/Caddyfile artifact/
           printf '%s\n' "$RELEASE_SHA" >artifact/revision
-          (cd artifact && sha256sum memo-pir-* revision >SHA256SUMS)
+          # Explicit list: a glob would silently skip a newly added file.
+          (cd artifact && sha256sum \
+            memo-pir-server memo-pir-worker memo-pir-cli \
+            memo-pir-server.service memo-pir-worker.service \
+            pir-apm pir-apm.service Caddyfile revision >SHA256SUMS)
 
       - name: Upload deployment artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -161,7 +168,8 @@ jobs:
           chmod 0755 \
             artifact/memo-pir-server \
             artifact/memo-pir-worker \
-            artifact/memo-pir-cli
+            artifact/memo-pir-cli \
+            artifact/pir-apm
 
       - name: Prepare ephemeral SSH material
         env:
@@ -187,6 +195,11 @@ jobs:
           MEMO_KNOWN_HOSTS_PATH: ${{ runner.temp }}/memo-pir-ssh/known_hosts
           MEMO_SERVER_SERVICE_FILE: ${{ github.workspace }}/artifact/memo-pir-server.service
           MEMO_WORKER_SERVICE_FILE: ${{ github.workspace }}/artifact/memo-pir-worker.service
+          MEMO_APM_SERVICE_FILE: ${{ github.workspace }}/artifact/pir-apm.service
+          MEMO_CADDYFILE: ${{ github.workspace }}/artifact/Caddyfile
+          MEMO_APM_ENVIRONMENT: memo-pir-mainnet-poc
+          # Optional. Without it the sidecar logs alerts to the journal only.
+          PIR_APM_SLACK_WEBHOOK_URL: ${{ secrets.PIR_APM_SLACK_WEBHOOK_URL }}
           PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
         run: |
           set -euo pipefail
@@ -207,6 +220,7 @@ jobs:
             echo
             echo "- Revision: $RELEASE_SHA"
             echo "- Endpoint: $PUBLIC_URL"
+            echo "- Dashboard: $PUBLIC_URL/apm/"
             echo "- Event: $GITHUB_EVENT_NAME"
           } >>"$GITHUB_STEP_SUMMARY"
 

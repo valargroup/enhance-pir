@@ -20,6 +20,7 @@ jobs:
       nullifier: ${{ steps.filter.outputs.nullifier }}
       witness: ${{ steps.filter.outputs.witness }}
       code: ${{ steps.filter.outputs.code }}
+      memo: ${{ steps.filter.outputs.memo }}
       memo_deploy: ${{ steps.filter.outputs.memo_deploy }}
     steps:
       - uses: actions/checkout@v4
@@ -44,11 +45,16 @@ jobs:
               - 'rust-toolchain.toml'
               - 'proto/**'
               - '.github/workflows/ci.yml'
+            memo:
+              - 'memo/**'
+              - 'deploy/pir-apm/**'
             memo_deploy:
               - '.github/actionlint.yaml'
               - 'scripts/deploy-memo-pir.sh'
               - '.github/workflows/deploy-memo-pir.yml'
               - 'infra/digitalocean/memo-poc/deploy/memo-pir-*.service'
+              - 'infra/digitalocean/memo-poc/deploy/pir-apm.service'
+              - 'infra/digitalocean/memo-poc/deploy/Caddyfile'
 
   validate-memo-deploy:
     name: Validate memo deployment tooling
@@ -147,6 +153,25 @@ jobs:
           -p commitment-tree-db
           -p witness-server
           -p witness-client
+
+  test-memo:
+    name: Test (memo)
+    needs: changes
+    if: needs.changes.outputs.shared == 'true' || needs.changes.outputs.memo == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.91.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: memo
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - run: cargo test -p memo-pir -p pir-apm
 
   test-tree-correctness:
     name: Test (tree correctness)
