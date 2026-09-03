@@ -139,5 +139,12 @@ zcash-swift-wallet-sdk
 
 - Avoid Keystone Hardware wallet support. Avoid breaking PCZT APIs.
 
+## Historical Prototypes
 
+- DAG Sync POC:
+   * https://github.com/zakura-core/wallet-libraries/pull/14
+   * https://github.com/chainapsis/vizor-wallet/tree/roman/ironwood-memo-pir-dag-archive
 
+- Memo PIR
+   * https://github.com/zakura-core/wallet-libraries/pull/13
+   * https://github.com/chainapsis/vizor-wallet/pull/601
