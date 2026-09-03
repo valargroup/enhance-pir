@@ -94,6 +94,25 @@ struct HealthResponse {
     /// Active shard count per table in the newest generation.
     active_shards: BTreeMap<DatabaseId, usize>,
     cached_shards: usize,
+    total_memory_bytes: u64,
+    available_memory_bytes: u64,
+    process_rss_bytes: u64,
+}
+
+/// Host memory as (total, available, this process's RSS), in bytes. Cheap
+/// enough to call on every health probe; the coordinator relays it to the
+/// dashboard so operators can see worker headroom without shell access.
+pub fn host_memory() -> (u64, u64, u64) {
+    let mut system = sysinfo::System::new();
+    system.refresh_memory();
+    let rss = sysinfo::get_current_pid()
+        .ok()
+        .and_then(|pid| {
+            system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
+            system.process(pid).map(|process| process.memory())
+        })
+        .unwrap_or(0);
+    (system.total_memory(), system.available_memory(), rss)
 }
 
 impl WorkerState {
@@ -382,6 +401,7 @@ async fn health(State(state): State<WorkerState>) -> Json<HealthResponse> {
     let active = state.active.read().await;
     let cached_shards = state.shards.read().await.len();
     let newest = active.last_key_value().map(|(_, generation)| generation);
+    let (total_memory_bytes, available_memory_bytes, process_rss_bytes) = host_memory();
     Json(HealthResponse {
         status: "ok",
         generation: newest.map(|generation| generation.generation),
@@ -393,6 +413,9 @@ async fn health(State(state): State<WorkerState>) -> Json<HealthResponse> {
                 .collect()
         }),
         cached_shards,
+        total_memory_bytes,
+        available_memory_bytes,
+        process_rss_bytes,
     })
 }
 
@@ -510,6 +533,13 @@ async fn evaluate(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn host_memory_reports_a_real_total() {
+        let (total, available, _rss) = super::host_memory();
+        assert!(total > 0);
+        assert!(available <= total);
+    }
+
     use super::*;
     use crate::types::SHARD_ROWS;
     use crate::wire::ShardQuery;

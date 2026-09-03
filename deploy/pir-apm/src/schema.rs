@@ -26,6 +26,8 @@ pub struct Schema {
     pub gauge_prefix: String,
     /// Families like `<prefix>_worker_up{worker="..."}` describe the fleet.
     pub worker_prefix: String,
+    /// Unlabelled `<prefix>_layout_*` constants describing the database geometry.
+    pub layout_prefix: String,
 }
 
 impl Schema {
@@ -83,6 +85,7 @@ impl Schema {
             processing_in_flight: format!("{prefix}_http_processing_in_flight"),
             gauge_prefix: format!("{prefix}_snapshot_"),
             worker_prefix: format!("{prefix}_worker_"),
+            layout_prefix: format!("{prefix}_layout_"),
             prefix: prefix.to_string(),
             endpoints,
             processing_endpoints,
@@ -172,6 +175,7 @@ mod tests {
         );
         assert_eq!(schema.gauge_prefix, "memo_snapshot_");
         assert_eq!(schema.worker_prefix, "memo_worker_");
+        assert_eq!(schema.layout_prefix, "memo_layout_");
         assert_eq!(schema.latency_budget("query"), Some(5.0));
         assert_eq!(schema.latency_budget("metadata"), Some(1.0));
         assert_eq!(schema.latency_budget("nope"), None);

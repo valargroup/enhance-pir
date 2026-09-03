@@ -31,6 +31,8 @@ pub struct MetricsSnapshot {
     pub snapshot_gauges: BTreeMap<String, f64>,
     /// worker name -> (gauge stem such as `up`, value)
     pub workers: BTreeMap<String, BTreeMap<String, f64>>,
+    /// gauge stem such as `shard_positions` -> value
+    pub layout: BTreeMap<String, f64>,
     pub resident_memory_bytes: Option<f64>,
     pub process_start_time_seconds: Option<f64>,
 }
@@ -313,6 +315,7 @@ pub fn parse_prometheus(
         .collect();
     let mut snapshot_gauges = BTreeMap::new();
     let mut workers: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
+    let mut layout: BTreeMap<String, f64> = BTreeMap::new();
     let mut resident_memory_bytes = None;
     let mut process_start_time_seconds = None;
 
@@ -390,6 +393,8 @@ pub fn parse_prometheus(
                     .or_default()
                     .insert(stem.to_string(), sample.value);
             }
+        } else if let Some(stem) = name.strip_prefix(&schema.layout_prefix) {
+            layout.insert(stem.to_string(), sample.value);
         }
     }
     for endpoint in endpoints.values_mut() {
@@ -407,6 +412,7 @@ pub fn parse_prometheus(
         endpoints,
         snapshot_gauges,
         workers,
+        layout,
         resident_memory_bytes,
         process_start_time_seconds,
     })
@@ -583,6 +589,8 @@ nf_snapshot_ignored 1
 memo_worker_up{worker="worker-1"} 1
 memo_worker_up{worker="worker-2"} 0
 memo_worker_assigned_shards{worker="worker-1"} 2
+memo_layout_shard_positions 65536
+memo_layout_shards_per_worker 2
 process_resident_memory_bytes 1048576
 process_start_time_seconds 1787880000
 "#;
@@ -604,6 +612,11 @@ process_start_time_seconds 1787880000
         assert_eq!(parsed.workers["worker-1"]["assigned_shards"], 2.0);
         assert_eq!(parsed.workers["worker-2"]["up"], 0.0);
         assert!(!parsed.snapshot_gauges.contains_key("memo_worker_up"));
+        assert_eq!(parsed.layout["shard_positions"], 65536.0);
+        assert_eq!(parsed.layout["shards_per_worker"], 2.0);
+        assert!(!parsed
+            .snapshot_gauges
+            .contains_key("memo_layout_shard_positions"));
         assert_eq!(parsed.resident_memory_bytes, Some(1_048_576.0));
         assert_eq!(parsed.process_start_time_seconds, Some(1_787_880_000.0));
     }
@@ -661,6 +674,7 @@ process_start_time_seconds 1787880000
                 endpoints,
                 snapshot_gauges: BTreeMap::new(),
                 workers: BTreeMap::new(),
+                layout: BTreeMap::new(),
                 resident_memory_bytes: None,
                 process_start_time_seconds: None,
             });
@@ -730,6 +744,7 @@ process_start_time_seconds 1787880000
                 endpoints,
                 snapshot_gauges: BTreeMap::new(),
                 workers: BTreeMap::new(),
+                layout: BTreeMap::new(),
                 resident_memory_bytes: None,
                 process_start_time_seconds: None,
             });
@@ -776,6 +791,7 @@ process_start_time_seconds 1787880000
                 endpoints,
                 snapshot_gauges: BTreeMap::new(),
                 workers: BTreeMap::new(),
+                layout: BTreeMap::new(),
                 resident_memory_bytes: None,
                 process_start_time_seconds: Some(100.0 + index as f64),
             });
@@ -853,6 +869,7 @@ memo_snapshot_generation 1
                 endpoints,
                 snapshot_gauges: BTreeMap::new(),
                 workers: BTreeMap::new(),
+                layout: BTreeMap::new(),
                 resident_memory_bytes: None,
                 process_start_time_seconds: None,
             });
