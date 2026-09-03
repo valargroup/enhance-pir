@@ -1,11 +1,22 @@
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: u16 = 1;
+pub const SCHEMA_VERSION: u16 = 2;
 pub const NETWORK: &str = "main";
 pub const POOL: &str = "ironwood";
 pub const ACTIVATION_HEIGHT: u64 = 3_428_143;
 pub const CONFIRMATIONS: u64 = 10;
-pub const RECORD_BYTES: usize = 612;
+/// One Ironwood action record. Layout, in order:
+///
+/// ```text
+/// nf[32] ‖ ephemeralKey[32] ‖ encCiphertext[580] ‖ cv_net[32] ‖ outCiphertext[80] ‖ txid[32] ‖ height[4 LE]
+/// ```
+///
+/// `nf` is the action's spent nullifier, which is `rho` of the output note and
+/// is required to trial-decrypt an unknown note. `cv_net` and `outCiphertext`
+/// allow outgoing recovery under the OVK. `txid` is in internal (little-endian)
+/// byte order. Everything a wallet needs to reconstruct the action except the
+/// proof and signature is here; `cm_x` is recomputed from the decrypted note.
+pub const RECORD_BYTES: usize = 792;
 pub const RECORDS_PER_ROW: usize = 8;
 pub const ROW_BYTES: usize = RECORD_BYTES * RECORDS_PER_ROW;
 pub const SHARD_ROWS: usize = 8_192;
@@ -17,19 +28,90 @@ pub const ITEM_SIZE_BITS: u64 = (ROW_BYTES * 8) as u64;
 pub const DEFAULT_LOOKBACK_BLOCKS: u64 = 210_240;
 pub const DEFAULT_MAX_ACTIVE_SHARDS: u32 = 16;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MemoRecord(pub [u8; RECORD_BYTES]);
+pub const RECORD_NULLIFIER_OFFSET: usize = 0;
+pub const RECORD_EPHEMERAL_KEY_OFFSET: usize = 32;
+pub const RECORD_ENC_CIPHERTEXT_OFFSET: usize = 64;
+pub const RECORD_CV_NET_OFFSET: usize = 644;
+pub const RECORD_OUT_CIPHERTEXT_OFFSET: usize = 676;
+pub const RECORD_TXID_OFFSET: usize = 756;
+pub const RECORD_HEIGHT_OFFSET: usize = 788;
 
-impl MemoRecord {
-    pub fn from_parts(ephemeral_key: [u8; 32], ciphertext: [u8; 580]) -> Self {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActionRecord(pub [u8; RECORD_BYTES]);
+
+pub struct ActionRecordParts {
+    pub nullifier: [u8; 32],
+    pub ephemeral_key: [u8; 32],
+    pub enc_ciphertext: [u8; 580],
+    pub cv_net: [u8; 32],
+    pub out_ciphertext: [u8; 80],
+    pub txid: [u8; 32],
+    pub height: u32,
+}
+
+impl ActionRecord {
+    pub fn from_parts(parts: ActionRecordParts) -> Self {
         let mut bytes = [0; RECORD_BYTES];
-        bytes[..32].copy_from_slice(&ephemeral_key);
-        bytes[32..].copy_from_slice(&ciphertext);
+        bytes[RECORD_NULLIFIER_OFFSET..RECORD_EPHEMERAL_KEY_OFFSET]
+            .copy_from_slice(&parts.nullifier);
+        bytes[RECORD_EPHEMERAL_KEY_OFFSET..RECORD_ENC_CIPHERTEXT_OFFSET]
+            .copy_from_slice(&parts.ephemeral_key);
+        bytes[RECORD_ENC_CIPHERTEXT_OFFSET..RECORD_CV_NET_OFFSET]
+            .copy_from_slice(&parts.enc_ciphertext);
+        bytes[RECORD_CV_NET_OFFSET..RECORD_OUT_CIPHERTEXT_OFFSET].copy_from_slice(&parts.cv_net);
+        bytes[RECORD_OUT_CIPHERTEXT_OFFSET..RECORD_TXID_OFFSET]
+            .copy_from_slice(&parts.out_ciphertext);
+        bytes[RECORD_TXID_OFFSET..RECORD_HEIGHT_OFFSET].copy_from_slice(&parts.txid);
+        bytes[RECORD_HEIGHT_OFFSET..].copy_from_slice(&parts.height.to_le_bytes());
         Self(bytes)
     }
 
     pub fn as_bytes(&self) -> &[u8; RECORD_BYTES] {
         &self.0
+    }
+
+    pub fn nullifier(&self) -> &[u8; 32] {
+        self.0[RECORD_NULLIFIER_OFFSET..RECORD_EPHEMERAL_KEY_OFFSET]
+            .try_into()
+            .expect("fixed slice")
+    }
+
+    pub fn ephemeral_key(&self) -> &[u8; 32] {
+        self.0[RECORD_EPHEMERAL_KEY_OFFSET..RECORD_ENC_CIPHERTEXT_OFFSET]
+            .try_into()
+            .expect("fixed slice")
+    }
+
+    pub fn enc_ciphertext(&self) -> &[u8; 580] {
+        self.0[RECORD_ENC_CIPHERTEXT_OFFSET..RECORD_CV_NET_OFFSET]
+            .try_into()
+            .expect("fixed slice")
+    }
+
+    pub fn cv_net(&self) -> &[u8; 32] {
+        self.0[RECORD_CV_NET_OFFSET..RECORD_OUT_CIPHERTEXT_OFFSET]
+            .try_into()
+            .expect("fixed slice")
+    }
+
+    pub fn out_ciphertext(&self) -> &[u8; 80] {
+        self.0[RECORD_OUT_CIPHERTEXT_OFFSET..RECORD_TXID_OFFSET]
+            .try_into()
+            .expect("fixed slice")
+    }
+
+    pub fn txid(&self) -> &[u8; 32] {
+        self.0[RECORD_TXID_OFFSET..RECORD_HEIGHT_OFFSET]
+            .try_into()
+            .expect("fixed slice")
+    }
+
+    pub fn height(&self) -> u32 {
+        u32::from_le_bytes(
+            self.0[RECORD_HEIGHT_OFFSET..]
+                .try_into()
+                .expect("fixed slice"),
+        )
     }
 }
 
@@ -130,7 +212,9 @@ mod tests {
 
     #[test]
     fn geometry_is_fixed_and_aligned() {
-        assert_eq!(ROW_BYTES, 4_896);
+        assert_eq!(RECORD_BYTES, 792);
+        assert_eq!(ROW_BYTES, 6_336);
+        assert_eq!(RECORD_HEIGHT_OFFSET + 4, RECORD_BYTES);
         assert_eq!(SHARD_POSITIONS, 65_536);
         assert_eq!(SHARD_ROWS % 2_048, 0);
         assert_eq!(logical_rows_for(0), 8_192);
@@ -138,10 +222,31 @@ mod tests {
     }
 
     #[test]
-    fn record_layout_is_ephemeral_key_then_full_ciphertext() {
-        let record = MemoRecord::from_parts([1; 32], [2; 580]);
-        assert_eq!(&record.as_bytes()[..32], &[1; 32]);
-        assert_eq!(&record.as_bytes()[32..], &[2; 580]);
+    fn record_layout_is_fixed_and_round_trips() {
+        let record = ActionRecord::from_parts(ActionRecordParts {
+            nullifier: [1; 32],
+            ephemeral_key: [2; 32],
+            enc_ciphertext: [3; 580],
+            cv_net: [4; 32],
+            out_ciphertext: [5; 80],
+            txid: [6; 32],
+            height: 0x0403_0201,
+        });
+        let bytes = record.as_bytes();
+        assert_eq!(&bytes[..32], &[1; 32]);
+        assert_eq!(&bytes[32..64], &[2; 32]);
+        assert_eq!(&bytes[64..644], &[3; 580][..]);
+        assert_eq!(&bytes[644..676], &[4; 32]);
+        assert_eq!(&bytes[676..756], &[5; 80][..]);
+        assert_eq!(&bytes[756..788], &[6; 32]);
+        assert_eq!(&bytes[788..], &[1, 2, 3, 4]);
+        assert_eq!(record.nullifier(), &[1; 32]);
+        assert_eq!(record.ephemeral_key(), &[2; 32]);
+        assert_eq!(record.enc_ciphertext(), &[3; 580]);
+        assert_eq!(record.cv_net(), &[4; 32]);
+        assert_eq!(record.out_ciphertext(), &[5; 80]);
+        assert_eq!(record.txid(), &[6; 32]);
+        assert_eq!(record.height(), 0x0403_0201);
     }
 
     #[test]

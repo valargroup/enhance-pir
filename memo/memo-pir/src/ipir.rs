@@ -9,8 +9,9 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
 
-// Version 2 binds cached shard preprocessing to the domain-separated memo setup seed.
-const ARTIFACT_VERSION: u16 = 2;
+// Version 2 bound cached shard preprocessing to the domain-separated memo setup seed.
+// Version 3 moves to 792-byte action records (6,336-byte rows).
+const ARTIFACT_VERSION: u16 = 3;
 
 #[derive(Serialize, Deserialize)]
 struct ArtifactMetadata {
@@ -303,9 +304,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn memo_rows_use_two_ipir_instances() {
+    fn action_rows_use_two_ipir_instances() {
+        // A 6,336-byte row is 50,688 bits; one instance carries d * log2(p) = 28,672,
+        // so the widened record still fits two instances and the response size is
+        // unchanged from the 612-byte memo layout.
+        assert_eq!(ROW_BYTES, 6_336);
         let (rlwe, params) = global_parameters(SHARD_ROWS as u64).expect("params");
         assert_eq!(rlwe.d, 2_048);
+        assert_eq!(params.p, 1 << 14);
         assert_eq!(params.instances, 2);
         assert_eq!(params.db_cols, 4_096);
     }

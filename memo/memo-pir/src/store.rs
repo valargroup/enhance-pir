@@ -1,11 +1,13 @@
-use crate::types::{MemoRecord, RECORD_BYTES, ROW_BYTES, SHARD_POSITIONS, SHARD_ROWS};
+use crate::types::{ActionRecord, RECORD_BYTES, ROW_BYTES, SHARD_POSITIONS, SHARD_ROWS};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-const STORE_VERSION: u16 = 1;
+// Version 2: 792-byte action records (schema version 2). A version-1 journal
+// holds 612-byte memo records and must be re-ingested from activation.
+const STORE_VERSION: u16 = 2;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -53,14 +55,35 @@ impl MemoStore {
         let manifest = if manifest_path.exists() {
             let bytes = fs::read(&manifest_path)?;
             let parsed: StoreManifest = serde_json::from_slice(&bytes)?;
-            if parsed.version != STORE_VERSION
-                || !parsed.base_position.is_multiple_of(SHARD_POSITIONS as u64)
-            {
+            if parsed.version != STORE_VERSION {
+                // An older journal holds a different record layout and cannot be
+                // converted (the new fields are not in it). Set it aside rather than
+                // refuse to start: the archive node re-derives everything, and a
+                // restart must not need an operator on the host.
+                let superseded = dir.join(format!("superseded-v{}", parsed.version));
+                fs::create_dir_all(&superseded)?;
+                fs::rename(&records_path, superseded.join("records.bin"))?;
+                fs::rename(&manifest_path, superseded.join("manifest.json"))?;
+                File::open(&dir)?.sync_all()?;
+                tracing::warn!(
+                    found = parsed.version,
+                    expected = STORE_VERSION,
+                    path = %superseded.display(),
+                    "set aside an incompatible journal; re-ingesting from activation"
+                );
+                StoreManifest {
+                    version: STORE_VERSION,
+                    base_position,
+                    tree_size: base_position,
+                    blocks: Vec::new(),
+                }
+            } else if !parsed.base_position.is_multiple_of(SHARD_POSITIONS as u64) {
                 return Err(StoreError::Invariant(
-                    "store version or base position is invalid".to_string(),
+                    "store base position is not shard aligned".to_string(),
                 ));
+            } else {
+                parsed
             }
-            parsed
         } else {
             StoreManifest {
                 version: STORE_VERSION,
@@ -119,7 +142,7 @@ impl MemoStore {
         &mut self,
         height: u64,
         hash: String,
-        records: &[MemoRecord],
+        records: &[ActionRecord],
     ) -> Result<(), StoreError> {
         if let Some(previous) = self.last_block() {
             if height != previous.height + 1 {
@@ -222,8 +245,8 @@ impl MemoStore {
 mod tests {
     use super::*;
 
-    fn record(byte: u8) -> MemoRecord {
-        MemoRecord([byte; RECORD_BYTES])
+    fn record(byte: u8) -> ActionRecord {
+        ActionRecord([byte; RECORD_BYTES])
     }
 
     #[test]
@@ -241,6 +264,30 @@ mod tests {
         assert_eq!(&shard[..RECORD_BYTES], &[1; RECORD_BYTES]);
         assert_eq!(&shard[RECORD_BYTES..2 * RECORD_BYTES], &[2; RECORD_BYTES]);
         assert!(shard[2 * RECORD_BYTES..].iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn older_journal_versions_are_set_aside_and_restarted_empty() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("manifest.json"),
+            br#"{"version":1,"base_position":0,"tree_size":2,"blocks":[{"height":5,"hash":"aa","first_position":0,"action_count":2}]}"#,
+        )
+        .expect("write manifest");
+        std::fs::write(dir.path().join("records.bin"), vec![7u8; 2 * 612]).expect("write records");
+
+        let store = MemoStore::open(dir.path(), 0).expect("open");
+        assert_eq!(store.tree_size(), 0);
+        assert!(store.last_block().is_none());
+        assert_eq!(
+            std::fs::read(dir.path().join("superseded-v1/records.bin")).expect("kept"),
+            vec![7u8; 2 * 612]
+        );
+        assert!(dir.path().join("superseded-v1/manifest.json").exists());
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("manifest.json")).expect("new"))
+                .expect("json");
+        assert_eq!(manifest["version"], 2);
     }
 
     #[test]
