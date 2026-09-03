@@ -35,12 +35,40 @@ pub struct ZakuraClient {
     password: String,
 }
 
+/// One transaction's Ironwood actions, in consensus order.
+#[derive(Debug, Clone)]
+pub struct CanonicalTx {
+    /// Transaction ID in internal byte order.
+    pub txid: [u8; 32],
+    /// Index of this transaction's first action within the block's actions.
+    pub first_action_index: usize,
+    pub nullifiers: Vec<[u8; 32]>,
+    pub cmxs: Vec<[u8; 32]>,
+}
+
+impl CanonicalTx {
+    pub fn action_count(&self) -> usize {
+        self.cmxs.len()
+    }
+}
+
+/// A finalized block as every table's ingest sees it: the full action records
+/// in consensus order, the per-transaction boundaries, and the Ironwood tree
+/// size after the block.
 #[derive(Debug)]
 pub struct CanonicalBlock {
     pub height: u64,
     pub hash: String,
     pub records: Vec<ActionRecord>,
+    pub transactions: Vec<CanonicalTx>,
     pub tree_size: u64,
+}
+
+impl CanonicalBlock {
+    /// Tree size before the block: the position of its first action.
+    pub fn first_position(&self) -> Option<u64> {
+        self.tree_size.checked_sub(self.records.len() as u64)
+    }
 }
 
 #[derive(Deserialize)]
@@ -118,32 +146,44 @@ impl ZakuraClient {
         let hash = block.hash().to_string();
         let record_height = u32::try_from(height)
             .map_err(|_| ZakuraError::Block(format!("height {height} exceeds u32")))?;
-        let records = block
-            .transactions
-            .iter()
-            .flat_map(|transaction| {
-                let txid = <[u8; 32]>::from(transaction.hash());
-                transaction
-                    .ironwood_actions()
-                    .map(move |action| (txid, action))
-            })
-            .map(|(txid, action)| {
-                ActionRecord::from_parts(ActionRecordParts {
-                    nullifier: action.nullifier.into(),
+        let mut records = Vec::new();
+        let mut transactions = Vec::new();
+        for transaction in &block.transactions {
+            let txid = <[u8; 32]>::from(transaction.hash());
+            let first_action_index = records.len();
+            let mut nullifiers = Vec::new();
+            let mut cmxs = Vec::new();
+            for action in transaction.ironwood_actions() {
+                let nullifier: [u8; 32] = action.nullifier.into();
+                let cmx = <[u8; 32]>::from(action.cm_x);
+                records.push(ActionRecord::from_parts(ActionRecordParts {
+                    nullifier,
                     ephemeral_key: <[u8; 32]>::from(&action.ephemeral_key),
                     enc_ciphertext: action.enc_ciphertext.into(),
+                    cmx,
                     cv_net: action.cv.into(),
                     out_ciphertext: action.out_ciphertext.into(),
                     txid,
                     height: record_height,
-                })
-            })
-            .collect();
+                }));
+                nullifiers.push(nullifier);
+                cmxs.push(cmx);
+            }
+            if !cmxs.is_empty() {
+                transactions.push(CanonicalTx {
+                    txid,
+                    first_action_index,
+                    nullifiers,
+                    cmxs,
+                });
+            }
+        }
         let tree_size = self.tree_size(height).await?;
         Ok(CanonicalBlock {
             height,
             hash,
             records,
+            transactions,
             tree_size,
         })
     }

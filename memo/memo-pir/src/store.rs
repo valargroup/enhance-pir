@@ -5,9 +5,10 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-// Version 2: 792-byte action records (schema version 2). A version-1 journal
-// holds 612-byte memo records and must be re-ingested from activation.
-const STORE_VERSION: u16 = 2;
+// Version 2 held 792-byte action records. Version 3 holds 824-byte records
+// (cmx added) and names the table; an older journal is set aside and
+// re-ingested from activation.
+const STORE_VERSION: u16 = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -47,31 +48,52 @@ struct StoreManifest {
 pub struct RecordJournal {
     dir: PathBuf,
     records_path: PathBuf,
-    table: DatabaseId,
+    name: String,
+    table: Option<DatabaseId>,
     layout: DatabaseLayout,
     manifest: StoreManifest,
 }
 
 impl RecordJournal {
+    /// Opens the journal of a served table.
     pub fn open(
         path: impl AsRef<Path>,
         table: DatabaseId,
         layout: DatabaseLayout,
     ) -> Result<Self, StoreError> {
-        let dir = path.as_ref().to_path_buf();
+        Self::open_inner(path.as_ref(), table.as_str(), Some(table), layout)
+    }
+
+    /// Opens a journal that is not itself a served table (a log other tables
+    /// are built from).
+    pub fn open_log(
+        path: impl AsRef<Path>,
+        name: &str,
+        layout: DatabaseLayout,
+    ) -> Result<Self, StoreError> {
+        Self::open_inner(path.as_ref(), name, None, layout)
+    }
+
+    fn open_inner(
+        path: &Path,
+        name: &str,
+        table: Option<DatabaseId>,
+        layout: DatabaseLayout,
+    ) -> Result<Self, StoreError> {
+        let dir = path.to_path_buf();
         fs::create_dir_all(&dir)?;
         let records_path = dir.join("records.bin");
         let manifest_path = dir.join("manifest.json");
         let fresh = || StoreManifest {
             version: STORE_VERSION,
-            table: table.as_str().to_string(),
+            table: name.to_string(),
             tree_size: 0,
             blocks: Vec::new(),
         };
         let manifest = if manifest_path.exists() {
             let bytes = fs::read(&manifest_path)?;
             let parsed: StoreManifest = serde_json::from_slice(&bytes)?;
-            if parsed.version != STORE_VERSION || parsed.table != table.as_str() {
+            if parsed.version != STORE_VERSION || parsed.table != name {
                 // An older or foreign journal holds a different record layout and
                 // cannot be converted. Set it aside rather than refuse to start: the
                 // archive node re-derives everything, and a restart must not need an
@@ -86,7 +108,7 @@ impl RecordJournal {
                     found = parsed.version,
                     found_table = %parsed.table,
                     expected = STORE_VERSION,
-                    table = %table,
+                    table = name,
                     path = %superseded.display(),
                     "set aside an incompatible journal; re-ingesting from activation"
                 );
@@ -118,6 +140,7 @@ impl RecordJournal {
         let store = Self {
             dir,
             records_path,
+            name: name.to_string(),
             table,
             layout,
             manifest,
@@ -128,8 +151,13 @@ impl RecordJournal {
         Ok(store)
     }
 
-    pub fn table(&self) -> DatabaseId {
+    /// The served table this journal backs, if any.
+    pub fn table(&self) -> Option<DatabaseId> {
         self.table
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     pub fn layout(&self) -> &DatabaseLayout {
@@ -225,6 +253,26 @@ impl RecordJournal {
         Ok(rows)
     }
 
+    /// Raw bytes of `count` consecutive records from `start`, all of which
+    /// must be populated.
+    pub fn read_records(&self, start: u64, count: usize) -> Result<Vec<u8>, StoreError> {
+        let end = start
+            .checked_add(count as u64)
+            .ok_or_else(|| StoreError::Invariant("record range overflow".to_string()))?;
+        if end > self.manifest.tree_size {
+            return Err(StoreError::Invariant(format!(
+                "records {start}..{end} exceed the journal's {} positions",
+                self.manifest.tree_size
+            )));
+        }
+        let record_bytes = self.layout.record_bytes;
+        let mut bytes = vec![0u8; count * record_bytes];
+        let mut file = File::open(&self.records_path)?;
+        file.seek(SeekFrom::Start(start * record_bytes as u64))?;
+        file.read_exact(&mut bytes)?;
+        Ok(bytes)
+    }
+
     pub fn populated_positions_in_shard(&self, shard_id: u64) -> u64 {
         let shard_positions = self.layout.shard_positions() as u64;
         let start = shard_id.saturating_mul(shard_positions);
@@ -316,7 +364,7 @@ mod tests {
         let manifest: serde_json::Value =
             serde_json::from_slice(&std::fs::read(dir.path().join("manifest.json")).expect("new"))
                 .expect("json");
-        assert_eq!(manifest["version"], 2);
+        assert_eq!(manifest["version"], 3);
         assert_eq!(manifest["table"], "action");
 
         // A current-version journal of another table is also foreign.
@@ -324,7 +372,7 @@ mod tests {
         let foreign = RecordJournal::open(dir.path(), DatabaseId::Witness, ACTION_LAYOUT)
             .expect("open as another table");
         assert_eq!(foreign.tree_size(), 0);
-        assert!(dir.path().join("superseded-v2-action").exists());
+        assert!(dir.path().join("superseded-v3-action").exists());
     }
 
     #[test]
@@ -332,7 +380,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             dir.path().join("manifest.json"),
-            br#"{"version":2,"base_position":0,"tree_size":1,"blocks":[{"height":5,"hash":"aa","first_position":0,"action_count":1}]}"#,
+            br#"{"version":3,"tree_size":1,"blocks":[{"height":5,"hash":"aa","first_position":0,"action_count":1}]}"#,
         )
         .expect("write manifest");
         std::fs::write(dir.path().join("records.bin"), vec![9u8; RECORD_BYTES]).expect("records");

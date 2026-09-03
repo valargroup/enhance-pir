@@ -30,6 +30,7 @@ fn record(position: u64) -> ActionRecord {
         nullifier: tag(1),
         ephemeral_key: tag(2),
         enc_ciphertext: enc,
+        cmx: tag(9),
         cv_net: tag(3),
         out_ciphertext: out,
         txid: tag(4),
@@ -282,10 +283,10 @@ async fn v1_routes_and_legacy_aliases_describe_the_same_generation() {
     let (status, body) = get(&app, "/v1/generation").await;
     assert_eq!(status, StatusCode::OK);
     let manifest: memo_pir::GenerationManifest = serde_json::from_slice(&body).unwrap();
-    assert_eq!(manifest.schema_version, 3);
+    assert_eq!(manifest.schema_version, 4);
     assert_eq!(manifest.generation, 3_428_143);
     let action = &manifest.tables[&DatabaseId::Action];
-    assert_eq!(action.record_bytes, 792);
+    assert_eq!(action.record_bytes, 824);
     assert!(action.parameter_id.contains("-action-"));
 
     let (_, body) = get(&app, "/memo/metadata").await;

@@ -6,6 +6,7 @@
 
 pub mod client;
 pub mod coordinator;
+pub mod ingest;
 pub mod ipir;
 pub mod metrics;
 pub mod store;

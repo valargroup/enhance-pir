@@ -318,6 +318,7 @@ pub fn query_endpoint(table: DatabaseId) -> &'static str {
     match table {
         DatabaseId::Action => "query",
         DatabaseId::Witness => "witness_query",
+        DatabaseId::WitnessRoots => "witness_roots_query",
         DatabaseId::NfCold => "nf_cold_query",
         DatabaseId::NfWarm => "nf_warm_query",
     }
@@ -331,6 +332,9 @@ fn table_endpoint(table: DatabaseId, endpoint: &str) -> Option<&'static str> {
         (DatabaseId::Witness, "params") => "witness_params",
         (DatabaseId::Witness, "public-params") => "witness_public_params",
         (DatabaseId::Witness, "query") => "witness_query",
+        (DatabaseId::WitnessRoots, "params") => "witness_roots_params",
+        (DatabaseId::WitnessRoots, "public-params") => "witness_roots_public_params",
+        (DatabaseId::WitnessRoots, "query") => "witness_roots_query",
         (DatabaseId::NfCold, "params") => "nf_cold_params",
         (DatabaseId::NfCold, "public-params") => "nf_cold_public_params",
         (DatabaseId::NfCold, "query") => "nf_cold_query",

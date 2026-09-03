@@ -2,8 +2,9 @@ use crate::ipir::{global_parameters, shard_parameters};
 use crate::metrics;
 use crate::store::RecordJournal;
 use crate::types::{
-    worker_index_for_shard, DatabaseId, GenerationManifest, MemoSnapshotMetadata, ShardDescriptor,
-    TableManifest, MANIFEST_SCHEMA_VERSION, NETWORK, POOL, PROTOCOL_REVISION,
+    worker_index_for_shard, DatabaseId, DatabaseLayout, GenerationManifest, MemoSnapshotMetadata,
+    ShardDescriptor, TableManifest, DEFAULT_ENVELOPE, MANIFEST_SCHEMA_VERSION, NETWORK, POOL,
+    PROTOCOL_REVISION,
 };
 use crate::wire::{
     decode_crs_blocks, decode_evaluate_response, encode_evaluate_request, EvaluateRequest,
@@ -61,6 +62,77 @@ impl WorkerTarget {
 pub struct TableSetup {
     pub table: DatabaseId,
     pub pool: Vec<WorkerTarget>,
+}
+
+/// What the coordinator needs from a table's rows to publish it. Journals
+/// implement it directly; built tables (the nullifier buckets) implement it
+/// from memory.
+pub trait TableSource: Sync {
+    fn table(&self) -> DatabaseId;
+    fn layout(&self) -> DatabaseLayout;
+    /// Populated positions (records).
+    fn positions(&self) -> u64;
+    fn shard_ids(&self) -> std::ops::RangeInclusive<u64>;
+    /// The full padded shard, deterministic so its digest is stable.
+    fn read_shard_rows(&self, shard_id: u64) -> Result<Vec<u8>, String>;
+    fn populated_positions_in_shard(&self, shard_id: u64) -> u64;
+}
+
+/// A journal viewed as the table it backs.
+pub struct TableJournal<'a> {
+    table: DatabaseId,
+    journal: &'a RecordJournal,
+}
+
+impl<'a> TableJournal<'a> {
+    pub fn new(table: DatabaseId, journal: &'a RecordJournal) -> Result<Self, String> {
+        if journal.table() != Some(table) {
+            return Err(format!(
+                "journal {} does not back the {table} table",
+                journal.name()
+            ));
+        }
+        Ok(Self { table, journal })
+    }
+}
+
+impl TableSource for TableJournal<'_> {
+    fn table(&self) -> DatabaseId {
+        self.table
+    }
+
+    fn layout(&self) -> DatabaseLayout {
+        *self.journal.layout()
+    }
+
+    fn positions(&self) -> u64 {
+        self.journal.tree_size()
+    }
+
+    fn shard_ids(&self) -> std::ops::RangeInclusive<u64> {
+        self.journal.shard_ids()
+    }
+
+    fn read_shard_rows(&self, shard_id: u64) -> Result<Vec<u8>, String> {
+        self.journal
+            .read_shard_rows(shard_id)
+            .map_err(|e| e.to_string())
+    }
+
+    fn populated_positions_in_shard(&self, shard_id: u64) -> u64 {
+        self.journal.populated_positions_in_shard(shard_id)
+    }
+}
+
+/// The chain state one generation is anchored to.
+#[derive(Clone, Debug)]
+pub struct Anchor {
+    pub height: u64,
+    /// Hex, display byte order.
+    pub hash: String,
+    /// Hex depth-32 Ironwood tree root, empty until the witness tables ship.
+    pub tree_root: String,
+    pub cold_checkpoint_height: u64,
 }
 
 struct TableState {
@@ -347,28 +419,44 @@ impl CoordinatorState {
         anchor_height: u64,
         anchor_hash: String,
     ) -> Result<(), String> {
-        self.publish(&[store], anchor_height, anchor_hash).await
+        let action = TableJournal::new(DatabaseId::Action, store)?;
+        self.publish(
+            &[&action],
+            Anchor {
+                height: anchor_height,
+                hash: anchor_hash,
+                tree_root: String::new(),
+                cold_checkpoint_height: 0,
+            },
+        )
+        .await
     }
 
-    /// Builds every table's snapshot from its journal, activates every worker
+    /// Builds every table's snapshot from its source, activates every worker
     /// once with all of its tables, then swaps in the new generation while
-    /// keeping the previous one answerable.
+    /// keeping the previous one answerable. Sources for tables this
+    /// coordinator does not serve are skipped.
     pub async fn publish(
         &self,
-        journals: &[&RecordJournal],
-        anchor_height: u64,
-        anchor_hash: String,
+        sources: &[&dyn TableSource],
+        anchor: Anchor,
     ) -> Result<(), String> {
-        if journals.is_empty() {
+        let sources: Vec<&dyn TableSource> = sources
+            .iter()
+            .copied()
+            .filter(|source| self.tables.contains_key(&source.table()))
+            .collect();
+        if sources.is_empty() {
             return Err("nothing to publish".to_string());
         }
+        let anchor_height = anchor.height;
         self.set_phase(CoordinatorPhase::Building { anchor_height })
             .await;
         let generation = anchor_height;
-        let ironwood_tree_size = journals
+        let ironwood_tree_size = sources
             .iter()
-            .find(|journal| journal.table() == DatabaseId::Action)
-            .map(|journal| journal.tree_size())
+            .find(|source| source.table() == DatabaseId::Action)
+            .map(|source| source.positions())
             .or_else(|| {
                 self.newest()
                     .map(|snapshot| snapshot.manifest.ironwood_tree_size)
@@ -381,9 +469,9 @@ impl CoordinatorState {
         > = BTreeMap::new();
         let mut snapshots = BTreeMap::new();
         let mut manifests = BTreeMap::new();
-        for journal in journals {
-            let table = journal.table();
-            let snapshot = self.build_table(journal, &mut assignments).await?;
+        for source in sources {
+            let table = source.table();
+            let snapshot = self.build_table(source, &mut assignments).await?;
             manifests.insert(table, snapshot.manifest.clone());
             snapshots.insert(table, Arc::new(snapshot));
         }
@@ -399,9 +487,12 @@ impl CoordinatorState {
             network: NETWORK.to_string(),
             pool: POOL.to_string(),
             anchor_height,
-            anchor_block_hash: anchor_hash,
+            anchor_block_hash: anchor.hash,
             ironwood_tree_size,
             generation,
+            anchor_tree_root: anchor.tree_root,
+            cold_checkpoint_height: anchor.cold_checkpoint_height,
+            envelope: DEFAULT_ENVELOPE,
             tables: manifests,
         };
         let snapshot = Arc::new(GenerationSnapshot {
@@ -427,7 +518,7 @@ impl CoordinatorState {
     /// Records each worker's assignment for the single activation call.
     async fn build_table(
         &self,
-        journal: &RecordJournal,
+        journal: &dyn TableSource,
         assignments: &mut BTreeMap<
             String,
             (WorkerTarget, BTreeMap<DatabaseId, Vec<ActivateShard>>),
@@ -435,16 +526,16 @@ impl CoordinatorState {
     ) -> Result<TableSnapshot, String> {
         let table = journal.table();
         let state = self.table(table)?;
-        let layout = *journal.layout();
+        let layout = journal.layout();
         if layout != table.layout() {
             return Err(format!(
-                "journal layout for {table} does not match the protocol"
+                "source layout for {table} does not match the protocol"
             ));
         }
-        if journal.tree_size() == 0 {
+        if journal.positions() == 0 {
             return Err(format!("cannot publish an empty {table} table"));
         }
-        let used_rows = layout.used_rows_for(journal.tree_size());
+        let used_rows = layout.used_rows_for(journal.positions());
         let logical_rows = layout.logical_rows_for(used_rows);
         let (global_rlwe, ypir) =
             global_parameters(logical_rows, &layout).map_err(|e| e.to_string())?;
@@ -466,9 +557,7 @@ impl CoordinatorState {
                 )
             })?;
             let worker = &pool[worker_index];
-            let rows = journal
-                .read_shard_rows(shard_id)
-                .map_err(|e| e.to_string())?;
+            let rows = journal.read_shard_rows(shard_id)?;
             let digest = RecordJournal::rows_digest(&rows);
             let query_row_start = shard_id as usize * layout.shard_rows;
             let cache_key = format!("{}:{shard_id}:{query_row_start}:{digest}", worker.name());
@@ -538,7 +627,7 @@ impl CoordinatorState {
             records_per_row: layout.records_per_row as u32,
             row_bytes: layout.row_bytes() as u32,
             shard_rows: layout.shard_rows as u32,
-            positions: journal.tree_size(),
+            positions: journal.positions(),
             used_rows,
             logical_rows,
             parameter_id: format!(
