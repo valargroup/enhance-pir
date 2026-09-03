@@ -8,11 +8,14 @@ use ipir_sp::serialize::serialize_packing_keys;
 use ipir_sp::{IPIRClient, YpirSchemeParams};
 use rand::{rngs::OsRng, Rng};
 use sha2::{Digest, Sha256};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
+    #[error("server returned HTTP {0}")]
+    HttpStatus(u16),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
     #[error("server generation is incompatible: {0}")]
@@ -23,6 +26,14 @@ pub enum ClientError {
     Pir(String),
     #[error("malformed PIR response: {0}")]
     Response(String),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct QueryTiming {
+    pub prepare: Duration,
+    pub http: Duration,
+    pub decode: Duration,
+    pub total: Duration,
 }
 
 pub struct QuerySession {
@@ -258,11 +269,46 @@ impl EnhancePirClient {
         Ok(record_in_row(&row, slot))
     }
 
+    pub async fn query_position_with_timing(
+        &self,
+        position: u64,
+    ) -> Result<(EnhanceRecord, QueryTiming), ClientError> {
+        let total_started = Instant::now();
+
+        let prepare_started = Instant::now();
+        let (query, slot) = self.session.prepare_position(position)?;
+        let prepare = prepare_started.elapsed();
+
+        let http_started = Instant::now();
+        let response = self.request(&query).await?;
+        let http = http_started.elapsed();
+
+        let decode_started = Instant::now();
+        let row = self.session.decode(query, &response)?;
+        let record = record_in_row(&row, slot);
+        let decode = decode_started.elapsed();
+
+        Ok((
+            record,
+            QueryTiming {
+                prepare,
+                http,
+                decode,
+                total: total_started.elapsed(),
+            },
+        ))
+    }
+
     pub async fn query_dummy(&self) -> Result<(), ClientError> {
         self.send(self.session.prepare_dummy()?).await.map(|_| ())
     }
 
     async fn send(&self, query: PreparedQuery) -> Result<Vec<u8>, ClientError> {
+        let response = self.request(&query).await?;
+        self.session.decode(query, &response)
+    }
+
+    async fn request(&self, query: &PreparedQuery) -> Result<Vec<u8>, ClientError> {
         let response = self
             .http
             .post(format!("{}/v1/enhance/query", self.base_url))
@@ -270,13 +316,9 @@ impl EnhancePirClient {
             .send()
             .await?;
         if !response.status().is_success() {
-            return Err(ClientError::Response(format!(
-                "server returned {}",
-                response.status()
-            )));
+            return Err(ClientError::HttpStatus(response.status().as_u16()));
         }
-        let response = read_limited(response, 16 * 1024 * 1024).await?;
-        self.session.decode(query, &response)
+        read_limited(response, 16 * 1024 * 1024).await
     }
 }
 

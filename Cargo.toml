@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "pir/enhance",
+    "pir/load-test",
     "server/enhance-pir-server",
     "server/pir-apm",
 ]
