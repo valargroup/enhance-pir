@@ -2052,6 +2052,7 @@ dependencies = [
  "arc-swap",
  "axum",
  "clap",
+ "commitment-tree-db",
  "hex",
  "inspiring",
  "ipir-sp",

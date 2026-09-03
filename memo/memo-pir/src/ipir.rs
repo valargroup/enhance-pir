@@ -395,9 +395,9 @@ mod tests {
 
     #[test]
     fn action_rows_use_two_ipir_instances() {
-        // A 6,336-byte row is 50,688 bits, which still fits two instances, so the
-        // response size is unchanged from the 612-byte memo layout.
-        assert_eq!(crate::types::ACTION_LAYOUT.row_bytes(), 6_336);
+        // A 6,592-byte row is 52,736 bits, which still fits two instances of
+        // 28,672, so the response size is unchanged from the 612-byte memo layout.
+        assert_eq!(crate::types::ACTION_LAYOUT.row_bytes(), 6_592);
         let (_, params) = shard_parameters(&crate::types::ACTION_LAYOUT).expect("params");
         assert_eq!(params.instances, 2);
         assert_eq!(params.db_cols, 4_096);

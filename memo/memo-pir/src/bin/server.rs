@@ -1,7 +1,11 @@
 use clap::{Parser, ValueEnum};
-use memo_pir::coordinator::{router, CoordinatorPhase, CoordinatorState, TableSetup, WorkerTarget};
-use memo_pir::store::RecordJournal;
-use memo_pir::types::{DatabaseId, ACTION_LAYOUT, ACTIVATION_HEIGHT, CONFIRMATIONS};
+use memo_pir::coordinator::{
+    router, Anchor, CoordinatorPhase, CoordinatorState, TableJournal, TableSetup, WorkerTarget,
+    FRONTIER_UPDATES_RETAINED,
+};
+use memo_pir::ingest::Journals;
+use memo_pir::nullifier::NullifierTables;
+use memo_pir::types::{DatabaseId, ACTIVATION_HEIGHT, COLD_CHECKPOINT_INTERVAL, CONFIRMATIONS};
 use memo_pir::worker::WorkerState;
 use memo_pir::zakura::ZakuraClient;
 use serde::Deserialize;
@@ -140,10 +144,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }]
         }
     };
-    let state = CoordinatorState::new(vec![TableSetup {
-        table: DatabaseId::Action,
-        pool: workers,
-    }])?;
+    let state = CoordinatorState::new(
+        DatabaseId::ALL
+            .into_iter()
+            .map(|table| TableSetup {
+                table,
+                pool: workers.clone(),
+            })
+            .collect(),
+    )?;
     let ingest_state = state.clone();
     let ingest_cli = cli.clone();
     tokio::spawn(async move {
@@ -176,41 +185,40 @@ async fn ingest(
         return Err("Zakura has not reached Ironwood activation plus confirmations".into());
     }
     let initial_height = ACTIVATION_HEIGHT;
-    let mut store = RecordJournal::open(&cli.data_dir, DatabaseId::Action, ACTION_LAYOUT)?;
-    if let Some(last) = store.last_block() {
-        let canonical = zakura.block(last.height).await?;
-        if canonical.hash != last.hash {
+    let mut journals = Journals::open(&cli.data_dir)?;
+    if let Some((height, hash)) = journals.highest_committed() {
+        let canonical = zakura.block(height).await?;
+        if canonical.hash != hash {
             return Err(format!(
-                "published finalized block {} changed from {} to {}",
-                last.height, last.hash, canonical.hash
+                "published finalized block {height} changed from {hash} to {}",
+                canonical.hash
             )
             .into());
         }
     }
 
+    let mut nullifier_tables: Option<NullifierTables> = None;
     loop {
         let tip = zakura.tip_height().await?;
         let target = tip.saturating_sub(CONFIRMATIONS);
-        if let Some(last) = store.last_block() {
-            if target < last.height {
-                return Err(format!(
-                    "finalized tip regressed below committed height {}",
-                    last.height
-                )
-                .into());
+        if let Some((height, hash)) = journals.highest_committed() {
+            if target < height {
+                return Err(
+                    format!("finalized tip regressed below committed height {height}").into(),
+                );
             }
-            let canonical = zakura.block(last.height).await?;
-            if canonical.hash != last.hash {
+            let canonical = zakura.block(height).await?;
+            if canonical.hash != hash {
                 return Err(format!(
-                    "committed finalized block {} changed from {} to {}",
-                    last.height, last.hash, canonical.hash
+                    "committed finalized block {height} changed from {hash} to {}",
+                    canonical.hash
                 )
                 .into());
             }
         }
-        let mut next = store
-            .last_block()
-            .map_or(initial_height, |block| block.height + 1);
+        let mut next = journals
+            .committed_height()
+            .map_or(initial_height, |height| height + 1);
         if next <= target {
             state
                 .set_phase(CoordinatorPhase::Syncing {
@@ -221,29 +229,7 @@ async fn ingest(
         }
         while next <= target {
             let block = zakura.block(next).await?;
-            let block_start = block
-                .tree_size
-                .checked_sub(block.records.len() as u64)
-                .ok_or("block action count exceeds tree size")?;
-            if store.tree_size() < block_start || store.tree_size() > block.tree_size {
-                return Err(format!(
-                    "tree continuity mismatch at height {next}: store {}, block {}..{}",
-                    store.tree_size(),
-                    block_start,
-                    block.tree_size
-                )
-                .into());
-            }
-            let skip = (store.tree_size() - block_start) as usize;
-            store.append_block(block.height, block.hash, &block.records[skip..])?;
-            if store.tree_size() != block.tree_size {
-                return Err(format!(
-                    "Ironwood tree size mismatch at height {next}: ingested {}, Zakura {}",
-                    store.tree_size(),
-                    block.tree_size
-                )
-                .into());
-            }
+            journals.append_block(&block)?;
             next += 1;
             if next.is_multiple_of(256) {
                 state
@@ -255,18 +241,60 @@ async fn ingest(
             }
         }
 
-        if let Some(anchor) = store.last_block().filter(|block| block.height == target) {
+        if journals.all_at(target) {
             let already_published = state
-                .metadata()
-                .is_some_and(|metadata| metadata.anchor_height == anchor.height);
+                .manifest()
+                .is_some_and(|manifest| manifest.anchor_height == target);
             if !already_published {
+                let hash = journals
+                    .action
+                    .last_block()
+                    .map(|block| block.hash.clone())
+                    .unwrap_or_default();
+                let action = TableJournal::new(DatabaseId::Action, &journals.action)?;
+                let witness = TableJournal::new(DatabaseId::Witness, &journals.witness)?;
+                let witness_roots =
+                    TableJournal::new(DatabaseId::WitnessRoots, &journals.witness_roots)?;
+                let checkpoint = target - target % COLD_CHECKPOINT_INTERVAL;
+                if nullifier_tables
+                    .as_ref()
+                    .is_none_or(|tables| tables.checkpoint != checkpoint)
+                {
+                    nullifier_tables =
+                        Some(NullifierTables::build(&journals.nullifiers, checkpoint)?);
+                } else {
+                    // The cold table is unchanged; only the warm side moves.
+                    let fresh = NullifierTables::build(&journals.nullifiers, checkpoint)?;
+                    nullifier_tables = Some(fresh);
+                }
+                let tables = nullifier_tables.as_ref().expect("built above");
+                let witness_cap = journals.witness_cap(target)?;
+                let frontier = journals.frontier_updates(
+                    target.saturating_sub(FRONTIER_UPDATES_RETAINED as u64 - 1),
+                    target,
+                )?;
                 state
-                    .publish_from_store(&store, anchor.height, anchor.hash.clone())
+                    .publish(
+                        &[
+                            &action,
+                            &witness,
+                            &witness_roots,
+                            &tables.cold,
+                            &tables.warm,
+                        ],
+                        Anchor {
+                            height: target,
+                            hash,
+                            cold_checkpoint_height: checkpoint,
+                            witness_cap: Some(witness_cap),
+                            frontier,
+                        },
+                    )
                     .await?;
                 tracing::info!(
-                    anchor_height = anchor.height,
-                    tree_size = store.tree_size(),
-                    "published memo PIR generation"
+                    anchor_height = target,
+                    tree_size = journals.action.tree_size(),
+                    "published PIR generation"
                 );
             }
         }

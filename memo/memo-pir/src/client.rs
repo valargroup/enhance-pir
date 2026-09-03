@@ -213,6 +213,151 @@ impl QuerySession {
     }
 }
 
+/// A session for any table, validated against the generation manifest and
+/// the table's protocol layout and seed.
+pub struct TableSession {
+    manifest: GenerationManifest,
+    table: DatabaseId,
+    ypir: YpirSchemeParams,
+    client: IPIRClient,
+    setup: Vec<Vec<u64>>,
+    published_c1: Vec<Vec<u64>>,
+    epoch: [u8; 8],
+}
+
+impl TableSession {
+    pub fn new(
+        manifest: GenerationManifest,
+        table: DatabaseId,
+        ypir: YpirSchemeParams,
+        public_params: &[u8],
+    ) -> Result<Self, ClientError> {
+        if manifest.schema_version != crate::types::MANIFEST_SCHEMA_VERSION
+            || manifest.network != NETWORK
+            || manifest.pool != POOL
+        {
+            return Err(ClientError::Metadata(
+                "wrong schema, network, or pool".to_string(),
+            ));
+        }
+        let entry = manifest
+            .tables
+            .get(&table)
+            .ok_or_else(|| ClientError::Metadata(format!("generation has no {table} table")))?;
+        if entry.setup_seed != table.setup_seed() {
+            return Err(ClientError::Metadata(format!(
+                "{table} setup seed mismatch"
+            )));
+        }
+        let layout = table.layout();
+        if entry.record_bytes as usize != layout.record_bytes
+            || entry.records_per_row as usize != layout.records_per_row
+            || entry.row_bytes as usize != layout.row_bytes()
+            || entry.shard_rows as usize != layout.shard_rows
+            || entry.logical_rows < entry.used_rows
+            || !entry.logical_rows.is_power_of_two()
+            || entry.used_rows != layout.used_rows_for(entry.positions)
+        {
+            return Err(ClientError::Metadata(format!(
+                "{table}: invalid database geometry"
+            )));
+        }
+        let (rlwe, expected) =
+            ipir_sp::params_for_simplepir(entry.logical_rows, layout.item_size_bits())
+                .map_err(|e| ClientError::Pir(e.to_string()))?;
+        if ypir != expected {
+            return Err(ClientError::Metadata(format!(
+                "{table}: parameters do not match the pinned generator"
+            )));
+        }
+        let digest = Sha256::digest(public_params);
+        if hex::encode(digest) != entry.public_params_sha256 {
+            return Err(ClientError::Metadata(format!(
+                "{table}: public parameter digest mismatch"
+            )));
+        }
+        let mut epoch = [0; 8];
+        epoch.copy_from_slice(&digest[..8]);
+        let blocks = ypir.db_cols / rlwe.d;
+        if public_params.len() != blocks * published_c1_len(rlwe.d, rlwe.q) {
+            return Err(ClientError::Metadata(format!(
+                "{table}: invalid public parameter length"
+            )));
+        }
+        let published_c1 = recover_published_c1(public_params, rlwe.d, blocks, rlwe.q);
+        let client = IPIRClient::new(&rlwe, &ypir);
+        let setup = client.generate_public_query_setup_simplepir_from_seed(
+            crate::types::setup_seed_bytes(entry.setup_seed),
+        );
+        Ok(Self {
+            manifest,
+            table,
+            ypir,
+            client,
+            setup,
+            published_c1,
+            epoch,
+        })
+    }
+
+    pub fn table(&self) -> DatabaseId {
+        self.table
+    }
+
+    pub fn manifest(&self) -> &GenerationManifest {
+        &self.manifest
+    }
+
+    pub fn positions(&self) -> u64 {
+        self.manifest.tables[&self.table].positions
+    }
+
+    pub fn prepare_row(&self, row: usize) -> Result<PreparedQuery, ClientError> {
+        if row >= self.ypir.db_rows {
+            return Err(ClientError::OutsideCoverage(row as u64));
+        }
+        let (query, packing_keys, seed) =
+            self.client.generate_fresh_query_simplepir(&self.setup, row);
+        let mut body = self.manifest.generation.to_le_bytes().to_vec();
+        body.extend(
+            serialize_packing_keys(self.client.rlwe_params(), &packing_keys)
+                .map_err(|e| ClientError::Pir(e.to_string()))?,
+        );
+        body.extend(query.to_switched_bytes(self.client.rlwe_params().q, self.ypir.query_bits));
+        Ok(PreparedQuery { row, body, seed })
+    }
+
+    pub fn prepare_dummy(&self) -> Result<PreparedQuery, ClientError> {
+        self.prepare_row(OsRng.gen_range(0..self.ypir.db_rows))
+    }
+
+    /// Validates the response framing and returns exactly one decoded row of
+    /// this table's row size.
+    pub fn decode(&self, query: PreparedQuery, response: &[u8]) -> Result<Vec<u8>, ClientError> {
+        let row_bytes = self.table.layout().row_bytes();
+        if response.get(..8) != Some(self.manifest.generation.to_le_bytes().as_slice()) {
+            return Err(ClientError::Response("generation mismatch".to_string()));
+        }
+        if response.get(8..16) != Some(self.epoch.as_slice()) {
+            return Err(ClientError::Response(
+                "public parameter epoch mismatch".to_string(),
+            ));
+        }
+        let expected_body_len = (self.ypir.db_cols / self.client.rlwe_params().d)
+            * response_body_len(self.client.rlwe_params().d, self.ypir.q_prime_1);
+        if response.len() != 16 + expected_body_len {
+            return Err(ClientError::Response("invalid response length".to_string()));
+        }
+        let decoded =
+            self.client
+                .decode_response_simplepir(query.seed, &self.published_c1, &response[16..]);
+        decoded
+            .get(..row_bytes)
+            .map(<[u8]>::to_vec)
+            .ok_or_else(|| ClientError::Response("decoded row is too short".to_string()))
+    }
+}
+
 /// Extracts the record at `slot` from a decoded row.
 pub fn record_in_row(row: &[u8], slot: usize) -> ActionRecord {
     let start = slot * RECORD_BYTES;

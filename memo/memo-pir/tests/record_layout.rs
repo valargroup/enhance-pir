@@ -13,6 +13,7 @@ fn sample(seed: u8) -> ActionRecord {
         nullifier: [seed; 32],
         ephemeral_key: [seed.wrapping_add(1); 32],
         enc_ciphertext: [seed.wrapping_add(2); 580],
+        cmx: [seed.wrapping_add(9); 32],
         cv_net: [seed.wrapping_add(3); 32],
         out_ciphertext: [seed.wrapping_add(4); 80],
         txid: [seed.wrapping_add(5); 32],
@@ -24,14 +25,16 @@ fn sample(seed: u8) -> ActionRecord {
 fn field_offsets_are_pinned() {
     let record = sample(10);
     let bytes = record.as_bytes();
-    assert_eq!(bytes.len(), 792);
+    assert_eq!(bytes.len(), 824);
     assert_eq!(&bytes[0..32], &[10; 32]);
     assert_eq!(&bytes[32..64], &[11; 32]);
     assert_eq!(&bytes[64..644], &[12; 580][..]);
-    assert_eq!(&bytes[644..676], &[13; 32]);
-    assert_eq!(&bytes[676..756], &[14; 80][..]);
-    assert_eq!(&bytes[756..788], &[15; 32]);
-    assert_eq!(&bytes[788..792], &(3_428_153u32).to_le_bytes());
+    assert_eq!(&bytes[644..676], &[19; 32]);
+    assert_eq!(&bytes[676..708], &[13; 32]);
+    assert_eq!(&bytes[708..788], &[14; 80][..]);
+    assert_eq!(&bytes[788..820], &[15; 32]);
+    assert_eq!(&bytes[820..824], &(3_428_153u32).to_le_bytes());
+    assert_eq!(record.cmx(), &[19; 32]);
     assert_eq!(record.height(), 3_428_153);
 }
 

@@ -6,11 +6,14 @@
 
 pub mod client;
 pub mod coordinator;
+pub mod ingest;
 pub mod ipir;
 pub mod metrics;
+pub mod nullifier;
 pub mod store;
 pub mod types;
 pub mod wire;
+pub mod witness;
 pub mod worker;
 pub mod zakura;
 

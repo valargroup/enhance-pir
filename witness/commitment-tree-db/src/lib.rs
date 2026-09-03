@@ -412,52 +412,79 @@ impl CommitmentTreeDb {
 
     /// Root of a complete binary subtree from exactly `2^k` leaves.
     fn complete_subtree_root(&self, leaves: &[Hash], base_level: u8) -> Hash {
-        debug_assert!(leaves.len().is_power_of_two());
-        if leaves.len() == 1 {
-            return leaves[0];
-        }
-        let mut current: Vec<Hash> = leaves.to_vec();
-        let mut level = base_level;
-        while current.len() > 1 {
-            let mut next = Vec::with_capacity(current.len() / 2);
-            for pair in current.chunks_exact(2) {
-                next.push(hash_combine(level, &pair[0], &pair[1]));
-            }
-            current = next;
-            level += 1;
-        }
-        current[0]
+        complete_subtree_root(leaves, base_level)
     }
 
     /// Root of a sparse subtree where `populated` leaves are left-packed and
     /// positions beyond `populated.len()` are empty.
     fn sparse_subtree_root(&self, populated: &[Hash], capacity: usize, base_level: u8) -> Hash {
-        debug_assert!(capacity.is_power_of_two());
-        self.sparse_root_rec(populated, 0, capacity, base_level)
+        sparse_subtree_root(populated, capacity, base_level, &self.empty_roots)
     }
+}
 
-    fn sparse_root_rec(&self, leaves: &[Hash], offset: usize, size: usize, base_level: u8) -> Hash {
-        if size == 1 {
-            return if offset < leaves.len() {
-                leaves[offset]
-            } else {
-                self.empty_roots[base_level as usize]
-            };
+/// Root of a complete binary subtree from exactly `2^k` node hashes at
+/// `base_level`. Free function so other crates (the PIR ingest) can build
+/// sub-shard and shard roots from raw commitment bytes.
+pub fn complete_subtree_root(leaves: &[Hash], base_level: u8) -> Hash {
+    debug_assert!(leaves.len().is_power_of_two());
+    if leaves.len() == 1 {
+        return leaves[0];
+    }
+    let mut current: Vec<Hash> = leaves.to_vec();
+    let mut level = base_level;
+    while current.len() > 1 {
+        let mut next = Vec::with_capacity(current.len() / 2);
+        for pair in current.chunks_exact(2) {
+            next.push(hash_combine(level, &pair[0], &pair[1]));
         }
-
-        let half = size / 2;
-        let child_height = half.trailing_zeros() as u8;
-        let combine_level = base_level + child_height;
-
-        let left = self.sparse_root_rec(leaves, offset, half, base_level);
-        let right = if offset + half >= leaves.len() {
-            self.empty_roots[combine_level as usize]
-        } else {
-            self.sparse_root_rec(leaves, offset + half, half, base_level)
-        };
-
-        hash_combine(combine_level, &left, &right)
+        current = next;
+        level += 1;
     }
+    current[0]
+}
+
+/// Root of a sparse subtree of `capacity` nodes at `base_level` where
+/// `populated` nodes are left-packed and the rest are empty. `empty_roots`
+/// is [`empty_roots`]'s output.
+pub fn sparse_subtree_root(
+    populated: &[Hash],
+    capacity: usize,
+    base_level: u8,
+    empty_roots: &[Hash],
+) -> Hash {
+    debug_assert!(capacity.is_power_of_two());
+    sparse_root_rec(populated, 0, capacity, base_level, empty_roots)
+}
+
+fn sparse_root_rec(
+    leaves: &[Hash],
+    offset: usize,
+    size: usize,
+    base_level: u8,
+    empty_roots: &[Hash],
+) -> Hash {
+    if size == 1 {
+        return if offset < leaves.len() {
+            leaves[offset]
+        } else {
+            empty_roots[base_level as usize]
+        };
+    }
+    let half = size / 2;
+    let child_height = half.trailing_zeros() as u8;
+    let combine_level = base_level + child_height;
+    let left = sparse_root_rec(leaves, offset, half, base_level, empty_roots);
+    let right = if offset + half >= leaves.len() {
+        empty_roots[combine_level as usize]
+    } else {
+        sparse_root_rec(leaves, offset + half, half, base_level, empty_roots)
+    };
+    hash_combine(combine_level, &left, &right)
+}
+
+/// Empty subtree roots for levels `0..=TREE_DEPTH`, index = level.
+pub fn empty_roots() -> Vec<Hash> {
+    precompute_empty_roots()
 }
 
 impl Default for CommitmentTreeDb {
@@ -484,7 +511,7 @@ fn precompute_empty_roots() -> Vec<Hash> {
 }
 
 /// Combine two hashes at a given level using Sinsemilla (MerkleHashOrchard).
-fn hash_combine(level: u8, left: &Hash, right: &Hash) -> Hash {
+pub fn hash_combine(level: u8, left: &Hash, right: &Hash) -> Hash {
     let l = bytes_to_mho(left);
     let r = bytes_to_mho(right);
     <MerkleHashOrchard as Hashable>::combine(Level::from(level), &l, &r).to_bytes()

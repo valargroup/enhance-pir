@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Wire schema of [`GenerationManifest`].
-pub const MANIFEST_SCHEMA_VERSION: u16 = 3;
+pub const MANIFEST_SCHEMA_VERSION: u16 = 4;
 
 /// The pinned `ipir-sp` revision every party derives parameters from.
 pub const PROTOCOL_REVISION: &str = "ipir-sp-e875404";
@@ -69,16 +69,26 @@ impl DatabaseLayout {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DatabaseId {
+    /// One Ironwood action per record, eight per row, indexed by position.
     Action,
+    /// Note commitments, 256 per row: one sub-shard per row, indexed by
+    /// sub-shard (tree levels 0 to 8).
     Witness,
+    /// Completed sub-shard roots, 256 per row: one shard per row, indexed by
+    /// shard (tree levels 8 to 16). The frontier sub-shard's root is public
+    /// and travels in the broadcast cap instead.
+    WitnessRoots,
+    /// Nullifier hash buckets up to the cold checkpoint.
     NfCold,
+    /// Nullifier hash buckets since the cold checkpoint.
     NfWarm,
 }
 
 impl DatabaseId {
-    pub const ALL: [DatabaseId; 4] = [
+    pub const ALL: [DatabaseId; 5] = [
         DatabaseId::Action,
         DatabaseId::Witness,
+        DatabaseId::WitnessRoots,
         DatabaseId::NfCold,
         DatabaseId::NfWarm,
     ];
@@ -87,6 +97,7 @@ impl DatabaseId {
         match self {
             DatabaseId::Action => "action",
             DatabaseId::Witness => "witness",
+            DatabaseId::WitnessRoots => "witness-roots",
             DatabaseId::NfCold => "nf-cold",
             DatabaseId::NfWarm => "nf-warm",
         }
@@ -96,7 +107,7 @@ impl DatabaseId {
     pub const fn layout(&self) -> DatabaseLayout {
         match self {
             DatabaseId::Action => ACTION_LAYOUT,
-            DatabaseId::Witness => WITNESS_LAYOUT,
+            DatabaseId::Witness | DatabaseId::WitnessRoots => WITNESS_LAYOUT,
             DatabaseId::NfCold | DatabaseId::NfWarm => NULLIFIER_LAYOUT,
         }
     }
@@ -133,8 +144,10 @@ impl std::str::FromStr for DatabaseId {
 }
 
 /// The ACTION table: one Ironwood action per record, eight per row.
+/// Record v3 (824 bytes) adds `cmx` so an unknown note can be authenticated
+/// after trial decryption without any other lookup.
 pub const ACTION_LAYOUT: DatabaseLayout = DatabaseLayout {
-    record_bytes: 792,
+    record_bytes: 824,
     records_per_row: 8,
     shard_rows: 8_192,
 };
@@ -175,6 +188,32 @@ pub fn setup_seed_bytes(seed: u64) -> [u8; 32] {
     bytes[..8].copy_from_slice(&seed.to_le_bytes());
     bytes
 }
+
+/// Fixed per-pass query budget every wallet issues, dummies included, so the
+/// request count never depends on what a wallet found. Changing it is a
+/// protocol version for every wallet at once.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Envelope {
+    pub protocol_version: u16,
+    /// Nullifier query pairs (one cold, one warm) per pass.
+    pub k_nf: u16,
+    /// ACTION row queries per pass.
+    pub k_act: u16,
+    /// Witness query pairs (one roots row, one leaves row) per pass.
+    pub k_wit: u16,
+}
+
+/// The envelope this protocol version publishes.
+pub const DEFAULT_ENVELOPE: Envelope = Envelope {
+    protocol_version: 1,
+    k_nf: 8,
+    k_act: 4,
+    k_wit: 4,
+};
+
+/// Blocks between cold nullifier checkpoints. The cold table is rebuilt
+/// only when the checkpoint moves.
+pub const COLD_CHECKPOINT_INTERVAL: u64 = 1_000;
 
 /// One published shard of one table.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -219,6 +258,12 @@ pub struct GenerationManifest {
     pub anchor_block_hash: String,
     pub ironwood_tree_size: u64,
     pub generation: u64,
+    /// Depth-32 root of the Ironwood commitment tree at the anchor, hex, so a
+    /// client can bind witness paths to the block it scanned.
+    pub anchor_tree_root: String,
+    /// Height of the nullifier cold checkpoint this generation was built from.
+    pub cold_checkpoint_height: u64,
+    pub envelope: Envelope,
     pub tables: BTreeMap<DatabaseId, TableManifest>,
 }
 
@@ -228,10 +273,10 @@ mod tests {
 
     #[test]
     fn layout_derivations_match_the_action_constants() {
-        assert_eq!(ACTION_LAYOUT.row_bytes(), 6_336);
+        assert_eq!(ACTION_LAYOUT.row_bytes(), 6_592);
         assert_eq!(ACTION_LAYOUT.shard_positions(), 65_536);
-        assert_eq!(ACTION_LAYOUT.item_size_bits(), 50_688);
-        assert_eq!(ACTION_LAYOUT.shard_bytes(), 51_904_512);
+        assert_eq!(ACTION_LAYOUT.item_size_bits(), 52_736);
+        assert_eq!(ACTION_LAYOUT.shard_bytes(), 54_001_664);
         assert_eq!(ACTION_LAYOUT.used_rows_for(0), 0);
         assert_eq!(ACTION_LAYOUT.used_rows_for(9), 2);
         assert_eq!(ACTION_LAYOUT.logical_rows_for(0), 8_192);
