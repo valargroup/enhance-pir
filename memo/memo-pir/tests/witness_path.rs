@@ -9,8 +9,10 @@ use memo_pir::witness::{apply_frontier_update, decode_frontier, decompose, recon
 use memo_pir::worker::WorkerState;
 use memo_pir::zakura::{CanonicalBlock, CanonicalTx};
 
+/// A block of `actions` actions split into transactions of at most 200.
 fn block(height: u64, first_position: u64, actions: usize) -> CanonicalBlock {
     let mut records = Vec::new();
+    let mut transactions = Vec::new();
     let mut nullifiers = Vec::new();
     let mut cmxs = Vec::new();
     for i in 0..actions as u64 {
@@ -31,17 +33,20 @@ fn block(height: u64, first_position: u64, actions: usize) -> CanonicalBlock {
         }));
         nullifiers.push(nf);
         cmxs.push(cmx);
+        if cmxs.len() == 200 || i + 1 == actions as u64 {
+            transactions.push(CanonicalTx {
+                txid: [transactions.len() as u8; 32],
+                first_action_index: records.len() - cmxs.len(),
+                nullifiers: std::mem::take(&mut nullifiers),
+                cmxs: std::mem::take(&mut cmxs),
+            });
+        }
     }
     CanonicalBlock {
         height,
         hash: format!("{height:064x}"),
         records,
-        transactions: vec![CanonicalTx {
-            txid: [1; 32],
-            first_action_index: 0,
-            nullifiers,
-            cmxs,
-        }],
+        transactions,
         tree_size: first_position + actions as u64,
     }
 }
