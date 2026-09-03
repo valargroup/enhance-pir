@@ -37,6 +37,11 @@ pub struct Schema {
     pub worker_table_prefix: String,
     /// `<prefix>_worker_group_*{table="...",group="..."}` redundancy families.
     pub worker_group_prefix: String,
+    pub worker_replica_requests_total: String,
+    pub worker_replica_duration_bucket: String,
+    pub worker_replica_duration_sum: String,
+    pub worker_replica_duration_count: String,
+    pub worker_replica_in_flight: String,
 }
 
 impl Schema {
@@ -103,6 +108,17 @@ impl Schema {
             table_prefix: format!("{prefix}_table_"),
             worker_table_prefix: format!("{prefix}_worker_table_"),
             worker_group_prefix: format!("{prefix}_worker_group_"),
+            worker_replica_requests_total: format!("{prefix}_worker_replica_requests_total"),
+            worker_replica_duration_bucket: format!(
+                "{prefix}_worker_replica_request_duration_seconds_bucket"
+            ),
+            worker_replica_duration_sum: format!(
+                "{prefix}_worker_replica_request_duration_seconds_sum"
+            ),
+            worker_replica_duration_count: format!(
+                "{prefix}_worker_replica_request_duration_seconds_count"
+            ),
+            worker_replica_in_flight: format!("{prefix}_worker_replica_in_flight"),
             prefix: prefix.to_string(),
             endpoints,
             processing_endpoints,
@@ -201,6 +217,18 @@ mod tests {
         assert_eq!(schema.table_prefix, "enhance_table_");
         assert_eq!(schema.worker_table_prefix, "enhance_worker_table_");
         assert_eq!(schema.worker_group_prefix, "enhance_worker_group_");
+        assert_eq!(
+            schema.worker_replica_requests_total,
+            "enhance_worker_replica_requests_total"
+        );
+        assert_eq!(
+            schema.worker_replica_duration_bucket,
+            "enhance_worker_replica_request_duration_seconds_bucket"
+        );
+        assert_eq!(
+            schema.worker_replica_in_flight,
+            "enhance_worker_replica_in_flight"
+        );
         assert_eq!(schema.observed_budget("query"), None);
     }
 

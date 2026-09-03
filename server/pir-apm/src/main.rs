@@ -134,6 +134,7 @@ async fn scrape_loop(
         }
 
         let windows = rolling.windows();
+        let worker_query_windows = rolling.worker_query_windows();
         alerts.set_worker_groups(
             rolling
                 .latest()
@@ -171,6 +172,7 @@ async fn scrape_loop(
             view.workers = latest
                 .map(|snapshot| snapshot.workers.clone())
                 .unwrap_or_default();
+            view.worker_queries = worker_query_windows;
             view.layout = latest
                 .map(|snapshot| snapshot.layout.clone())
                 .unwrap_or_default();

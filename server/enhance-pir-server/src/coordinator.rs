@@ -1187,6 +1187,7 @@ impl CoordinatorState {
                         metrics::record_replica_request(&group_name, replica.name(), "retry");
                     }
                     metrics::record_replica_request(&group_name, replica.name(), "selected");
+                    let timer = metrics::start_worker_replica_request(&group_name, replica.name());
                     match coordinator
                         .evaluate_worker(
                             &replica,
@@ -1199,15 +1200,11 @@ impl CoordinatorState {
                         .await
                     {
                         Ok(partial) => {
-                            metrics::record_replica_request(
-                                &group_name,
-                                replica.name(),
-                                "succeeded",
-                            );
+                            timer.succeeded();
                             return Ok(partial);
                         }
                         Err(error) => {
-                            metrics::record_replica_request(&group_name, replica.name(), "failed");
+                            timer.failed();
                             tracing::warn!(%error, replica = %replica.name(), generation,
                                 "worker replica evaluation failed; trying peer");
                             if !error.retryable {

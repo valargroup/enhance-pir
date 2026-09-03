@@ -10,7 +10,7 @@ use tokio::sync::RwLock;
 use crate::{
     alerts::Alert,
     host::HostHealth,
-    metrics::{EndpointWindow, LatencyWindow},
+    metrics::{EndpointWindow, LatencyWindow, WorkerQueryWindow},
     schema::Schema,
     thresholds,
 };
@@ -35,6 +35,7 @@ pub struct DashboardData {
     pub endpoints: BTreeMap<String, EndpointWindow>,
     pub snapshot_gauges: BTreeMap<String, f64>,
     pub workers: BTreeMap<String, BTreeMap<String, f64>>,
+    pub worker_queries: BTreeMap<String, WorkerQueryWindow>,
     pub layout: BTreeMap<String, f64>,
     pub tables: BTreeMap<String, BTreeMap<String, f64>>,
     pub worker_tables: BTreeMap<String, BTreeMap<String, BTreeMap<String, f64>>>,
@@ -65,6 +66,7 @@ impl DashboardData {
             endpoints: BTreeMap::new(),
             snapshot_gauges: BTreeMap::new(),
             workers: BTreeMap::new(),
+            worker_queries: BTreeMap::new(),
             layout: BTreeMap::new(),
             tables: BTreeMap::new(),
             worker_tables: BTreeMap::new(),
@@ -153,6 +155,11 @@ margin-bottom:20px;min-width:0;overflow:hidden}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px}
 .grid .card{margin:0}
 .card .rows+.note,.card .meter+.rows{margin-top:22px}
+.worker-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;
+gap:12px;margin-bottom:18px}
+.worker-head .eyebrow{margin-bottom:5px}
+.worker-head h2{font-family:var(--mono);font-size:16px}
+.worker-meta{font-family:var(--mono);font-size:11.5px;color:var(--p42);margin:0}
 
 table{width:100%;border-collapse:collapse;font-size:13.5px}
 thead th{font-size:10.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--p42);
@@ -308,6 +315,7 @@ fn render(data: &DashboardData) -> String {
     out.push_str(&kpis(data));
     out.push_str(&endpoint_table(data));
     out.push_str(&processing_latency_splits(data));
+    out.push_str(&worker_query_cards(data));
     out.push_str(&fleet_card(data));
     out.push_str(&explainer_card(data));
     out.push_str("<div class=\"grid\">");
@@ -597,6 +605,66 @@ fn error_cell(values: &EndpointWindow) -> String {
     )
 }
 
+fn ordered_workers(data: &DashboardData) -> Vec<(&String, &BTreeMap<String, f64>)> {
+    let mut workers: Vec<_> = data.workers.iter().collect();
+    workers.sort_by(|(a_name, a), (b_name, b)| {
+        let a_index = a.get("index").copied().unwrap_or(f64::INFINITY);
+        let b_index = b.get("index").copied().unwrap_or(f64::INFINITY);
+        a_index.total_cmp(&b_index).then_with(|| a_name.cmp(b_name))
+    });
+    workers
+}
+
+fn worker_query_cards(data: &DashboardData) -> String {
+    ordered_workers(data)
+        .into_iter()
+        .map(|(worker, gauges)| {
+            let values = data.worker_queries.get(worker).cloned().unwrap_or_default();
+            let group = if values.group.is_empty() {
+                "awaiting first query sample".to_string()
+            } else {
+                format!("group {}", escape(&values.group))
+            };
+            let state = match gauges.get("up").copied() {
+                Some(value) if value >= 1.0 => "healthy",
+                Some(_) => "unreachable",
+                None => "unknown",
+            };
+            let tone = if state == "unreachable" { " bad" } else { "" };
+            format!(
+                "<section class=\"card worker-apm\" data-worker=\"{worker}\">\
+<header class=\"worker-head\"><div><p class=\"eyebrow\">Worker query path &middot; 5 minute window</p>\
+<h2>{worker}</h2></div><p class=\"worker-meta{tone}\">{group} &middot; {state}</p></header>\
+<div class=\"wrap\"><table><thead><tr><th>Operation</th><th>QPS</th><th>Inflight</th>\
+<th>Attempts</th><th>p50 success</th><th>p95 success</th><th>p99 success</th><th>Failures</th>\
+</tr></thead><tbody><tr><th>evaluate</th><td>{qps:.3}</td><td>{in_flight:.0}</td>\
+<td>{attempts:.0}</td>{p50}{p95}{p99}<td>{failures}</td></tr></tbody></table></div>\
+<p class=\"note\">Measured by the coordinator around the worker RPC and response decode. \
+Latency percentiles include successful attempts only; failures include HTTP, network, and invalid-response errors.</p></section>",
+                worker = escape(worker),
+                qps = values.qps,
+                in_flight = values.in_flight,
+                attempts = values.attempts,
+                p50 = latency_cell(values.successful_latency.p50, None),
+                p95 = latency_cell(values.successful_latency.p95, None),
+                p99 = latency_cell(values.successful_latency.p99, None),
+                failures = worker_failure_cell(&values),
+            )
+        })
+        .collect()
+}
+
+fn worker_failure_cell(values: &WorkerQueryWindow) -> String {
+    let failures = values.failures.round();
+    if failures <= 0.0 {
+        return "<span class=\"muted\">0</span>".to_string();
+    }
+    format!(
+        "<span class=\"bad\">{failures:.0} ({ratio:.2}%)</span>",
+        ratio = values.failure_ratio * 100.0,
+    )
+}
+
 /// Enhance is the only active PIR table; unknown labels sort after it.
 const TABLE_ORDER: [&str; 1] = ["enhance"];
 
@@ -660,12 +728,7 @@ fn fleet_card(data: &DashboardData) -> String {
     .collect::<Vec<_>>()
     .join(" &middot; ");
 
-    let mut workers: Vec<(&String, &BTreeMap<String, f64>)> = data.workers.iter().collect();
-    workers.sort_by(|(a_name, a), (b_name, b)| {
-        let a_index = a.get("index").copied().unwrap_or(f64::INFINITY);
-        let b_index = b.get("index").copied().unwrap_or(f64::INFINITY);
-        a_index.total_cmp(&b_index).then_with(|| a_name.cmp(b_name))
-    });
+    let workers = ordered_workers(data);
 
     let leaves = if workers.is_empty() {
         "<div class=\"leaf\"><div class=\"node\"><p class=\"role\">Workers</p>\
@@ -1519,6 +1582,48 @@ mod tests {
         assert!(html.contains(
             "<b>enhance</b> shards 2&ndash;3 &middot; 1 assigned &middot; 2668 positions"
         ));
+    }
+
+    #[test]
+    fn worker_query_cards_are_stacked_in_inventory_order() {
+        let mut data = fleet_sample();
+        data.worker_queries.insert(
+            "worker-b".into(),
+            WorkerQueryWindow {
+                group: "group-1".into(),
+                qps: 0.8,
+                attempts: 12.0,
+                failures: 2.0,
+                failure_ratio: 1.0 / 6.0,
+                successful_latency: LatencyWindow {
+                    samples: 10.0,
+                    p50: Some(0.2),
+                    p95: Some(0.4),
+                    p99: Some(0.5),
+                },
+                in_flight: 1.0,
+            },
+        );
+        data.worker_queries.insert(
+            "stale-worker".into(),
+            WorkerQueryWindow {
+                group: "old-group".into(),
+                attempts: 99.0,
+                ..WorkerQueryWindow::default()
+            },
+        );
+
+        let html = render(&data);
+        assert_eq!(html.matches("class=\"card worker-apm\"").count(), 2);
+        let b = html.find("data-worker=\"worker-b\"").unwrap();
+        let a = html.find("data-worker=\"worker-a\"").unwrap();
+        assert!(b < a, "worker query cards must follow inventory order");
+        assert!(html.contains("group group-1 &middot; healthy"));
+        assert!(html.contains("<td>0.800</td><td>1</td><td>12</td>"));
+        assert!(html.contains("2 (16.67%)"));
+        assert!(html.contains("awaiting first query sample"));
+        assert!(!html.contains("data-worker=\"stale-worker\""));
+        assert!(html.contains("Latency percentiles include successful attempts only"));
     }
 
     #[test]
