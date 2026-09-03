@@ -310,9 +310,28 @@ impl CoordinatorState {
             .and_then(|snapshot| MemoSnapshotMetadata::from_manifest(&snapshot.manifest))
     }
 
+    /// The requested retained generation, or the newest when none is named.
+    /// Clients pin every fetch of a session to the manifest's generation so a
+    /// publish between two fetches cannot hand them mismatched material.
+    fn pinned(&self, generation: Option<u64>) -> Option<Arc<GenerationSnapshot>> {
+        match generation {
+            Some(generation) => self.generation(generation),
+            None => self.newest(),
+        }
+    }
+
     /// Scheme parameters of a table in the newest generation.
     pub fn params(&self, table: DatabaseId) -> Option<YpirSchemeParams> {
-        self.newest()?
+        self.params_at(table, None)
+    }
+
+    /// Scheme parameters of a table in a retained generation.
+    pub fn params_at(
+        &self,
+        table: DatabaseId,
+        generation: Option<u64>,
+    ) -> Option<YpirSchemeParams> {
+        self.pinned(generation)?
             .tables
             .get(&table)
             .map(|snapshot| snapshot.ypir.clone())
@@ -320,10 +339,20 @@ impl CoordinatorState {
 
     /// Published packing material of a table in the newest generation.
     pub fn public_params(&self, table: DatabaseId) -> Option<Vec<u8>> {
-        self.newest()?
+        self.public_params_at(table, None)
+    }
+
+    /// Published packing material of a table in a retained generation.
+    pub fn public_params_at(&self, table: DatabaseId, generation: Option<u64>) -> Option<Vec<u8>> {
+        self.pinned(generation)?
             .tables
             .get(&table)
             .map(|snapshot| snapshot.public_params.clone())
+    }
+
+    /// The witness cap of a retained generation (newest when unnamed).
+    pub fn witness_cap_at(&self, generation: Option<u64>) -> Option<WitnessCap> {
+        self.pinned(generation)?.witness_cap.clone()
     }
 
     /// Every distinct worker across all pools, in first-seen pool order.
@@ -1196,11 +1225,17 @@ async fn generation_manifest(State(state): State<CoordinatorState>) -> Response 
     }
 }
 
-async fn witness_cap(State(state): State<CoordinatorState>) -> Response {
-    match state
-        .newest()
-        .and_then(|snapshot| snapshot.witness_cap.clone())
-    {
+/// Optional `?generation=` on the per-generation public routes.
+#[derive(serde::Deserialize)]
+struct GenerationQuery {
+    generation: Option<u64>,
+}
+
+async fn witness_cap(
+    State(state): State<CoordinatorState>,
+    axum::extract::Query(pin): axum::extract::Query<GenerationQuery>,
+) -> Response {
+    match state.witness_cap_at(pin.generation) {
         Some(cap) => Json(cap).into_response(),
         None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
@@ -1239,12 +1274,16 @@ async fn legacy_metadata(State(state): State<CoordinatorState>) -> Response {
     }
 }
 
-async fn params(State(state): State<CoordinatorState>, Path(table): Path<String>) -> Response {
+async fn params(
+    State(state): State<CoordinatorState>,
+    Path(table): Path<String>,
+    axum::extract::Query(pin): axum::extract::Query<GenerationQuery>,
+) -> Response {
     let table = match parse_table(&table) {
         Ok(table) => table,
         Err(status) => return status.into_response(),
     };
-    match state.params(table) {
+    match state.params_at(table, pin.generation) {
         Some(ypir) => Json(ypir).into_response(),
         None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
@@ -1260,12 +1299,13 @@ async fn legacy_params(State(state): State<CoordinatorState>) -> Response {
 async fn public_params(
     State(state): State<CoordinatorState>,
     Path(table): Path<String>,
+    axum::extract::Query(pin): axum::extract::Query<GenerationQuery>,
 ) -> Response {
     let table = match parse_table(&table) {
         Ok(table) => table,
         Err(status) => return status.into_response(),
     };
-    match state.public_params(table) {
+    match state.public_params_at(table, pin.generation) {
         Some(bytes) => bytes.into_response(),
         None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }

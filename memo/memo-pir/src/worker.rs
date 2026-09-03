@@ -18,8 +18,13 @@ use std::sync::Arc;
 use tokio::sync::{RwLock, Semaphore};
 
 /// Generations a worker keeps answerable. The coordinator serves the same
-/// number, so a query built against the previous snapshot survives a publish.
-pub const RETAINED_GENERATIONS: usize = 2;
+/// number, so a session built against a recent snapshot survives publishes.
+/// A generation is published per block; a wallet pass (parameter fetch,
+/// anchor gate, one fixed query envelope) must fit inside the retained window
+/// even when blocks arrive in a burst, so eight (about ten minutes at the
+/// 75-second target) rather than the two that a single straddled publish
+/// would need.
+pub const RETAINED_GENERATIONS: usize = 8;
 
 /// Default concurrent shard evaluations per worker process.
 pub const DEFAULT_EVALUATION_SLOTS: usize = 2;
