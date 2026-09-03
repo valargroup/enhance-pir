@@ -350,9 +350,11 @@ else
 fi
 as_root systemctl daemon-reload
 if [[ -x "$rollback/enhance-pir-worker" ]]; then
-  as_root systemctl restart enhance-pir-worker
+  as_root systemctl disable --now memo-pir-worker 2>/dev/null || true
+  as_root systemctl enable --now enhance-pir-worker
 else
-  as_root systemctl restart memo-pir-worker
+  as_root systemctl disable --now enhance-pir-worker 2>/dev/null || true
+  as_root systemctl enable --now memo-pir-worker
 fi
 REMOTE
 }
@@ -386,12 +388,14 @@ if as_root test -r "$rollback/Caddyfile"; then
 fi
 as_root systemctl daemon-reload
 if [[ -x "$rollback/enhance-pir-server" ]]; then
-  as_root systemctl restart enhance-pir-server
+  as_root systemctl disable --now memo-pir-server 2>/dev/null || true
+  as_root systemctl enable --now enhance-pir-server
 else
   [[ -x "$rollback/memo-pir-server" ]] && as_root install -m 0755 "$rollback/memo-pir-server" /usr/local/bin/memo-pir-server
   [[ -r "$rollback/memo-pir-server.service" ]] && as_root install -m 0644 "$rollback/memo-pir-server.service" /etc/systemd/system/memo-pir-server.service
   as_root systemctl daemon-reload
-  as_root systemctl restart memo-pir-server
+  as_root systemctl disable --now enhance-pir-server 2>/dev/null || true
+  as_root systemctl enable --now memo-pir-server
 fi
 if [[ -x "$rollback/pir-apm" ]]; then
   as_root systemctl restart pir-apm || true
@@ -427,12 +431,12 @@ as_root install -m 0755 "$stage/enhance-pir-worker" "$release/enhance-pir-worker
 [[ -x /usr/local/bin/memo-pir-worker ]] && as_root cp -L /usr/local/bin/memo-pir-worker "$rollback/memo-pir-worker"
 [[ -r /etc/systemd/system/memo-pir-worker.service ]] && as_root cp /etc/systemd/system/memo-pir-worker.service "$rollback/memo-pir-worker.service"
 as_root systemctl stop enhance-pir-worker 2>/dev/null || true
-as_root systemctl stop memo-pir-worker 2>/dev/null || true
+as_root systemctl disable --now memo-pir-worker 2>/dev/null || true
 as_root install -m 0755 "$release/enhance-pir-worker" /usr/local/bin/enhance-pir-worker.next
 as_root mv -f /usr/local/bin/enhance-pir-worker.next /usr/local/bin/enhance-pir-worker
 as_root install -m 0644 "$stage/enhance-pir-worker.service" /etc/systemd/system/enhance-pir-worker.service
 as_root systemctl daemon-reload
-as_root systemctl restart enhance-pir-worker
+as_root systemctl enable --now enhance-pir-worker
 printf '%s\n' "$sha" | as_root tee /opt/enhance-pir/current-worker-release >/dev/null
 REMOTE
   remote "$host" "curl --fail --silent --show-error http://127.0.0.1:8091/internal/health | jq -e '.status == \"ok\"' >/dev/null"
@@ -457,7 +461,8 @@ as_root mv -f /usr/local/bin/enhance-pir-server.next /usr/local/bin/enhance-pir-
 as_root install -m 0644 "$stage/workers.json" /etc/enhance-pir/workers.json
 as_root install -m 0644 "$stage/enhance-pir-server.service" /etc/systemd/system/enhance-pir-server.service
 as_root systemctl daemon-reload
-as_root systemctl restart enhance-pir-server
+as_root systemctl disable --now memo-pir-server 2>/dev/null || true
+as_root systemctl enable --now enhance-pir-server
 printf '%s\n' "$sha" | as_root tee /opt/enhance-pir/current-coordinator-release >/dev/null
 
 # pir-apm sidecar: same save-then-replace pattern as the server binary.
