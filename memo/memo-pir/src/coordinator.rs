@@ -1032,6 +1032,9 @@ fn worker_hint_limit() -> usize {
         * 4
 }
 
+/// Longest a query waits for a free per-table slot before it is refused.
+const QUERY_QUEUE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Largest query body accepted on the query routes. A query grows with the
 /// logical row count; this bound covers every capacity the POC can reach
 /// before the request-size work in the deployment plan lands.
@@ -1338,7 +1341,14 @@ async fn answer(state: &CoordinatorState, table: DatabaseId, body: &[u8]) -> Res
     let Ok(table_state) = state.table(table) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let Ok(_permit) = table_state.query_slots.clone().try_acquire_owned() else {
+    // A wallet pass sends its fixed envelope as a burst; queue it for a
+    // bounded wait rather than refusing everything beyond the slot count.
+    let Ok(Ok(_permit)) = tokio::time::timeout(
+        QUERY_QUEUE_WAIT,
+        table_state.query_slots.clone().acquire_owned(),
+    )
+    .await
+    else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     // The body is fully received by now, so this measures server work only.
