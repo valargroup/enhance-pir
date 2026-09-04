@@ -506,14 +506,15 @@ fn endpoint_table(data: &DashboardData) -> String {
         })
         .collect::<String>();
     format!(
-        "<section class=\"card\"><p class=\"eyebrow\">Observed PIR request latency &middot; 5 minute window</p>\
+        "<section class=\"card\"><p class=\"eyebrow\">Observed HTTP total &middot; headers received &rarr; response ready &middot; 5 minute window</p>\
 <div class=\"wrap\"><table><thead><tr><th>Endpoint</th><th>QPS</th><th>Inflight</th>\
-<th>Requests</th><th>p50</th><th>p95</th><th>p99</th><th>5xx</th></tr></thead>\
-<tbody>{rows}</tbody></table></div></section>"
+<th>Requests</th><th>Total p50</th><th>Total p95</th><th>Total p99</th><th>5xx</th></tr></thead>\
+<tbody>{rows}</tbody></table></div>\
+<p class=\"note\">Includes request-body receive, post-body server time, and any queueing between them. Excludes response transmission.</p></section>"
     )
 }
 
-/// One "latency split" card per endpoint that is paged on processing time.
+/// One nested-scope latency card per endpoint that is paged on post-body time.
 fn processing_latency_splits(data: &DashboardData) -> String {
     ordered_endpoints(data)
         .into_iter()
@@ -537,7 +538,7 @@ fn processing_latency_split(data: &DashboardData, endpoint: &str) -> String {
             "informational",
         ),
         latency_split_row(
-            "Server processing",
+            "Post-body server",
             &values.processing,
             values.processing_in_flight,
             Some(threshold),
@@ -546,11 +547,13 @@ fn processing_latency_split(data: &DashboardData, endpoint: &str) -> String {
     ]
     .join("");
     format!(
-        "<section class=\"card\"><p class=\"eyebrow\">{name} latency split &middot; 5 minute window</p>\
+        "<section class=\"card\"><p class=\"eyebrow\">{name} latency scopes &middot; 5 minute window</p>\
 <div class=\"wrap\"><table><thead><tr><th>Stage</th><th>Samples</th><th>Inflight</th>\
 <th>p50</th><th>p95</th><th>p99</th><th>Alerting</th></tr></thead>\
 <tbody>{rows}</tbody></table></div>\
-<p class=\"note\"><strong>Alert basis.</strong> Server processing begins after the complete request body reaches the coordinator and is the only distribution evaluated against the {threshold:.3}s p99 latency threshold. Body-receive timing is not rendered here.</p></section>",
+<p class=\"note\"><strong>Nested timing scopes.</strong> Observed total starts when the coordinator receives request headers. Post-body server starts as soon as the complete body is available and includes admission queueing, coordinator query work, the selected worker RPC, result combination, and response packing. Worker cards below measure only the RPC subset. Each percentile is calculated independently and must not be subtracted from another.\
+<code>Observed total: headers received &rarr; body receive &rarr; post-body server &rarr; response ready\nPost-body server: full body available &rarr; queue &rarr; coordinator + worker RPC + packing &rarr; response ready</code>\
+<strong>Alert basis.</strong> Only post-body server p99 is evaluated against the {threshold:.3}s threshold.</p></section>",
         name = escape(endpoint),
     )
 }
@@ -633,14 +636,13 @@ fn worker_query_cards(data: &DashboardData) -> String {
             let tone = if state == "unreachable" { " bad" } else { "" };
             format!(
                 "<section class=\"card worker-apm\" data-worker=\"{worker}\">\
-<header class=\"worker-head\"><div><p class=\"eyebrow\">Worker query path &middot; 5 minute window</p>\
+<header class=\"worker-head\"><div><p class=\"eyebrow\">Worker RPC subset of post-body server &middot; 5 minute window</p>\
 <h2>{worker}</h2></div><p class=\"worker-meta{tone}\">{group} &middot; {state}</p></header>\
 <div class=\"wrap\"><table><thead><tr><th>Operation</th><th>QPS</th><th>Inflight</th>\
 <th>Attempts</th><th>p50 success</th><th>p95 success</th><th>p99 success</th><th>Failures</th>\
 </tr></thead><tbody><tr><th>evaluate</th><td>{qps:.3}</td><td>{in_flight:.0}</td>\
 <td>{attempts:.0}</td>{p50}{p95}{p99}<td>{failures}</td></tr></tbody></table></div>\
-<p class=\"note\">Measured by the coordinator around the worker RPC and response decode. \
-Latency percentiles include successful attempts only; failures include HTTP, network, and invalid-response errors.</p></section>",
+<p class=\"note\">Measured by the coordinator from replica selection through a validated worker reply. Includes request/response encoding, network time, and worker evaluation; excludes coordinator query decoding and response packing. Latency percentiles include successful attempts only; failures include HTTP, network, and invalid-response errors.</p></section>",
                 worker = escape(worker),
                 qps = values.qps,
                 in_flight = values.in_flight,
@@ -1402,7 +1404,7 @@ mod tests {
     }
 
     #[test]
-    fn processing_split_keeps_body_receive_timing_off_the_public_dashboard() {
+    fn processing_split_explains_nested_timing_scopes() {
         let mut data = sample();
         data.endpoints.insert(
             "query".to_string(),
@@ -1423,12 +1425,14 @@ mod tests {
             },
         );
         let html = render(&data);
-        assert!(html.contains("query latency split"));
-        assert!(!html.contains("metadata latency split"));
-        assert!(!html.contains("Body receive (upload proxy)"));
-        assert!(html.contains("Server processing"));
-        assert!(html.contains("only distribution evaluated against the 5.000s"));
-        assert!(html.contains("Body-receive timing is not rendered here"));
+        assert!(html.contains("query latency scopes"));
+        assert!(!html.contains("metadata latency scopes"));
+        assert!(html.contains("Observed total"));
+        assert!(html.contains("Post-body server"));
+        assert!(html.contains("headers received &rarr; body receive"));
+        assert!(html.contains("full body available &rarr; queue"));
+        assert!(html.contains("Each percentile is calculated independently"));
+        assert!(html.contains("Only post-body server p99 is evaluated against the 5.000s"));
         assert_eq!(html.matches("<td class=\"bad\">").count(), 1);
     }
 
@@ -1623,6 +1627,8 @@ mod tests {
         assert!(html.contains("2 (16.67%)"));
         assert!(html.contains("awaiting first query sample"));
         assert!(!html.contains("data-worker=\"stale-worker\""));
+        assert!(html.contains("Worker RPC subset of post-body server"));
+        assert!(html.contains("excludes coordinator query decoding and response packing"));
         assert!(html.contains("Latency percentiles include successful attempts only"));
     }
 
@@ -1717,7 +1723,7 @@ mod tests {
         let query = html.find("<th>query</th>").unwrap();
         let witness = html.find("<th>witness_query</th>").unwrap();
         assert!(query < witness);
-        assert!(html.contains("witness_query latency split"));
+        assert!(html.contains("witness_query latency scopes"));
     }
 
     #[test]

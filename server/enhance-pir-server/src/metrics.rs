@@ -110,7 +110,8 @@ fn build_metrics() -> Metrics {
         HistogramOpts::new(
             "enhance_http_request_duration_seconds",
             "Time from the coordinator receiving request headers until the route produces a \
-             response. Includes request body receive time but excludes response transmission.",
+             response. Includes request body receive and post-body server time, but excludes \
+             response transmission.",
         )
         .buckets(vec![0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0]),
         &["endpoint"],
@@ -119,7 +120,9 @@ fn build_metrics() -> Metrics {
     let http_request_processing_duration = HistogramVec::new(
         HistogramOpts::new(
             "enhance_http_request_processing_duration_seconds",
-            "Time spent answering an allowlisted request after its complete body is available.",
+            "Time from complete request body availability until the route produces a response. \
+             Includes admission queueing, coordinator work, worker RPCs, and response \
+             construction.",
         )
         .buckets(vec![0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0]),
         &["endpoint"],
@@ -136,7 +139,7 @@ fn build_metrics() -> Metrics {
     let http_processing_in_flight = IntGaugeVec::new(
         Opts::new(
             "enhance_http_processing_in_flight",
-            "Requests being processed after their complete bodies have been received.",
+            "Requests with complete bodies currently queued or executing.",
         ),
         &["endpoint"],
     )
@@ -470,8 +473,8 @@ impl Drop for GaugeGuard {
     }
 }
 
-/// Observes post-upload processing time and keeps the processing concurrency
-/// gauge balanced for as long as it is alive.
+/// Observes post-body server time and keeps its concurrency gauge balanced for
+/// as long as it is alive.
 pub struct ProcessingTimer {
     started: Instant,
     histogram: Histogram,
