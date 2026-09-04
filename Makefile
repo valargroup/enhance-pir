@@ -5,6 +5,7 @@ LOAD_TEST_PARALLELISM ?= 8
 LOAD_TEST_WARMUP ?= 10s
 LOAD_TEST_JSON ?= load-test-summary.json
 LOAD_TEST_MAX_ERROR_RATE ?= 0.01
+LOAD_TEST_URL ?= https://enhance-pir.valargroup.dev
 
 build:
 	cargo build --release --workspace --bins --features enhance-pir/cli
@@ -24,10 +25,6 @@ run-worker:
 	cargo run --release -p enhance-pir-server --bin enhance-pir-worker -- --help
 
 load-test:
-	@if [ -z "$(LOAD_TEST_URL)" ]; then \
-		echo "LOAD_TEST_URL is required (for example, https://enhance-pir.valargroup.dev)" >&2; \
-		exit 2; \
-	fi
 	cargo run --release -p enhance-pir-load-test -- \
 		--server "$(LOAD_TEST_URL)" \
 		--duration "$(LOAD_TEST_DURATION)" \
