@@ -91,20 +91,21 @@ ovk + cv_net + cmx + ephemeralKey
 ## PIR Layout
 
 Key: action's output note's index in the commitment tree
-Value (724 bytes):
+Value (725 bytes):
 ```
 Offset   Size   Field
 0        32     ephemeralKey
 32       580    encCiphertext
 612      32     cv_net
 644      80     outCiphertext
+724      1      flags (bit 0 = transaction has transparent inputs or outputs)
                 ───
-                724 bytes
+                725 bytes
 ```
 
 With nine records per row:
 ```
-9 × 724 = 6,516-byte PIR row
+9 × 725 = 6,525-byte PIR row
 row  = position / 9
 slot = position % 9
 ```
@@ -112,7 +113,7 @@ slot = position % 9
 Incoming recovery uses `ephemeralKey` + `encCiphertext`. Outgoing recovery additionally uses `cv_net` + `outCiphertext`, with `cmx` supplied by the compact action.
 
 Why 9 records per row?
-- Two 2048 × 14-bit PIR instances carry 7,168 bytes. Nine records use 6,516 bytes; ten would need 7,240 bytes and a third instance.
+- Two 2048 × 14-bit PIR instances carry 7,168 bytes. Nine records use 6,525 bytes; ten would need 7,250 bytes and a third instance.
 - Nine is therefore the densest layout with the same cryptographic instance count and response size as eight.
 - At 136,425 positions it uses 15,159 rows, which rounds to 16,384 logical rows. Eight records would use 17,054 rows and round to 32,768.
 - The division and remainder by constant nine are negligible compared with the PIR work.

@@ -1485,7 +1485,7 @@ mod tests {
         let enhance = BTreeMap::from([
             ("registered".to_string(), 1.0),
             ("records_per_row".to_string(), 9.0),
-            ("record_bytes".to_string(), 724.0),
+            ("record_bytes".to_string(), 725.0),
             ("shard_rows".to_string(), 8_192.0),
             ("shard_positions".to_string(), 73_728.0),
             ("shards_per_worker".to_string(), 2.0),
@@ -1665,7 +1665,7 @@ mod tests {
         let enhance = html.find("<p class=\"id\">enhance</p>").unwrap();
         let witness = html.find("<p class=\"id\">witness</p>").unwrap();
         assert!(enhance < witness);
-        assert!(html.contains("9 &times; 724 B per row &middot; 8192 rows per shard"));
+        assert!(html.contains("9 &times; 725 B per row &middot; 8192 rows per shard"));
         assert!(html.contains("<b>3</b> shards (2 sealed) &middot; <b>150124</b> positions"));
         assert!(html.contains("worker-b: shards 0&ndash;1 &middot; worker-a: shards 2&ndash;3"));
         assert_eq!(html.matches("class=\"node planned\"").count(), 1);
@@ -1696,7 +1696,7 @@ mod tests {
         assert!(html.contains("height <b>3428143</b>"));
         assert!(html.contains("n&times;2+1"));
         assert!(html
-            .contains("<tr><th>enhance</th><td>9 &times; 724 B</td><td>8192</td><td>73728</td>"));
+            .contains("<tr><th>enhance</th><td>9 &times; 725 B</td><td>8192</td><td>73728</td>"));
         assert!(html.contains("<tr><th>witness</th><td>256 &times; 32 B</td>"));
         assert!(html.contains("eight newest generations stay answerable"));
         assert!(!render(&sample()).contains("How this fleet works"));

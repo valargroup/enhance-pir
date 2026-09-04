@@ -536,8 +536,12 @@ fi
 if [[ "$rollout_ok" -eq 1 ]]; then
   expected_groups="$(jq 'length' <<<"$ENHANCE_WORKERS_JSON")"
   if ! jq -e --argjson expected "$expected_groups" '
+    (.generation.schema_version == 6) and
     (.generation.network == "main") and
     (.generation.pool == "ironwood") and
+    (.generation.record_bytes == 725) and
+    (.generation.records_per_row == 9) and
+    (.generation.row_bytes == 6525) and
     (.generation.setup_seed | type == "number") and
     ([.generation.shards[].worker] | unique | length) <= $expected and
     (.generation.shards | length) > 0 and

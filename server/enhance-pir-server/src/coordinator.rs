@@ -3,7 +3,7 @@ use crate::metrics;
 use crate::store::RecordJournal;
 use crate::types::{
     group_index_for_shard, DatabaseId, DatabaseLayout, GenerationManifest, ShardDescriptor,
-    TableManifest, PROTOCOL_REVISION,
+    TableManifest, PROTOCOL_REVISION, SCHEMA_VERSION,
 };
 use crate::wire::{
     decode_crs_blocks, decode_evaluate_response, encode_evaluate_request, EvaluateRequest,
@@ -832,6 +832,14 @@ impl CoordinatorState {
         let public_digest = Sha256::digest(&public_params);
         let mut epoch = [0; 8];
         epoch.copy_from_slice(&public_digest[..8]);
+        let parameter_id = format!(
+            "{PROTOCOL_REVISION}-schema{SCHEMA_VERSION}-{table}-bits{}-d{}-p{}-rows{}-cols{}",
+            layout.item_size_bits(),
+            rlwe.d,
+            ypir.p,
+            ypir.db_rows,
+            ypir.db_cols
+        );
         let manifest = TableManifest {
             record_bytes: layout.record_bytes as u32,
             records_per_row: layout.records_per_row as u32,
@@ -840,10 +848,7 @@ impl CoordinatorState {
             positions: journal.positions(),
             used_rows,
             logical_rows,
-            parameter_id: format!(
-                "{PROTOCOL_REVISION}-{table}-d{}-p{}-rows{}-cols{}",
-                rlwe.d, ypir.p, ypir.db_rows, ypir.db_cols
-            ),
+            parameter_id,
             setup_seed: table.setup_seed(),
             public_params_epoch: hex::encode(epoch),
             public_params_sha256: hex::encode(public_digest),

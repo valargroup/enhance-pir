@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 
 // Version 2 bound cached shard preprocessing to the domain-separated enhance setup seed.
 // Version 3 used the former wider action record. Version 4 namespaced table
-// artifacts. Version 5 is the 724-byte Enhance record and invalidates both.
-const ARTIFACT_VERSION: u16 = 5;
+// artifacts. Version 5 is the 724-byte Enhance record. Version 6 adds the
+// transaction flags byte and invalidates its cached preprocessing.
+const ARTIFACT_VERSION: u16 = 6;
 
 #[derive(Serialize, Deserialize)]
 struct ArtifactMetadata {
@@ -391,9 +392,9 @@ mod tests {
 
     #[test]
     fn enhance_rows_use_two_ipir_instances() {
-        // A 6,516-byte row is 52,128 bits and fits two 28,672-bit instances.
-        // Ten 724-byte records would exceed their combined capacity.
-        assert_eq!(crate::types::ENHANCE_LAYOUT.row_bytes(), 6_516);
+        // A 6,525-byte row is 52,200 bits and fits two 28,672-bit instances.
+        // Ten 725-byte records would exceed their combined capacity.
+        assert_eq!(crate::types::ENHANCE_LAYOUT.row_bytes(), 6_525);
         let (_, params) = shard_parameters(&crate::types::ENHANCE_LAYOUT).expect("params");
         assert_eq!(params.instances, 2);
         assert_eq!(params.db_cols, 4_096);

@@ -9,16 +9,24 @@ Enhance PIR is split at the network boundary.
   the Enhance v1 HTTP API.
 - `server/pir-apm` observes the running fleet.
 
-Every logical output position maps to a 724-byte `EnhanceRecord`. Nine records
-form one 6,516-byte row. This is the maximum that fits in two PIR instances;
-ten records would require a third instance. A record contains only `ephemeralKey`,
-`encCiphertext`, `cv_net`, and `outCiphertext`; transaction IDs, nullifiers,
-commitments, heights, and witness data are not stored in the active table.
+Every logical output position maps to a 725-byte `EnhanceRecord`. Nine records
+form one 6,525-byte row. This is the maximum that fits in two PIR instances;
+ten records would require a third instance. A record contains `ephemeralKey`,
+`encCiphertext`, `cv_net`, `outCiphertext`, and a flags byte. Bit 0 of the flags
+byte means the containing transaction has at least one transparent input or
+output; bits 1 through 7 are reserved and must be zero. Transaction IDs,
+nullifiers, commitments, heights, and witness data are not stored in the active
+table.
 
-The protocol identifier is `ironwood-enhance-pir-v1` and schema version is 5.
+The protocol identifier is `ironwood-enhance-pir-v1` and schema version is 6.
 Old memo/action endpoints and storage are not accepted as aliases. This is a
 breaking migration so that clients cannot accidentally mix incompatible record
 layouts.
+
+The transparent-bundle flag is derived by the snapshot builder from the full
+canonical transaction. It is not authenticated by Ironwood note decryption and
+is not committed by the note commitment, so clients rely on the snapshot
+builder for the correctness of this transaction-level metadata.
 
 ## Worker topology
 

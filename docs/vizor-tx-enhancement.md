@@ -7,7 +7,7 @@ record without revealing the selected position.
 
 ## Record format
 
-Schema 5 stores exactly 724 bytes per output position:
+Schema 6 stores exactly 725 bytes per output position:
 
 | Offset | Length | Field | Use |
 | ---: | ---: | --- | --- |
@@ -15,8 +15,10 @@ Schema 5 stores exactly 724 bytes per output position:
 | 32 | 580 | `encCiphertext` | Note and authenticated memo |
 | 612 | 32 | `cv_net` | OVK-based outgoing recovery |
 | 644 | 80 | `outCiphertext` | OVK-based outgoing recovery |
+| 724 | 1 | `flags` | Bit 0: containing transaction has transparent inputs or outputs |
 
-Nine consecutive records form a 6,516-byte PIR row. The client privately
+Bits 1 through 7 are reserved and must be zero. Nine consecutive records form a
+6,525-byte PIR row. The client privately
 retrieves the row and selects the requested record locally. The active table
 does not contain txids, nullifiers, note commitments, heights, or witness data.
 
@@ -27,6 +29,13 @@ does not contain txids, nullifiers, note commitments, heights, or witness data.
 sealed shards, workers, and HTTP routing. The protocol identifier is
 `ironwood-enhance-pir-v1`; clients must reject another identifier, schema,
 record width, row width, or setup seed.
+
+The flags byte is transaction metadata supplied by the snapshot builder. It is
+not authenticated by note decryption or committed by the on-chain note
+commitment. Wallet clients reject reserved bits and expose bit 0 to the
+application; persistence and transaction-ID fallback policy are intentionally
+deferred. Applications that act on bit 0 trust the builder to report it
+correctly.
 
 The client uses only:
 

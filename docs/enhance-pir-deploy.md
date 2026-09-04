@@ -2,7 +2,7 @@
 
 The production workflow builds and rolls out the Enhance coordinator, workers,
 and APM sidecar. Wallet clients were not deployed against the superseded API,
-so the server can move directly to schema 5, protocol
+so the server can move directly to schema 6, protocol
 `ironwood-enhance-pir-v1`, and the `/v1/enhance/*` endpoints.
 
 The manual workflow accepts a full commit SHA that must be the current `main`

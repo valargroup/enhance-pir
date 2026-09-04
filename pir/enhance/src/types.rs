@@ -1,14 +1,14 @@
 use ipir_sp::YpirSchemeParams;
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: u16 = 5;
+pub const SCHEMA_VERSION: u16 = 6;
 pub const PROTOCOL_REVISION: &str = "ironwood-enhance-pir-v1";
 pub const NETWORK: &str = "main";
 pub const POOL: &str = "ironwood";
 pub const ACTIVATION_HEIGHT: u64 = 3_428_143;
 pub const CONFIRMATIONS: u64 = 10;
 
-pub const RECORD_BYTES: usize = 724;
+pub const RECORD_BYTES: usize = 725;
 pub const RECORDS_PER_ROW: usize = 9;
 pub const ROW_BYTES: usize = RECORD_BYTES * RECORDS_PER_ROW;
 pub const SHARD_ROWS: usize = 8_192;
@@ -26,6 +26,9 @@ pub const RECORD_EPHEMERAL_KEY_OFFSET: usize = 0;
 pub const RECORD_ENC_CIPHERTEXT_OFFSET: usize = 32;
 pub const RECORD_CV_NET_OFFSET: usize = 612;
 pub const RECORD_OUT_CIPHERTEXT_OFFSET: usize = 644;
+pub const RECORD_FLAGS_OFFSET: usize = 724;
+pub const FLAG_HAS_TRANSPARENT_BUNDLE: u8 = 1 << 0;
+pub const KNOWN_FLAGS: u8 = FLAG_HAS_TRANSPARENT_BUNDLE;
 
 /// Pinned deterministic setup seed for the Enhance PIR protocol.
 pub const ENHANCE_SETUP_SEED: u64 = 0x7dc0_c1be_a8ed_2c29;
@@ -45,7 +48,23 @@ pub struct EnhanceRecordParts {
     pub enc_ciphertext: [u8; 580],
     pub cv_net: [u8; 32],
     pub out_ciphertext: [u8; 80],
+    pub has_transparent_bundle: bool,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvalidEnhanceRecordFlags(pub u8);
+
+impl std::fmt::Display for InvalidEnhanceRecordFlags {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "Enhance record has reserved flag bits set: 0x{:02x}",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for InvalidEnhanceRecordFlags {}
 
 impl EnhanceRecord {
     pub fn from_parts(parts: EnhanceRecordParts) -> Self {
@@ -55,7 +74,11 @@ impl EnhanceRecord {
         bytes[RECORD_ENC_CIPHERTEXT_OFFSET..RECORD_CV_NET_OFFSET]
             .copy_from_slice(&parts.enc_ciphertext);
         bytes[RECORD_CV_NET_OFFSET..RECORD_OUT_CIPHERTEXT_OFFSET].copy_from_slice(&parts.cv_net);
-        bytes[RECORD_OUT_CIPHERTEXT_OFFSET..].copy_from_slice(&parts.out_ciphertext);
+        bytes[RECORD_OUT_CIPHERTEXT_OFFSET..RECORD_FLAGS_OFFSET]
+            .copy_from_slice(&parts.out_ciphertext);
+        if parts.has_transparent_bundle {
+            bytes[RECORD_FLAGS_OFFSET] |= FLAG_HAS_TRANSPARENT_BUNDLE;
+        }
         Self(bytes)
     }
 
@@ -82,9 +105,21 @@ impl EnhanceRecord {
     }
 
     pub fn out_ciphertext(&self) -> &[u8; 80] {
-        self.0[RECORD_OUT_CIPHERTEXT_OFFSET..]
+        self.0[RECORD_OUT_CIPHERTEXT_OFFSET..RECORD_FLAGS_OFFSET]
             .try_into()
             .expect("fixed slice")
+    }
+
+    pub fn flags(&self) -> u8 {
+        self.0[RECORD_FLAGS_OFFSET]
+    }
+
+    pub fn has_transparent_bundle(&self) -> Result<bool, InvalidEnhanceRecordFlags> {
+        let flags = self.flags();
+        if flags & !KNOWN_FLAGS != 0 {
+            return Err(InvalidEnhanceRecordFlags(flags));
+        }
+        Ok(flags & FLAG_HAS_TRANSPARENT_BUNDLE != 0)
     }
 }
 
@@ -184,13 +219,26 @@ mod tests {
             enc_ciphertext: [2; 580],
             cv_net: [3; 32],
             out_ciphertext: [4; 80],
+            has_transparent_bundle: true,
         });
-        assert_eq!(RECORD_BYTES, 724);
-        assert_eq!(ROW_BYTES, 6_516);
+        assert_eq!(RECORD_BYTES, 725);
+        assert_eq!(ROW_BYTES, 6_525);
         assert_eq!(record.ephemeral_key(), &[1; 32]);
         assert_eq!(record.enc_ciphertext(), &[2; 580]);
         assert_eq!(record.cv_net(), &[3; 32]);
         assert_eq!(record.out_ciphertext(), &[4; 80]);
+        assert_eq!(record.has_transparent_bundle(), Ok(true));
+    }
+
+    #[test]
+    fn reserved_record_flags_are_rejected() {
+        let mut bytes = [0; RECORD_BYTES];
+        bytes[RECORD_FLAGS_OFFSET] = FLAG_HAS_TRANSPARENT_BUNDLE | 0x80;
+        let record = EnhanceRecord(bytes);
+        assert_eq!(
+            record.has_transparent_bundle(),
+            Err(InvalidEnhanceRecordFlags(0x81))
+        );
     }
 
     #[test]
