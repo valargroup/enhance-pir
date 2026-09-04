@@ -123,7 +123,7 @@ impl AlertEngine {
             let uses_processing =
                 self.schema.uses_processing(endpoint) || window.processing_available;
             let latency_label = if uses_processing {
-                "processing p99"
+                "post-body server p99"
             } else {
                 "p99"
             };
@@ -389,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    fn upload_latency_is_informational_but_processing_latency_pages() {
+    fn observed_total_is_informational_but_post_body_latency_pages() {
         let now = Instant::now();
         let host = healthy_host();
         let mut endpoints = BTreeMap::new();
@@ -446,7 +446,7 @@ mod tests {
             panic!("expected one processing-latency alert");
         };
         assert_eq!(alert.check, "query_high_latency");
-        assert!(alert.observed.contains("processing p99"));
+        assert!(alert.observed.contains("post-body server p99"));
         assert!(alert.threshold.contains("5.000s"));
     }
 
@@ -455,7 +455,7 @@ mod tests {
         let now = Instant::now();
         let host = healthy_host();
         let mut endpoints = BTreeMap::new();
-        // Not configured anywhere: pages on processing p99 at the default budget.
+        // Not configured anywhere: pages on post-body p99 at the default budget.
         endpoints.insert(
             "witness_query".into(),
             EndpointWindow {
@@ -496,7 +496,7 @@ mod tests {
             panic!("expected exactly one alert, got {}", fired.len());
         };
         assert_eq!(alert.check, "witness_query_high_latency");
-        assert!(alert.observed.contains("processing p99"));
+        assert!(alert.observed.contains("post-body server p99"));
     }
 
     #[test]

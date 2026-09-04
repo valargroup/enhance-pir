@@ -1418,6 +1418,10 @@ async fn query(State(state): State<CoordinatorState>, body: Bytes) -> Response {
 }
 
 async fn answer(state: &CoordinatorState, table: DatabaseId, body: &[u8]) -> Response {
+    // Axum has extracted the complete body before entering this function. Start
+    // the post-body scope before validation or admission queueing so it covers
+    // every server-side step that remains before the response is ready.
+    let _processing = metrics::start_processing(metrics::query_endpoint(table));
     let Ok(table_state) = state.table(table) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -1431,8 +1435,6 @@ async fn answer(state: &CoordinatorState, table: DatabaseId, body: &[u8]) -> Res
     else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    // The body is fully received by now, so this measures server work only.
-    let _processing = metrics::start_processing(metrics::query_endpoint(table));
     match state.answer_query(table, body).await {
         Ok(response) => response.into_response(),
         Err(error) => {

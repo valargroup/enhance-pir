@@ -2,7 +2,7 @@
 //!
 //! The scraped server decides the metric prefix and the endpoint allowlist;
 //! this crate only needs to know the prefix, the endpoint names, which
-//! endpoints report a separate post-upload "processing" distribution, and the
+//! endpoints report a separate post-body "processing" distribution, and the
 //! p99 budget each endpoint is paged on.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -148,7 +148,7 @@ impl Schema {
         self.endpoints.iter().any(|known| known == endpoint)
     }
 
-    /// Whether this endpoint is paged on its post-upload processing latency
+    /// Whether this endpoint is paged on its post-body server latency
     /// rather than the observed end-to-end latency.
     pub fn uses_processing(&self, endpoint: &str) -> bool {
         self.processing_endpoints.contains(endpoint)
