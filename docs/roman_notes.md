@@ -138,6 +138,98 @@ and split the older per 10M. Anonymity set is still large and is a strict improv
 
 Controller fans-out
 
+## Wallets
+
+### Wallet Cases
+
+A. Ironwood-only receive
+
+Today: enhance tx by id
+
+Changing to: Enhance PIR by output note commitment tree index.
+
+B. Wallet-funded Ironwood send
+
+Changing to: One Enhance PIR query per non-change action by output note commitment tree index.
+
+Result: Recover sent outputs using candidate OVKs
+
+C. Mixed transparent + Ironwood
+
+Today: enhance tx by id. Find Transparent outputs and match against wallet's address.
+
+Possible solution: PIR by tx ID for transparent outputs
+
+D. Transparent-only receive
+
+Today: `derived addresses` → `GetAddressUtxos`
+- The server returns currently unspent outputs. This discovers funds, but reveals the queried transparent addresses to the server.
+
+E. Spend of a known transparent UTXO
+
+Today: known outpoint → spender lookup
+- Legacy mode queries transactions involving the address.
+
+Possible solution: The new transparent-spend PIR instead queries the outpoint privately and records spent or unspent status through tip.
+
+### Architecture Possibilities
+
+#### Shielded Only Case
+
+For Ironwood-only transactions and mixed Ironwood + Transparent, use Ironwood Enhance PIR.
+
+For mixed Ironwood + Other Pools, fallback to today's LWD enhacement. The case should
+be rare enough for it to not matter.
+
+#### Handling Transparent
+
+1. **vin/vout in Compact Block**
+
+vin/vout in Compact Block is the approach upstream is pursuing.
+
+In this approach, the compact block data returns all data necessary for
+transparent management in the wallet.
+
+There is no need to do external public queries anymore because we can deconstruct
+and attribute wallet's full transparent ledger during sync.
+
+The downside is that every block pays additional transparent sync bandwidth.
+
+If someone does many transparent sends or spams, every wallet pays bandwidth overhead
+every block.
+
+2. **Transparent-PIR**
+
+For Transparent PIR, one PIR table is insufficient, and every case must be handled separately.
+
+First, facts:
+
+At height 3,471,419
+
+- Spent: 1,375,697 — 4.68%
+- Unspent: 28,033,883 — 95.32%
+- Total transparent outputs created: 29,409,580
+
+Around same time, there were 844,457 transparent addresses holding positive balance.
+
+First, it helps to answer: does my wallet own any transparent?
+
+Instead of wasting bandwidth or server compute for having every wallet query the
+full PIR database, we could have a light Bloom-filter like PIR table.
+
+Wallet wakes up and efficiently asks privately: "do I own any transparent at current tip?". If the answer is no, I do not need to do any further transparent PIR work.
+
+
+
+### Appendix
+
+#### Definitions
+
+- **vin**:
+
+- **vout**:
+
+
 ## Historical Prototypes
 
 - DAG Sync POC:
