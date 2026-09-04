@@ -31,7 +31,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{RwLock, Semaphore};
 
 pub use crate::types::ENHANCE_SETUP_SEED;
@@ -43,6 +43,8 @@ pub fn enhance_setup_seed_bytes() -> [u8; 32] {
 
 /// Default concurrent queries admitted per table pool.
 pub const DEFAULT_QUERY_SLOTS: usize = 2;
+
+const HEALTH_PHASE_GRACE_PERIOD: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub enum WorkerTarget {
@@ -200,7 +202,7 @@ pub struct CoordinatorState {
     tables: Arc<BTreeMap<DatabaseId, TableState>>,
     http: reqwest::Client,
     live: Arc<ArcSwap<Generations>>,
-    phase: Arc<RwLock<CoordinatorPhase>>,
+    status: Arc<RwLock<CoordinatorStatus>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -217,6 +219,11 @@ pub enum CoordinatorPhase {
     Failed {
         reason: String,
     },
+}
+
+struct CoordinatorStatus {
+    phase: CoordinatorPhase,
+    non_serving_since: Option<Instant>,
 }
 
 #[derive(Serialize)]
@@ -310,15 +317,24 @@ impl CoordinatorState {
             tables: Arc::new(tables),
             http,
             live: Arc::new(ArcSwap::from_pointee(Vec::new())),
-            phase: Arc::new(RwLock::new(CoordinatorPhase::Syncing {
-                current_height: 0,
-                target_height: 0,
+            status: Arc::new(RwLock::new(CoordinatorStatus {
+                phase: CoordinatorPhase::Syncing {
+                    current_height: 0,
+                    target_height: 0,
+                },
+                non_serving_since: Some(Instant::now()),
             })),
         })
     }
 
     pub async fn set_phase(&self, phase: CoordinatorPhase) {
-        *self.phase.write().await = phase;
+        let mut status = self.status.write().await;
+        if matches!(phase, CoordinatorPhase::Serving) {
+            status.non_serving_since = None;
+        } else if status.non_serving_since.is_none() {
+            status.non_serving_since = Some(Instant::now());
+        }
+        status.phase = phase;
     }
 
     pub fn tables(&self) -> impl Iterator<Item = DatabaseId> + '_ {
@@ -377,7 +393,7 @@ impl CoordinatorState {
     /// Probes each remote worker's health with a short timeout so a dead
     /// worker shows up on the dashboard without slowing the scrape down.
     pub async fn observe(&self) -> metrics::Observation {
-        let phase = self.phase.read().await.clone();
+        let phase = self.status.read().await.phase.clone();
         let retained = self.live.load();
         let newest = retained.first();
         let manifest = newest.map(|snapshot| &snapshot.manifest);
@@ -1347,7 +1363,7 @@ async fn handle_metrics(State(state): State<CoordinatorState>) -> Response {
 /// readiness follows the live snapshot rather than the `serving` phase; only
 /// a failed ingest, or having nothing published yet, reports 503.
 async fn ready(State(state): State<CoordinatorState>) -> Response {
-    let phase = state.phase.read().await.clone();
+    let phase = state.status.read().await.phase.clone();
     if is_ready(&phase, state.newest().is_some()) {
         (StatusCode::OK, "ready\n").into_response()
     } else {
@@ -1363,15 +1379,33 @@ fn is_ready(phase: &CoordinatorPhase, has_live_snapshot: bool) -> bool {
         )
 }
 
+fn health_status(phase: &CoordinatorPhase, non_serving_for: Duration) -> StatusCode {
+    match phase {
+        CoordinatorPhase::Serving => StatusCode::OK,
+        CoordinatorPhase::Failed { .. } => StatusCode::SERVICE_UNAVAILABLE,
+        CoordinatorPhase::Syncing { .. } | CoordinatorPhase::Building { .. } => {
+            if non_serving_for > HEALTH_PHASE_GRACE_PERIOD {
+                StatusCode::SERVICE_UNAVAILABLE
+            } else {
+                StatusCode::OK
+            }
+        }
+    }
+}
+
 async fn health(State(state): State<CoordinatorState>) -> Response {
-    let phase = state.phase.read().await.clone();
+    let (phase, non_serving_for) = {
+        let status = state.status.read().await;
+        (
+            status.phase.clone(),
+            status
+                .non_serving_since
+                .map_or(Duration::ZERO, |since| since.elapsed()),
+        )
+    };
     let retained = state.live.load();
     let newest = retained.first();
-    let status = if matches!(phase, CoordinatorPhase::Serving) {
-        StatusCode::OK
-    } else {
-        StatusCode::SERVICE_UNAVAILABLE
-    };
+    let status = health_status(&phase, non_serving_for);
     let tables = state
         .tables
         .iter()
@@ -1459,7 +1493,9 @@ mod tests {
         }
     }
 
-    use super::{is_ready, CoordinatorPhase};
+    use super::{health_status, is_ready, CoordinatorPhase, HEALTH_PHASE_GRACE_PERIOD};
+    use axum::http::StatusCode;
+    use std::time::Duration;
 
     #[test]
     fn readiness_follows_the_live_snapshot() {
@@ -1475,5 +1511,36 @@ mod tests {
         assert!(!is_ready(&building, false));
         assert!(!is_ready(&syncing, true));
         assert!(!is_ready(&failed, true));
+    }
+
+    #[test]
+    fn health_graces_short_syncs_and_builds() {
+        let syncing = CoordinatorPhase::Syncing {
+            current_height: 0,
+            target_height: 1,
+        };
+        let building = CoordinatorPhase::Building { anchor_height: 1 };
+        let failed = CoordinatorPhase::Failed { reason: "x".into() };
+
+        assert_eq!(
+            health_status(&CoordinatorPhase::Serving, Duration::ZERO),
+            StatusCode::OK
+        );
+        assert_eq!(health_status(&syncing, Duration::ZERO), StatusCode::OK);
+        assert_eq!(
+            health_status(&building, HEALTH_PHASE_GRACE_PERIOD),
+            StatusCode::OK
+        );
+        assert_eq!(
+            health_status(
+                &syncing,
+                HEALTH_PHASE_GRACE_PERIOD + Duration::from_millis(1)
+            ),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            health_status(&failed, Duration::ZERO),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
     }
 }
