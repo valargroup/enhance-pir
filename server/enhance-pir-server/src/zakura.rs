@@ -119,17 +119,13 @@ impl ZakuraClient {
         let records = block
             .transactions
             .iter()
-            .flat_map(|transaction| {
-                let has_transparent_bundle =
-                    !transaction.inputs().is_empty() || !transaction.outputs().is_empty();
-                transaction.ironwood_actions().map(move |action| {
-                    EnhanceRecord::from_parts(EnhanceRecordParts {
-                        ephemeral_key: <[u8; 32]>::from(&action.ephemeral_key),
-                        enc_ciphertext: action.enc_ciphertext.into(),
-                        cv_net: action.cv.into(),
-                        out_ciphertext: action.out_ciphertext.into(),
-                        has_transparent_bundle,
-                    })
+            .flat_map(|transaction| transaction.ironwood_actions())
+            .map(|action| {
+                EnhanceRecord::from_parts(EnhanceRecordParts {
+                    ephemeral_key: <[u8; 32]>::from(&action.ephemeral_key),
+                    enc_ciphertext: action.enc_ciphertext.into(),
+                    cv_net: action.cv.into(),
+                    out_ciphertext: action.out_ciphertext.into(),
                 })
             })
             .collect();

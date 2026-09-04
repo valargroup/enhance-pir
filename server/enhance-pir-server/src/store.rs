@@ -5,9 +5,9 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-// Version 5 is the 725-byte schema-v6 Enhance record. Older journals are
-// retained under a superseded directory and re-derived from the archive chain.
-const STORE_VERSION: u16 = 5;
+// Version 4 is the 724-byte Enhance record. Older ACTION journals are retained
+// under a superseded directory and re-derived from the archive chain.
+const STORE_VERSION: u16 = 4;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -363,7 +363,7 @@ mod tests {
         let manifest: serde_json::Value =
             serde_json::from_slice(&std::fs::read(dir.path().join("manifest.json")).expect("new"))
                 .expect("json");
-        assert_eq!(manifest["version"], 5);
+        assert_eq!(manifest["version"], 4);
         assert_eq!(manifest["table"], "enhance");
     }
 

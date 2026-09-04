@@ -4,7 +4,7 @@ This repository implements private Ironwood transaction enhancement. A wallet
 uses an output position to recover the encrypted data needed to complete a note
 without revealing the position to the server.
 
-The active protocol has one fixed-width, 725-byte record:
+The active protocol has one fixed-width, 724-byte record:
 
 | Field | Bytes | Purpose |
 | --- | ---: | --- |
@@ -12,7 +12,6 @@ The active protocol has one fixed-width, 725-byte record:
 | `encCiphertext` | 580 | Note and authenticated memo |
 | `cv_net` | 32 | OVK-based outgoing recovery |
 | `outCiphertext` | 80 | OVK-based outgoing recovery |
-| `flags` | 1 | Transaction metadata; bit 0 means the transaction has transparent inputs or outputs |
 
 ## Repository layout
 

@@ -27,7 +27,6 @@ fn record(position: u64) -> EnhanceRecord {
         enc_ciphertext: enc,
         cv_net: tag(3),
         out_ciphertext: [5; 80],
-        has_transparent_bundle: false,
     })
 }
 
