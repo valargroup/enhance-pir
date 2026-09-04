@@ -1,6 +1,6 @@
 use crate::ipir::{global_parameters, shard_parameters, ShardRuntime};
 use crate::store::RecordJournal;
-use crate::types::{setup_seed_bytes, DatabaseId};
+use crate::types::DatabaseId;
 use crate::wire::{
     decode_evaluate_request, encode_crs_blocks, encode_evaluate_response, EvaluateRequest,
 };
@@ -177,7 +177,8 @@ impl WorkerState {
             return Err("global and worker RLWE parameters differ".to_string());
         }
         let client = ipir_sp::IPIRClient::new(&global_rlwe, &global_params);
-        let setup = client.generate_public_query_setup_simplepir_from_seed(setup_seed_bytes());
+        let setup =
+            client.generate_public_query_setup_simplepir_from_seed(table.setup_seed_bytes());
         let artifact_dir = self.artifact_dir.clone();
         let (runtime, built) = tokio::task::spawn_blocking(move || {
             ShardRuntime::load_or_build(
@@ -273,13 +274,20 @@ impl WorkerState {
             }
         }
         let mut active = self.active.write().await;
-        active.insert(
-            request.generation,
-            ActiveGeneration {
-                generation: request.generation,
-                tables,
-            },
-        );
+        if let Some(existing) = active.get_mut(&request.generation) {
+            // A physical worker may own multiple logical tables (the dedicated
+            // spend worker owns both cold and warm). Table activation is
+            // incremental while the coordinator builds one atomic generation.
+            existing.tables.extend(tables);
+        } else {
+            active.insert(
+                request.generation,
+                ActiveGeneration {
+                    generation: request.generation,
+                    tables,
+                },
+            );
+        }
         while active.len() > RETAINED_GENERATIONS {
             let oldest = *active.keys().next().expect("nonempty generation map");
             active.remove(&oldest);

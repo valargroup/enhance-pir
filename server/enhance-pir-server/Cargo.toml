@@ -19,6 +19,7 @@ path = "src/bin/worker.rs"
 axum = "0.7"
 base64 = "0.22"
 enhance-pir = { path = "../../pir/enhance" }
+transparent-spend-pir = { path = "../../pir/transparent-spend" }
 arc-swap = "1"
 clap = { version = "4", features = ["derive"] }
 hex = "0.4"

@@ -38,6 +38,11 @@ impl EnhanceJournal {
             .map(|block| (block.height, block.hash.clone()))
     }
 
+    pub fn rewind_to_height(&mut self, height: Option<u64>) -> Result<(), IngestError> {
+        self.records.rewind_to_height(height)?;
+        Ok(())
+    }
+
     pub fn append_block(&mut self, block: &CanonicalBlock) -> Result<(), IngestError> {
         if self
             .records
@@ -87,6 +92,7 @@ mod tests {
             height: 3_428_143,
             hash: "01".repeat(32),
             records: vec![EnhanceRecord([7; enhance_pir::RECORD_BYTES])],
+            transparent_spends: vec![],
             tree_size: 1,
         };
         journal.append_block(&block).unwrap();

@@ -20,7 +20,7 @@ require_env() {
   fi
 }
 
-for name in ENHANCE_COORDINATOR_HOST ENHANCE_DEPLOY_USER ENHANCE_PUBLIC_URL ENHANCE_WORKERS_JSON; do
+for name in ENHANCE_COORDINATOR_HOST ENHANCE_DEPLOY_USER ENHANCE_PUBLIC_URL ENHANCE_WORKERS_JSON TRANSPARENT_SPEND_WORKER_JSON; do
   require_env "$name"
 done
 
@@ -60,7 +60,24 @@ if ! jq -e --arg coordinator "$ENHANCE_COORDINATOR_HOST" '
   exit 2
 fi
 
-SERVER_CONFIG="$(jq -c '{groups: map({name, replicas: [.replicas[] | {name, url: (.service_url | rtrimstr("/"))}]})}' <<<"$ENHANCE_WORKERS_JSON")"
+if ! jq -e --arg coordinator "$ENHANCE_COORDINATOR_HOST" --argjson enhance "$ENHANCE_WORKERS_JSON" '
+  (keys | sort) == ["name", "service_url", "ssh_host"] and
+  (.name == "transparent-spend-worker-01") and
+  (.ssh_host | type == "string" and test("^[A-Za-z0-9.-]+$") and . != $coordinator) and
+  (.service_url | type == "string" and test("^https?://[A-Za-z0-9.-]+:[0-9]+/?$")) and
+  ([.ssh_host] | inside([$enhance[].replicas[].ssh_host]) | not) and
+  ([.service_url | rtrimstr("/")] | inside([$enhance[].replicas[].service_url | rtrimstr("/")]) | not)
+' >/dev/null <<<"$TRANSPARENT_SPEND_WORKER_JSON"; then
+  echo "TRANSPARENT_SPEND_WORKER_JSON must name one distinct transparent-spend-worker-01" >&2
+  exit 2
+fi
+
+SERVER_CONFIG="$(jq -cn --argjson enhance "$ENHANCE_WORKERS_JSON" --argjson spend "$TRANSPARENT_SPEND_WORKER_JSON" '
+  {
+    groups: ($enhance | map({name, replicas: [.replicas[] | {name, url: (.service_url | rtrimstr("/"))}]})),
+    transparent_spend_groups: [{name: "transparent-spend-group-01", replicas: [{name: $spend.name, url: ($spend.service_url | rtrimstr("/"))}]}]
+  }
+')"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENHANCE_CADDYFILE="${ENHANCE_CADDYFILE:-$SCRIPT_DIR/../infra/digitalocean/production/deploy/Caddyfile}"
@@ -125,7 +142,7 @@ if [[ "$MODE" == "validate" ]]; then
 fi
 
 for name in ENHANCE_RELEASE_SHA ENHANCE_ARTIFACT_DIR ENHANCE_SSH_KEY_PATH ENHANCE_KNOWN_HOSTS_PATH \
-  ENHANCE_SERVER_SERVICE_FILE ENHANCE_WORKER_SERVICE_FILE ENHANCE_APM_SERVICE_FILE; do
+  ENHANCE_SERVER_SERVICE_FILE ENHANCE_WORKER_SERVICE_FILE TRANSPARENT_SPEND_WORKER_SERVICE_FILE ENHANCE_APM_SERVICE_FILE; do
   require_env "$name"
 done
 if [[ ! "$ENHANCE_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
@@ -171,6 +188,10 @@ copy_to() {
 
 mapfile -t WORKER_HOSTS < <(jq -r '.[].replicas[].ssh_host' <<<"$ENHANCE_WORKERS_JSON")
 mapfile -t WORKER_NAMES < <(jq -r '.[].replicas[].name' <<<"$ENHANCE_WORKERS_JSON")
+SPEND_WORKER_HOST="$(jq -r '.ssh_host' <<<"$TRANSPARENT_SPEND_WORKER_JSON")"
+SPEND_WORKER_NAME="$(jq -r '.name' <<<"$TRANSPARENT_SPEND_WORKER_JSON")"
+WORKER_HOSTS+=("$SPEND_WORKER_HOST")
+WORKER_NAMES+=("$SPEND_WORKER_NAME")
 REMOTE_STAGE="/tmp/enhance-pir-$ENHANCE_RELEASE_SHA"
 
 preflight_host() {
@@ -242,11 +263,11 @@ render_caddyfile "$ENHANCE_CADDYFILE" "$caddyfile_rendered"
   echo "PIR_APM_HEALTH_PATH=/v1/health"
   echo "PIR_APM_READY_PATH=/ready"
   echo "PIR_APM_METRIC_PREFIX=enhance"
-  echo "PIR_APM_ENDPOINTS=health,init,query"
+  echo "PIR_APM_ENDPOINTS=health,init,query,spend_init,spend_cold_query,spend_warm_query"
   echo "PIR_APM_INFORMATIONAL_ENDPOINTS=health"
-  echo "PIR_APM_PROCESSING_ENDPOINTS=query"
+  echo "PIR_APM_PROCESSING_ENDPOINTS=query,spend_cold_query,spend_warm_query"
   echo "PIR_APM_LATENCY_P99_SECONDS=1.0"
-  echo "PIR_APM_LATENCY_P99_OVERRIDES=query=5.0,init=2.0"
+  echo "PIR_APM_LATENCY_P99_OVERRIDES=query=5.0,init=2.0,spend_cold_query=5.0,spend_warm_query=5.0,spend_init=2.0"
   echo "PIR_APM_TITLE=Enhance PIR APM"
   echo "PIR_APM_ENVIRONMENT=$ENHANCE_APM_ENVIRONMENT"
   echo "PIR_APM_DATA_DIR=/srv/zakura/enhance-data"
@@ -294,7 +315,11 @@ fi
 REMOTE
 for host in "${WORKER_HOSTS[@]}"; do
   stage_file "$ENHANCE_ARTIFACT_DIR/enhance-pir-worker" "$host" enhance-pir-worker
-  stage_file "$ENHANCE_WORKER_SERVICE_FILE" "$host" enhance-pir-worker.service
+  if [[ "$host" == "$SPEND_WORKER_HOST" ]]; then
+    stage_file "$TRANSPARENT_SPEND_WORKER_SERVICE_FILE" "$host" enhance-pir-worker.service
+  else
+    stage_file "$ENHANCE_WORKER_SERVICE_FILE" "$host" enhance-pir-worker.service
+  fi
 done
 
 if [[ "$MODE" == "preflight" ]]; then
@@ -503,10 +528,11 @@ if [[ "$rollout_ok" -eq 1 ]]; then
 fi
 
 if [[ "$rollout_ok" -eq 1 ]]; then
-  # A record-layout change sets the journal aside and re-ingests from activation
-  # (~42K blocks at today's tip), so allow up to two hours before rolling back.
+  # The first transparent-spend rollout derives its reorg journal from genesis;
+  # later releases resume from its fixed-width block index. Allow the archive
+  # node up to five hours for that one-time local-RPC backfill.
   serving=0
-  for _ in $(seq 1 720); do
+  for _ in $(seq 1 1800); do
     if remote "$ENHANCE_COORDINATOR_HOST" "curl --fail --silent http://127.0.0.1:8080/v1/health | jq -e '.phase.phase == \"serving\"' >/dev/null"; then
       serving=1
       break
@@ -522,7 +548,10 @@ fi
 if [[ "$rollout_ok" -eq 1 ]]; then
   expected_workers="${#WORKER_HOSTS[@]}"
   if ! jq -e --argjson expected "$expected_workers" '
-    .phase.phase == "serving" and .tables.enhance.workers == $expected
+    .phase.phase == "serving" and
+    .tables.enhance.workers == ($expected - 1) and
+    .tables["transparent-spend-cold"].workers == 1 and
+    .tables["transparent-spend-warm"].workers == 1
   ' >/dev/null <<<"$health_json"; then
     rollout_ok=0
   fi

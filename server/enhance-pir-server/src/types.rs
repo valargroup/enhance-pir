@@ -1,11 +1,11 @@
 //! Server-internal geometry adapters for the single Enhance PIR database.
 
 pub use enhance_pir::types::{
-    group_index_for_shard, logical_rows_for, setup_seed_bytes, used_rows_for,
-    worker_index_for_shard, EnhanceGeneration, EnhanceRecord, EnhanceRecordParts, ShardDescriptor,
-    ACTIVATION_HEIGHT, CONFIRMATIONS, ENHANCE_SETUP_SEED, ITEM_SIZE_BITS, NETWORK, POOL,
-    PROTOCOL_REVISION, RECORDS_PER_ROW, RECORD_BYTES, ROW_BYTES, SCHEMA_VERSION, SHARDS_PER_GROUP,
-    SHARDS_PER_WORKER, SHARD_POSITIONS, SHARD_ROWS,
+    group_index_for_shard, logical_rows_for, used_rows_for, worker_index_for_shard,
+    EnhanceGeneration, EnhanceRecord, EnhanceRecordParts, ShardDescriptor, ACTIVATION_HEIGHT,
+    ENHANCE_SETUP_SEED, ITEM_SIZE_BITS, NETWORK, POOL, PROTOCOL_REVISION, RECORDS_PER_ROW,
+    RECORD_BYTES, ROW_BYTES, SCHEMA_VERSION, SHARDS_PER_GROUP, SHARDS_PER_WORKER, SHARD_POSITIONS,
+    SHARD_ROWS,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -14,21 +14,44 @@ use std::collections::BTreeMap;
 #[serde(rename_all = "kebab-case")]
 pub enum DatabaseId {
     Enhance,
+    TransparentSpendCold,
+    TransparentSpendWarm,
 }
 
 impl DatabaseId {
-    pub const ALL: [Self; 1] = [Self::Enhance];
+    pub const ALL: [Self; 3] = [
+        Self::Enhance,
+        Self::TransparentSpendCold,
+        Self::TransparentSpendWarm,
+    ];
 
     pub const fn as_str(self) -> &'static str {
-        "enhance"
+        match self {
+            Self::Enhance => "enhance",
+            Self::TransparentSpendCold => "transparent-spend-cold",
+            Self::TransparentSpendWarm => "transparent-spend-warm",
+        }
     }
 
     pub const fn layout(self) -> DatabaseLayout {
-        ENHANCE_LAYOUT
+        match self {
+            Self::Enhance => ENHANCE_LAYOUT,
+            Self::TransparentSpendCold | Self::TransparentSpendWarm => TRANSPARENT_SPEND_LAYOUT,
+        }
     }
 
     pub const fn setup_seed(self) -> u64 {
-        ENHANCE_SETUP_SEED
+        match self {
+            Self::Enhance => ENHANCE_SETUP_SEED,
+            Self::TransparentSpendCold => transparent_spend_pir::COLD_SETUP_SEED,
+            Self::TransparentSpendWarm => transparent_spend_pir::WARM_SETUP_SEED,
+        }
+    }
+
+    pub fn setup_seed_bytes(self) -> [u8; 32] {
+        let mut bytes = [0; 32];
+        bytes[..8].copy_from_slice(&self.setup_seed().to_le_bytes());
+        bytes
     }
 }
 
@@ -42,9 +65,12 @@ impl std::str::FromStr for DatabaseId {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        (value == "enhance")
-            .then_some(Self::Enhance)
-            .ok_or_else(|| format!("unknown PIR database: {value:?}"))
+        match value {
+            "enhance" => Ok(Self::Enhance),
+            "transparent-spend-cold" => Ok(Self::TransparentSpendCold),
+            "transparent-spend-warm" => Ok(Self::TransparentSpendWarm),
+            _ => Err(format!("unknown PIR database: {value:?}")),
+        }
     }
 }
 
@@ -85,6 +111,12 @@ pub const ENHANCE_LAYOUT: DatabaseLayout = DatabaseLayout {
     record_bytes: RECORD_BYTES,
     records_per_row: RECORDS_PER_ROW,
     shard_rows: SHARD_ROWS,
+};
+
+pub const TRANSPARENT_SPEND_LAYOUT: DatabaseLayout = DatabaseLayout {
+    record_bytes: transparent_spend_pir::ROW_BYTES,
+    records_per_row: 1,
+    shard_rows: transparent_spend_pir::SHARD_ROWS,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

@@ -913,6 +913,7 @@ dependencies = [
  "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
+ "transparent-spend-pir",
  "zakura-chain",
 ]
 
@@ -3490,6 +3491,22 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
+]
+
+[[package]]
+name = "transparent-spend-pir"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "hex",
+ "ipir-sp",
+ "rand 0.8.5",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

@@ -44,6 +44,12 @@ variable "worker_size" {
   default     = "s-4vcpu-8gb"
 }
 
+variable "transparent_spend_worker_size" {
+  description = "Dedicated transparent-spend PIR worker size (8 vCPU, 16 GiB)."
+  type        = string
+  default     = "s-8vcpu-16gb"
+}
+
 variable "image" {
   type    = string
   default = "ubuntu-24-04-x64"

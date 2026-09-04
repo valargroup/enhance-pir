@@ -7,7 +7,7 @@ record without revealing the selected position.
 
 ## Record format
 
-Schema 5 stores exactly 724 bytes per output position:
+Schema 6 stores exactly 725 bytes per output position:
 
 | Offset | Length | Field | Use |
 | ---: | ---: | --- | --- |
@@ -15,8 +15,9 @@ Schema 5 stores exactly 724 bytes per output position:
 | 32 | 580 | `encCiphertext` | Note and authenticated memo |
 | 612 | 32 | `cv_net` | OVK-based outgoing recovery |
 | 644 | 80 | `outCiphertext` | OVK-based outgoing recovery |
+| 724 | 1 | flags | Transaction has transparent inputs and/or outputs |
 
-Nine consecutive records form a 6,516-byte PIR row. The client privately
+Nine consecutive records form a 6,525-byte PIR row. The client privately
 retrieves the row and selects the requested record locally. The active table
 does not contain txids, nullifiers, note commitments, heights, or witness data.
 

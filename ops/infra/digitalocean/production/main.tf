@@ -12,8 +12,9 @@ locals {
       ]
     },
   ]
-  worker_names    = flatten([for group in local.worker_groups : group.replicas])
-  common_packages = ["ca-certificates", "curl", "jq", "htop"]
+  worker_names                  = flatten([for group in local.worker_groups : group.replicas])
+  transparent_spend_worker_name = "transparent-spend-worker-01"
+  common_packages               = ["ca-certificates", "curl", "jq", "htop"]
 }
 
 resource "digitalocean_vpc" "enhance" {
@@ -32,6 +33,14 @@ resource "digitalocean_tag" "coordinator" {
 
 resource "digitalocean_tag" "worker" {
   name = "enhance-pir-worker"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "digitalocean_tag" "transparent_spend_worker" {
+  name = "transparent-spend-pir-worker"
 
   lifecycle {
     create_before_destroy = true
@@ -68,6 +77,23 @@ resource "digitalocean_droplet" "worker" {
   ssh_keys   = var.ssh_key_ids
   vpc_uuid   = digitalocean_vpc.enhance.id
   tags       = [digitalocean_tag.worker.name]
+  monitoring = true
+  backups    = var.enable_backups
+  ipv6       = true
+
+  user_data = templatefile("${path.module}/cloud-init-worker.yaml.tftpl", {
+    packages = jsonencode(local.common_packages)
+  })
+}
+
+resource "digitalocean_droplet" "transparent_spend_worker" {
+  name       = local.transparent_spend_worker_name
+  image      = var.image
+  region     = var.region
+  size       = var.transparent_spend_worker_size
+  ssh_keys   = var.ssh_key_ids
+  vpc_uuid   = digitalocean_vpc.enhance.id
+  tags       = [digitalocean_tag.transparent_spend_worker.name]
   monitoring = true
   backups    = var.enable_backups
   ipv6       = true
@@ -185,11 +211,53 @@ resource "digitalocean_firewall" "worker" {
   }
 }
 
+resource "digitalocean_firewall" "transparent_spend_worker" {
+  name = "transparent-spend-pir-worker"
+  tags = [digitalocean_tag.transparent_spend_worker.name]
+
+  inbound_rule {
+    protocol    = "tcp"
+    port_range  = "22"
+    source_tags = [digitalocean_tag.coordinator.name]
+  }
+
+  dynamic "inbound_rule" {
+    for_each = var.allowed_ssh_cidrs
+    content {
+      protocol         = "tcp"
+      port_range       = "22"
+      source_addresses = [inbound_rule.value]
+    }
+  }
+
+  inbound_rule {
+    protocol    = "tcp"
+    port_range  = "8091"
+    source_tags = [digitalocean_tag.coordinator.name]
+  }
+
+  outbound_rule {
+    protocol              = "tcp"
+    port_range            = "1-65535"
+    destination_addresses = ["0.0.0.0/0", "::/0"]
+  }
+  outbound_rule {
+    protocol              = "udp"
+    port_range            = "1-65535"
+    destination_addresses = ["0.0.0.0/0", "::/0"]
+  }
+  outbound_rule {
+    protocol              = "icmp"
+    destination_addresses = ["0.0.0.0/0", "::/0"]
+  }
+}
+
 resource "digitalocean_project_resources" "enhance" {
   project = var.project_id
   resources = concat(
     [digitalocean_droplet.coordinator.urn, digitalocean_volume.zakura.urn],
     [for worker in digitalocean_droplet.worker : worker.urn],
+    [digitalocean_droplet.transparent_spend_worker.urn],
   )
 }
 

@@ -18,6 +18,14 @@ output "worker_private_ipv4" {
   value = [for worker in digitalocean_droplet.worker : worker.ipv4_address_private]
 }
 
+output "transparent_spend_worker" {
+  value = {
+    name         = local.transparent_spend_worker_name
+    public_ipv4  = digitalocean_droplet.transparent_spend_worker.ipv4_address
+    private_ipv4 = digitalocean_droplet.transparent_spend_worker.ipv4_address_private
+  }
+}
+
 output "worker_groups" {
   description = "Stable shard groups and the two replica Droplets in each group."
   value = [for group in local.worker_groups : {

@@ -5,9 +5,9 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-// Version 4 is the 724-byte Enhance record. Older ACTION journals are retained
+// Version 5 is the 725-byte schema-v6 Enhance record. Older journals are retained
 // under a superseded directory and re-derived from the archive chain.
-const STORE_VERSION: u16 = 4;
+const STORE_VERSION: u16 = 5;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -173,6 +173,33 @@ impl RecordJournal {
 
     pub fn blocks(&self) -> &[BlockEntry] {
         &self.manifest.blocks
+    }
+
+    /// Removes every block above `height`, or all blocks when `height` is `None`.
+    /// The records file is truncated before the replacement manifest is committed.
+    pub fn rewind_to_height(&mut self, height: Option<u64>) -> Result<(), StoreError> {
+        let keep = height.map_or(0, |height| {
+            self.manifest
+                .blocks
+                .partition_point(|block| block.height <= height)
+        });
+        let tree_size = self.manifest.blocks.get(keep).map_or_else(
+            || {
+                self.manifest
+                    .blocks
+                    .last()
+                    .filter(|_| keep == self.manifest.blocks.len())
+                    .map_or(0, |block| block.first_position + block.action_count)
+            },
+            |block| block.first_position,
+        );
+        OpenOptions::new()
+            .write(true)
+            .open(&self.records_path)?
+            .set_len(tree_size * self.layout.record_bytes as u64)?;
+        self.manifest.blocks.truncate(keep);
+        self.manifest.tree_size = tree_size;
+        self.persist_manifest()
     }
 
     pub fn append_block<R: AsRef<[u8]>>(
@@ -363,7 +390,7 @@ mod tests {
         let manifest: serde_json::Value =
             serde_json::from_slice(&std::fs::read(dir.path().join("manifest.json")).expect("new"))
                 .expect("json");
-        assert_eq!(manifest["version"], 4);
+        assert_eq!(manifest["version"], 5);
         assert_eq!(manifest["table"], "enhance");
     }
 
@@ -379,5 +406,21 @@ mod tests {
         let store = open(dir.path());
         assert_eq!(store.tree_size(), 0);
         assert!(dir.path().join("superseded-v3-action/records.bin").exists());
+    }
+
+    #[test]
+    fn rewind_truncates_records_and_allows_replacement_blocks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut store = open(dir.path());
+        store.append_block(10, "aa".into(), &[record(1)]).unwrap();
+        store
+            .append_block(11, "bb".into(), &[record(2), record(3)])
+            .unwrap();
+        store.rewind_to_height(Some(10)).unwrap();
+        assert_eq!(store.tree_size(), 1);
+        assert_eq!(store.last_block().unwrap().hash, "aa");
+        store.append_block(11, "cc".into(), &[record(4)]).unwrap();
+        assert_eq!(store.tree_size(), 2);
+        assert_eq!(store.read_records(1, 1).unwrap(), vec![4; RECORD_BYTES]);
     }
 }

@@ -37,6 +37,8 @@ fn record(position: u64) -> EnhanceRecord {
         enc_ciphertext: enc,
         cv_net: tag(3),
         out_ciphertext: out,
+        has_transparent_inputs: false,
+        has_transparent_outputs: false,
     })
 }
 
@@ -435,9 +437,9 @@ async fn enhance_v1_routes_expose_only_the_current_generation() {
     assert_eq!(status, StatusCode::OK);
     let wire: EnhanceSession = serde_json::from_slice(&body).unwrap();
     let manifest = &wire.generation;
-    assert_eq!(manifest.schema_version, 5);
+    assert_eq!(manifest.schema_version, enhance_pir::SCHEMA_VERSION);
     assert_eq!(manifest.generation, 3_428_143);
-    assert_eq!(manifest.record_bytes, 724);
+    assert_eq!(manifest.record_bytes, enhance_pir::RECORD_BYTES as u32);
     assert!(manifest.parameter_id.contains("-enhance-"));
     assert_eq!(wire.params, expected_session.params);
     let public_params = BASE64_STANDARD.decode(&wire.public_params_base64).unwrap();

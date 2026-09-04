@@ -33,18 +33,30 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{RwLock, Semaphore};
+use transparent_spend_pir::{
+    ShardDescriptor as SpendShardDescriptor, TransparentSpendGeneration, TransparentSpendSession,
+    TransparentSpendTableSession, NETWORK as SPEND_NETWORK,
+    PROTOCOL_REVISION as SPEND_PROTOCOL_REVISION, SCHEMA_VERSION as SPEND_SCHEMA_VERSION,
+    WARM_BLOCKS,
+};
 
 pub use crate::types::ENHANCE_SETUP_SEED;
 
 /// The ENHANCE table's expanded setup seed.
 pub fn enhance_setup_seed_bytes() -> [u8; 32] {
-    crate::types::setup_seed_bytes()
+    DatabaseId::Enhance.setup_seed_bytes()
 }
 
 /// Default concurrent queries admitted per table pool.
 pub const DEFAULT_QUERY_SLOTS: usize = 2;
 
 const HEALTH_PHASE_GRACE_PERIOD: Duration = Duration::from_secs(30);
+
+fn next_generation(previous: Option<u64>, tip_height: u64) -> u64 {
+    previous.map_or(tip_height, |generation| {
+        tip_height.max(generation.saturating_add(1))
+    })
+}
 
 #[derive(Clone)]
 pub enum WorkerTarget {
@@ -377,6 +389,59 @@ impl CoordinatorState {
         })
     }
 
+    /// Both transparent-spend tiers captured from the same best-chain tip.
+    pub fn transparent_spend_session(&self) -> Option<TransparentSpendSession> {
+        let snapshot = self.newest()?;
+        let cold_end_height = snapshot.manifest.anchor_height.saturating_sub(WARM_BLOCKS);
+        let table_session = |database: DatabaseId| {
+            let table = snapshot.tables.get(&database)?;
+            let manifest = &table.manifest;
+            Some(TransparentSpendTableSession {
+                generation: TransparentSpendGeneration {
+                    schema_version: SPEND_SCHEMA_VERSION,
+                    protocol_revision: SPEND_PROTOCOL_REVISION.to_string(),
+                    network: SPEND_NETWORK.to_string(),
+                    tip_height: snapshot.manifest.anchor_height,
+                    tip_block_hash: snapshot.manifest.anchor_block_hash.clone(),
+                    ironwood_tree_size: snapshot.manifest.ironwood_tree_size,
+                    generation: snapshot.manifest.generation,
+                    cold_end_height,
+                    buckets: manifest.positions,
+                    row_bytes: manifest.row_bytes,
+                    shard_rows: manifest.shard_rows,
+                    logical_rows: manifest.logical_rows,
+                    parameter_id: manifest.parameter_id.clone(),
+                    setup_seed: manifest.setup_seed,
+                    public_params_epoch: manifest.public_params_epoch.clone(),
+                    public_params_sha256: manifest.public_params_sha256.clone(),
+                    shards: manifest
+                        .shards
+                        .iter()
+                        .map(|shard| SpendShardDescriptor {
+                            shard_id: shard.shard_id,
+                            global_row_start: shard.global_row_start,
+                            populated_positions: shard.populated_positions,
+                            rows_sha256: shard.rows_sha256.clone(),
+                            sealed: shard.sealed,
+                            worker: shard.worker.clone(),
+                        })
+                        .collect(),
+                },
+                params: table.ypir.clone(),
+                public_params_base64: BASE64_STANDARD.encode(&table.public_params),
+            })
+        };
+        Some(TransparentSpendSession {
+            tip_height: snapshot.manifest.anchor_height,
+            tip_block_hash: snapshot.manifest.anchor_block_hash.clone(),
+            ironwood_tree_size: snapshot.manifest.ironwood_tree_size,
+            generation: snapshot.manifest.generation,
+            cold_end_height,
+            cold: table_session(DatabaseId::TransparentSpendCold)?,
+            warm: table_session(DatabaseId::TransparentSpendWarm)?,
+        })
+    }
+
     /// Every distinct replica across all pools, in first-seen group order.
     fn workers(&self) -> Vec<WorkerTarget> {
         let mut seen = HashSet::new();
@@ -576,7 +641,12 @@ impl CoordinatorState {
         let anchor_height = anchor.height;
         self.set_phase(CoordinatorPhase::Building { anchor_height })
             .await;
-        let generation = anchor_height;
+        // Heights are not unique across same-height reorgs. Reusing one would
+        // let workers replace shards underneath an older retained snapshot.
+        let generation = next_generation(
+            self.newest().map(|snapshot| snapshot.manifest.generation),
+            anchor_height,
+        );
         let ironwood_tree_size = sources
             .iter()
             .find(|source| source.table() == DatabaseId::Enhance)
@@ -1279,10 +1349,13 @@ const QUERY_BODY_LIMIT: usize = 64 * 1024 * 1024;
 pub fn router(state: CoordinatorState) -> Router {
     let queries = Router::new()
         .route("/v1/enhance/query", post(query))
+        .route("/v1/transparent-spend/cold/query", post(query_spend_cold))
+        .route("/v1/transparent-spend/warm/query", post(query_spend_warm))
         .layer(axum::extract::DefaultBodyLimit::max(QUERY_BODY_LIMIT));
     Router::new()
         .route("/v1/health", get(health))
         .route("/v1/enhance/init", get(enhance_session))
+        .route("/v1/transparent-spend/init", get(transparent_spend_session))
         .merge(queries)
         .route("/metrics", get(handle_metrics))
         .route("/ready", get(ready))
@@ -1447,8 +1520,23 @@ async fn enhance_session(State(state): State<CoordinatorState>) -> Response {
     }
 }
 
+async fn transparent_spend_session(State(state): State<CoordinatorState>) -> Response {
+    match state.transparent_spend_session() {
+        Some(session) => Json(session).into_response(),
+        None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
 async fn query(State(state): State<CoordinatorState>, body: Bytes) -> Response {
     answer(&state, DatabaseId::Enhance, &body).await
+}
+
+async fn query_spend_cold(State(state): State<CoordinatorState>, body: Bytes) -> Response {
+    answer(&state, DatabaseId::TransparentSpendCold, &body).await
+}
+
+async fn query_spend_warm(State(state): State<CoordinatorState>, body: Bytes) -> Response {
+    answer(&state, DatabaseId::TransparentSpendWarm, &body).await
 }
 
 async fn answer(state: &CoordinatorState, table: DatabaseId, body: &[u8]) -> Response {
@@ -1480,6 +1568,13 @@ async fn answer(state: &CoordinatorState, table: DatabaseId, body: &[u8]) -> Res
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn same_height_reorg_gets_a_distinct_generation() {
+        assert_eq!(super::next_generation(None, 100), 100);
+        assert_eq!(super::next_generation(Some(100), 100), 101);
+        assert_eq!(super::next_generation(Some(101), 105), 105);
+    }
+
     /// Every table's hint (at most about 1.5x its shard bytes on the POC) must
     /// fit the read limit with room to spare.
     #[test]

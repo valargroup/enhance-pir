@@ -4,8 +4,11 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::json;
 use std::path::Path;
+use transparent_spend_pir::TransparentSpendEntry;
 use zakura_chain::block::Block;
 use zakura_chain::serialization::ZcashDeserialize;
+
+use crate::types::ACTIVATION_HEIGHT;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ZakuraError {
@@ -40,6 +43,7 @@ pub struct CanonicalBlock {
     pub height: u64,
     pub hash: String,
     pub records: Vec<EnhanceRecord>,
+    pub transparent_spends: Vec<TransparentSpendEntry>,
     pub tree_size: u64,
 }
 
@@ -97,6 +101,10 @@ impl ZakuraClient {
         self.call("getblockcount", json!([])).await
     }
 
+    pub async fn block_hash(&self, height: u64) -> Result<String, ZakuraError> {
+        self.call("getblockhash", json!([height])).await
+    }
+
     pub async fn tree_size(&self, height: u64) -> Result<u64, ZakuraError> {
         let block: VerboseBlock = self
             .call("getblock", json!([height.to_string(), 2]))
@@ -119,21 +127,51 @@ impl ZakuraClient {
         let records = block
             .transactions
             .iter()
-            .flat_map(|transaction| transaction.ironwood_actions())
-            .map(|action| {
-                EnhanceRecord::from_parts(EnhanceRecordParts {
-                    ephemeral_key: <[u8; 32]>::from(&action.ephemeral_key),
-                    enc_ciphertext: action.enc_ciphertext.into(),
-                    cv_net: action.cv.into(),
-                    out_ciphertext: action.out_ciphertext.into(),
+            .flat_map(|transaction| {
+                let has_transparent_inputs = transaction.has_transparent_inputs();
+                let has_transparent_outputs = transaction.has_transparent_outputs();
+                transaction.ironwood_actions().map(move |action| {
+                    EnhanceRecord::from_parts(EnhanceRecordParts {
+                        ephemeral_key: <[u8; 32]>::from(&action.ephemeral_key),
+                        enc_ciphertext: action.enc_ciphertext.into(),
+                        cv_net: action.cv.into(),
+                        out_ciphertext: action.out_ciphertext.into(),
+                        has_transparent_inputs,
+                        has_transparent_outputs,
+                    })
                 })
             })
             .collect();
-        let tree_size = self.tree_size(height).await?;
+        let spend_height = u32::try_from(height)
+            .map_err(|_| ZakuraError::Block(format!("block height {height} exceeds u32")))?;
+        let mut transparent_spends = Vec::new();
+        for (transaction_index, transaction) in block.transactions.iter().enumerate() {
+            let transaction_index = u16::try_from(transaction_index).map_err(|_| {
+                ZakuraError::Block(format!("block {height} has too many transactions"))
+            })?;
+            let spending_txid = transaction.hash().0;
+            transparent_spends.extend(transaction.spent_outpoints().map(|outpoint| {
+                TransparentSpendEntry {
+                    outpoint_txid: outpoint.hash.0,
+                    outpoint_index: outpoint.index,
+                    spending_txid,
+                    spend_height,
+                    transaction_index,
+                }
+            }));
+        }
+        // Ironwood tree metadata does not exist before activation, while the
+        // transparent-spend journal deliberately starts at genesis.
+        let tree_size = if height >= ACTIVATION_HEIGHT {
+            self.tree_size(height).await?
+        } else {
+            0
+        };
         Ok(CanonicalBlock {
             height,
             hash,
             records,
+            transparent_spends,
             tree_size,
         })
     }

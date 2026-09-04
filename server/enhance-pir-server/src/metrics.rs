@@ -27,7 +27,7 @@ use prometheus::{
 };
 
 use crate::coordinator::CoordinatorPhase;
-use crate::types::{DatabaseId, ACTIVATION_HEIGHT, CONFIRMATIONS, SHARDS_PER_WORKER};
+use crate::types::{DatabaseId, ACTIVATION_HEIGHT, SHARDS_PER_WORKER};
 
 struct Metrics {
     registry: Registry,
@@ -428,6 +428,8 @@ pub fn query_endpoint(_table: DatabaseId) -> &'static str {
 fn table_endpoint(table: DatabaseId, endpoint: &str) -> Option<&'static str> {
     Some(match (table, endpoint) {
         (DatabaseId::Enhance, "query") => "query",
+        (DatabaseId::TransparentSpendCold, "query") => "spend_cold_query",
+        (DatabaseId::TransparentSpendWarm, "query") => "spend_warm_query",
         _ => return None,
     })
 }
@@ -442,6 +444,9 @@ pub fn allowlisted_endpoint(method: &axum::http::Method, path: &str) -> Option<&
         (&Method::GET, "/v1/health") => return Some("health"),
         (&Method::GET, "/v1/enhance/init") => return Some("init"),
         (&Method::POST, "/v1/enhance/query") => return Some("query"),
+        (&Method::GET, "/v1/transparent-spend/init") => return Some("spend_init"),
+        (&Method::POST, "/v1/transparent-spend/cold/query") => return Some("spend_cold_query"),
+        (&Method::POST, "/v1/transparent-spend/warm/query") => return Some("spend_warm_query"),
         _ => {}
     }
     let rest = path.strip_prefix("/v1/")?;
@@ -702,7 +707,8 @@ pub fn record_observation(observation: &Observation) {
             .with_label_values(&label)
             .set(clamp(group.ready_replicas));
     }
-    m.layout_confirmations.set(clamp(CONFIRMATIONS));
+    // Generations are now built at the current best-chain tip.
+    m.layout_confirmations.set(0);
     m.layout_activation_height.set(clamp(ACTIVATION_HEIGHT));
 }
 
@@ -1052,7 +1058,7 @@ mod tests {
             "enhance_worker_total_memory_bytes{{worker=\"worker-1\"}} {}",
             64u64 << 30
         )));
-        assert!(body.contains(&format!("enhance_layout_confirmations {}", CONFIRMATIONS)));
+        assert!(body.contains("enhance_layout_confirmations 0"));
         assert!(!body.contains("enhance_layout_shard_positions"));
         assert!(!body.contains("enhance_snapshot_workers"));
     }

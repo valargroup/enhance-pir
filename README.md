@@ -4,7 +4,7 @@ This repository implements private Ironwood transaction enhancement. A wallet
 uses an output position to recover the encrypted data needed to complete a note
 without revealing the position to the server.
 
-The active protocol has one fixed-width, 724-byte record:
+The active Enhance protocol has one fixed-width, 725-byte record:
 
 | Field | Bytes | Purpose |
 | --- | ---: | --- |
@@ -12,11 +12,13 @@ The active protocol has one fixed-width, 724-byte record:
 | `encCiphertext` | 580 | Note and authenticated memo |
 | `cv_net` | 32 | OVK-based outgoing recovery |
 | `outCiphertext` | 80 | OVK-based outgoing recovery |
+| flags | 1 | Presence of transaction-wide transparent inputs/outputs |
 
 ## Repository layout
 
 ```text
-pir/enhance/                 public protocol types and client
+pir/enhance/                 Enhance protocol types and client
+pir/transparent-spend/       outpoint-keyed spend protocol and client
 server/enhance-pir-server/   coordinator, worker, ingest, and storage
 server/pir-apm/              operational dashboard and alerting
 ops/                         deployment tooling and infrastructure
@@ -25,7 +27,7 @@ docs/archive/                historical designs, not current behavior
 demos/legacy-spendability/   inactive nullifier and witness experiments
 ```
 
-The root Cargo workspace contains active Enhance code only. The old nullifier
+The root Cargo workspace contains active PIR code only. The old nullifier
 and witness demos are an excluded, independently buildable workspace; CI does
 not build or deploy them.
 
@@ -56,6 +58,9 @@ The public API:
 - `GET /v1/health`
 - `GET /v1/enhance/init`
 - `POST /v1/enhance/query`
+- `GET /v1/transparent-spend/init`
+- `POST /v1/transparent-spend/cold/query`
+- `POST /v1/transparent-spend/warm/query`
 
 See [architecture](docs/architecture.md) and the
 [deployment runbook](docs/enhance-pir-deploy.md). No deployed wallet client
