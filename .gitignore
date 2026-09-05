@@ -15,3 +15,6 @@ monitor.sh
 **/*.tfvars
 !**/*.tfvars.example
 **/*.tfplan
+
+# Go build output from the BIP 158 cross-check generator.
+/pir/transparent-filter/tests/crosscheck/crosscheck
