@@ -1,0 +1,22 @@
+{
+  "blocks_compared": 1152,
+  "byte_identical": 1152,
+  "classification": "live mainnet cross-check; independent construction paths",
+  "height_range": [
+    3470268,
+    3471419
+  ],
+  "how_compared": "1,150 blocks read from the service's own store; the final 2 read back through GET /v1/filters/range, which additionally checks envelope framing and leaves no trailing bytes.",
+  "ingest_throughput": {
+    "batched_seconds_per_200_blocks": 120,
+    "full_1152_block_range_seconds": 1045,
+    "note": "Over an SSH tunnel to the coordinator, where each RPC round trip costs ~0.94s. On the host the RPC is ~0ms and this is not the limiting factor.",
+    "prevout_batch_size": 16,
+    "unbatched_seconds_per_200_blocks": 480
+  },
+  "live_path": "transparent-filter-server: getblock verbosity 0, raw block parsed with zakura-chain, previous outputs via getrawtransaction verbosity 0",
+  "mismatches": 0,
+  "node": "production Zakura archive (enhance-pir-coordinator-01), read-only RPC over an SSH tunnel",
+  "note": "The two paths share no code. Agreement covers element extraction, previous-output resolution, block-hash byte order and the BIP 158 encoding.",
+  "offline_path": "tools/transparent_filter_build.py over mainnet-day.jsonl.gz, itself collected via getblock verbosity 2 scriptPubKey.hex in Python"
+}

@@ -27,6 +27,18 @@ from transparent_pir_sample import make_filter, supported
 FILTER = struct.Struct("<I32sII")
 SCHEMA = "transparent-incremental-research-v1"
 
+# Generation/filter schema, kept apart from the wallet-state SCHEMA above.
+# A new filter format changes what a generation contains; it does not change
+# what wallet state means, and conflating the two would have forced every
+# existing wallet state to be discarded to add a filter encoding.
+GENERATION_SCHEMA = "transparent-incremental-generation-v1"
+
+# Filter formats. Absent means BLOOM_V1: generations built before the format
+# field existed are Bloom generations, and must keep reproducing byte for byte.
+BLOOM_V1 = "bloom-v1"
+BIP158_V1 = "bip158-zcash-transparent-basic-v1"
+FILTER_FORMATS = (BLOOM_V1, BIP158_V1)
+
 
 def encode(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
@@ -109,8 +121,57 @@ def source_events(blocks):
     return events
 
 
-def build_generation(network, blocks, output, page_bytes=17920, probability=1e-6):
+def complete_scripts(block):
+    """Every filter element for one block, as raw script hex.
+
+    Deliberately NOT source_events(): that helper drops scripts the private
+    history backend cannot serve, and a shared public filter built from it would
+    answer "no activity" to a wallet that does have activity. Filter coverage is
+    broader than retrieval coverage, and the two must not be conflated.
+
+    Excludes a script whose FIRST byte is 0x6a (OP_RETURN). A 0x6a appearing
+    later is ordinary data and the script stays. The collector has already
+    resolved previous-output scripts and dropped coinbase inputs.
+    """
+    elements = set()
+    for tx in block["transactions"]:
+        for item in tx["vout"] + tx["vin"]:
+            script = item["script"]
+            if script and not script.startswith("6a"):
+                elements.add(script)
+    return sorted(elements)
+
+
+def bip158_filters(blocks, cli):
+    """Serialized BIP 158 filters for each block, via one CLI invocation.
+
+    Batched on purpose. A process per block, or worse per script, would cost
+    more than the matching it is meant to measure.
+    """
+    requests = "".join(
+        json.dumps({"block_hash_display": block["hash"],
+                    "elements": complete_scripts(block)}) + "\n"
+        for block in blocks
+    )
+    completed = subprocess.run(
+        [str(cli), "batch-build"], input=requests,
+        capture_output=True, text=True, check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"batch-build failed: {completed.stderr.strip()}")
+    results = [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
+    if len(results) != len(blocks):
+        raise RuntimeError("batch-build returned the wrong number of filters")
+    return [bytes.fromhex(result["filter"]) for result in results]
+
+
+def build_generation(network, blocks, output, page_bytes=17920, probability=1e-6,
+                     filter_format=BLOOM_V1, filter_cli=None):
     """Publish an immutable whole-range generation; page width is independent."""
+    if filter_format not in FILTER_FORMATS:
+        raise ValueError(f"unknown filter format {filter_format!r}")
+    if filter_format == BIP158_V1 and filter_cli is None:
+        raise ValueError("the BIP 158 format needs --filter-cli")
     if not blocks or page_bytes not in [3584, 7168, 10752, 17920]:
         raise ValueError("invalid generation geometry")
     for i, block in enumerate(blocks):
@@ -176,18 +237,30 @@ def build_generation(network, blocks, output, page_bytes=17920, probability=1e-6
     page_rows = max(2048, math.ceil(len(pages) / 2048) * 2048)
     page_data = b"".join(pages).ljust(page_rows * page_bytes, b"\0")
     filters = bytearray()
-    for block in blocks:
-        scripts = {bytes.fromhex(s) for s in source_events([block])}
-        block_hash = bytes.fromhex(block["hash"])
-        seed = hashlib.sha256(
-            b"transparent-incremental-filter-v1\0" + network.encode() + block_hash
-        ).digest()
-        bits, hashes, _ = make_filter(scripts, seed, probability)
-        filters.extend(
-            FILTER.pack(block["height"], block_hash, hashes, len(bits)) + bits
-        )
+    if filter_format == BIP158_V1:
+        # hashes is recorded as 0: the BIP 158 profile fixes P and M, so there
+        # is no per-filter hash count. read_targets refuses a nonzero value
+        # rather than silently reading a Bloom header as a BIP 158 one.
+        for block, bits in zip(blocks, bip158_filters(blocks, filter_cli)):
+            filters.extend(
+                FILTER.pack(block["height"], bytes.fromhex(block["hash"]), 0, len(bits))
+                + bits
+            )
+    else:
+        for block in blocks:
+            scripts = {bytes.fromhex(s) for s in source_events([block])}
+            block_hash = bytes.fromhex(block["hash"])
+            seed = hashlib.sha256(
+                b"transparent-incremental-filter-v1\0" + network.encode() + block_hash
+            ).digest()
+            bits, hashes, _ = make_filter(scripts, seed, probability)
+            filters.extend(
+                FILTER.pack(block["height"], block_hash, hashes, len(bits)) + bits
+            )
     manifest = {
         "schema": SCHEMA,
+        "generation_schema": GENERATION_SCHEMA,
+        "filter_format": filter_format,
         "network": network,
         "start": blocks[0]["height"],
         "end": blocks[-1]["height"],
@@ -431,20 +504,37 @@ class PirTransport:
         return decoded, cost
 
 
-def read_targets(folder, manifest, scripts, checkpoint, accepted):
+def read_targets(folder, manifest, scripts, checkpoint, accepted, filter_cli=None):
+    """Scripts whose filters matched, and the public bytes charged for them.
+
+    Dispatches on the generation's recorded filter format. An old generation has
+    no format field and is Bloom; its bytes are never reinterpreted under the
+    new format, so old generation ids and old evidence stay reproducible.
+    """
+    filter_format = manifest.get("filter_format", BLOOM_V1)
+    if filter_format not in FILTER_FORMATS:
+        raise ValueError(f"unknown filter format {filter_format!r}")
+    if filter_format == BIP158_V1 and filter_cli is None:
+        raise ValueError("the BIP 158 format needs --filter-cli")
+
     raw = (folder / "filters.bin").read_bytes()
     if digest(raw) != manifest["filters_sha256"]:
         raise ValueError("missing/corrupt filters")
     offset, expected, targets = 0, manifest["start"], set()
+    pending = []
     while offset < len(raw):
         if offset + FILTER.size > len(raw):
             raise ValueError("truncated filter")
         height, block_hash, hashes, size = FILTER.unpack_from(raw, offset)
         offset += FILTER.size
+        # A Bloom header carries a hash count in 1..64; a BIP 158 header pins it
+        # to 0 because the profile fixes P and M. Requiring the right one here
+        # stops one format's bytes being read as the other's.
+        hashes_ok = hashes == 0 if filter_format == BIP158_V1 else 1 <= hashes <= 64
         if (
             height != expected
             or accepted.get(height) != block_hash.hex()
-            or not 1 <= hashes <= 64
+            or not hashes_ok
             or not 1 <= size <= 16 * 1024 * 1024
             or offset + size > len(raw)
         ):
@@ -453,6 +543,13 @@ def read_targets(folder, manifest, scripts, checkpoint, accepted):
         offset += size
         expected += 1
         if height <= checkpoint:
+            continue
+        if filter_format == BIP158_V1:
+            # Collected and matched in one batch below. This harness stores
+            # the hash as bytes.fromhex(block["hash"]), i.e. already in display
+            # order, so it is handed to the CLI as-is; the CLI does the display
+            # to internal conversion the BIP 158 keys require.
+            pending.append((block_hash.hex(), bits.hex()))
             continue
         seed = hashlib.sha256(
             b"transparent-incremental-filter-v1\0"
@@ -472,7 +569,39 @@ def read_targets(folder, manifest, scripts, checkpoint, accepted):
                 targets.add(script)
     if expected != manifest["end"] + 1:
         raise ValueError("missing filter interval")
+    if pending:
+        targets |= bip158_matches(pending, scripts, filter_cli)
     return sorted(targets), len(raw)
+
+
+def bip158_matches(pending, scripts, cli):
+    """Scripts matching any of the given filters, in one CLI invocation.
+
+    The wallet's script list never leaves the machine; this is local matching
+    against already-downloaded filters, not a query to any server.
+    """
+    ordered = sorted(scripts)
+    if not ordered:
+        return set()
+    requests = "".join(
+        json.dumps({"block_hash_display": block_hash, "filter": bits,
+                    "scripts": ordered}) + "\n"
+        for block_hash, bits in pending
+    )
+    completed = subprocess.run(
+        [str(cli), "batch-match"], input=requests,
+        capture_output=True, text=True, check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"batch-match failed: {completed.stderr.strip()}")
+    results = [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
+    if len(results) != len(pending):
+        raise RuntimeError("batch-match returned the wrong number of results")
+    matched = set()
+    for result in results:
+        for index in result["indices"]:
+            matched.add(ordered[index])
+    return matched
 
 
 def directory_records(raw, manifest, targets):
@@ -510,7 +639,8 @@ def directory_records(raw, manifest, targets):
     return found
 
 
-def sync(path, folder, accepted, transport, budget=1000, navigation=False):
+def sync(path, folder, accepted, transport, budget=1000, navigation=False,
+         filter_cli=None):
     """Advance coverage atomically only after all private work is durably present.
 
     accepted is wallet-owned chain state, never taken from the generation itself.
@@ -553,6 +683,13 @@ def sync(path, folder, accepted, transport, budget=1000, navigation=False):
         or folder.name != generation
     ):
         raise ValueError("unsupported/misbound generation")
+    filter_format = manifest.get("filter_format", BLOOM_V1)
+    if filter_format not in FILTER_FORMATS:
+        raise ValueError(f"unknown filter format {filter_format!r}")
+    # A generation that declares a generation schema must declare one we know.
+    # Its absence means a pre-format generation, which is Bloom by definition.
+    if manifest.get("generation_schema", GENERATION_SCHEMA) != GENERATION_SCHEMA:
+        raise ValueError("unsupported generation schema")
     if (
         accepted.get(state["height"]) != state["hash"]
         or accepted.get(manifest["end"]) != manifest["anchor"]
@@ -568,12 +705,18 @@ def sync(path, folder, accepted, transport, budget=1000, navigation=False):
         raise ValueError(
             "resume requires the original retained generation or explicit rewind"
         )
+    if pending and pending.get("filter_format", BLOOM_V1) != filter_format:
+        raise ValueError(
+            "resume requires the original filter format or explicit rewind"
+        )
     if pending is None:
         targets, size = read_targets(
-            folder, manifest, state["scripts"], state["height"], accepted
+            folder, manifest, state["scripts"], state["height"], accepted,
+            filter_cli=filter_cli,
         )
         pending = {
             "generation": generation,
+            "filter_format": filter_format,
             "targets": targets,
             "directory": {},
             "pages": {},
