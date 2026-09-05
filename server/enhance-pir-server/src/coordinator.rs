@@ -1349,13 +1349,10 @@ const QUERY_BODY_LIMIT: usize = 64 * 1024 * 1024;
 pub fn router(state: CoordinatorState) -> Router {
     let queries = Router::new()
         .route("/v1/enhance/query", post(query))
-        .route("/v1/transparent-spend/cold/query", post(query_spend_cold))
-        .route("/v1/transparent-spend/warm/query", post(query_spend_warm))
         .layer(axum::extract::DefaultBodyLimit::max(QUERY_BODY_LIMIT));
     Router::new()
         .route("/v1/health", get(health))
         .route("/v1/enhance/init", get(enhance_session))
-        .route("/v1/transparent-spend/init", get(transparent_spend_session))
         .merge(queries)
         .route("/metrics", get(handle_metrics))
         .route("/ready", get(ready))
@@ -1520,23 +1517,8 @@ async fn enhance_session(State(state): State<CoordinatorState>) -> Response {
     }
 }
 
-async fn transparent_spend_session(State(state): State<CoordinatorState>) -> Response {
-    match state.transparent_spend_session() {
-        Some(session) => Json(session).into_response(),
-        None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
-    }
-}
-
 async fn query(State(state): State<CoordinatorState>, body: Bytes) -> Response {
     answer(&state, DatabaseId::Enhance, &body).await
-}
-
-async fn query_spend_cold(State(state): State<CoordinatorState>, body: Bytes) -> Response {
-    answer(&state, DatabaseId::TransparentSpendCold, &body).await
-}
-
-async fn query_spend_warm(State(state): State<CoordinatorState>, body: Bytes) -> Response {
-    answer(&state, DatabaseId::TransparentSpendWarm, &body).await
 }
 
 async fn answer(state: &CoordinatorState, table: DatabaseId, body: &[u8]) -> Response {

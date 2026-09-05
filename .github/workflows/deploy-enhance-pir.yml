@@ -70,7 +70,6 @@ jobs:
           install -m 0755 target/release/pir-apm artifact/
           cp ops/infra/digitalocean/production/deploy/enhance-pir-server.service artifact/
           cp ops/infra/digitalocean/production/deploy/enhance-pir-worker.service artifact/
-          cp ops/infra/digitalocean/production/deploy/transparent-spend-pir-worker.service artifact/
           cp ops/infra/digitalocean/production/deploy/pir-apm.service artifact/
           cp ops/infra/digitalocean/production/deploy/Caddyfile artifact/
           printf '%s\n' '${{ inputs.ref }}' >artifact/revision
@@ -98,14 +97,12 @@ jobs:
           ENHANCE_DEPLOY_USER: ${{ vars.ENHANCE_DEPLOY_USER }}
           ENHANCE_PUBLIC_URL: ${{ vars.ENHANCE_PUBLIC_URL }}
           ENHANCE_WORKERS_JSON: ${{ vars.ENHANCE_WORKERS_JSON }}
-          TRANSPARENT_SPEND_WORKER_JSON: ${{ vars.TRANSPARENT_SPEND_WORKER_JSON }}
           ENHANCE_RELEASE_SHA: ${{ inputs.ref }}
           ENHANCE_ARTIFACT_DIR: ${{ github.workspace }}/artifact
           ENHANCE_SSH_KEY_PATH: ${{ runner.temp }}/enhance-pir-ssh/key
           ENHANCE_KNOWN_HOSTS_PATH: ${{ runner.temp }}/enhance-pir-ssh/known_hosts
           ENHANCE_SERVER_SERVICE_FILE: ${{ github.workspace }}/artifact/enhance-pir-server.service
           ENHANCE_WORKER_SERVICE_FILE: ${{ github.workspace }}/artifact/enhance-pir-worker.service
-          TRANSPARENT_SPEND_WORKER_SERVICE_FILE: ${{ github.workspace }}/artifact/transparent-spend-pir-worker.service
           ENHANCE_APM_SERVICE_FILE: ${{ github.workspace }}/artifact/pir-apm.service
           ENHANCE_CADDYFILE: ${{ github.workspace }}/artifact/Caddyfile
           ENHANCE_APM_ENVIRONMENT: production

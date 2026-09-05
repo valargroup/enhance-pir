@@ -19,11 +19,14 @@ pub enum DatabaseId {
 }
 
 impl DatabaseId {
-    pub const ALL: [Self; 3] = [
-        Self::Enhance,
-        Self::TransparentSpendCold,
-        Self::TransparentSpendWarm,
-    ];
+    /// The tables this build actually serves.
+    ///
+    /// The transparent-spend variants below are retained so the unserved
+    /// `spend` module still compiles and its work is recoverable, but they are
+    /// deliberately absent here: this array drives worker shard directories,
+    /// coordinator metrics and embedded setup, none of which should mention a
+    /// table nothing publishes.
+    pub const ALL: [Self; 1] = [Self::Enhance];
 
     pub const fn as_str(self) -> &'static str {
         match self {
