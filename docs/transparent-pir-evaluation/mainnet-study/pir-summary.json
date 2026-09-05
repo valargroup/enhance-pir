@@ -1,0 +1,1501 @@
+{
+  "classification": "aggregate measured in-process PIR samples; not mobile or network latency",
+  "layouts": {
+    "k0": {
+      "directory": {
+        "combined_client_server_rss_bytes": {
+          "count": 3,
+          "max": 382971904,
+          "min": 382775296,
+          "p50": 382894080,
+          "p90": 382971904,
+          "p95": 382971904,
+          "p99": 382971904
+        },
+        "decode_ms": {
+          "count": 354,
+          "max": 0.608494,
+          "min": 0.279887,
+          "p50": 0.292362,
+          "p90": 0.310342,
+          "p95": 0.32065400000000005,
+          "p99": 0.585502
+        },
+        "prepare_ms": {
+          "count": 354,
+          "max": 15.3299,
+          "min": 14.329899,
+          "p50": 14.44256,
+          "p90": 14.509536,
+          "p95": 14.560096,
+          "p99": 14.864528
+        },
+        "published_setup_bytes": 14336,
+        "response_bytes": 5120,
+        "server_ms": {
+          "count": 354,
+          "max": 7.692484,
+          "min": 5.329852000000001,
+          "p50": 6.372387,
+          "p90": 6.904170000000001,
+          "p95": 7.0073419999999995,
+          "p99": 7.391945
+        },
+        "server_setup_ms": {
+          "count": 3,
+          "max": 1351.799034,
+          "min": 1345.008504,
+          "p50": 1351.120262,
+          "p90": 1351.799034,
+          "p95": 1351.799034,
+          "p99": 1351.799034
+        },
+        "total_ms": {
+          "count": 354,
+          "max": 22.470737,
+          "min": 20.069629,
+          "p50": 21.120571,
+          "p90": 21.700511,
+          "p95": 21.857324000000002,
+          "p99": 22.253655000000002
+        },
+        "upload_bytes": 96256
+      },
+      "geometry": {
+        "candidate_buckets_per_script": 1,
+        "directory_rows": 2048,
+        "inline_capacity": 0,
+        "page_rows": 14336,
+        "row_bytes": 3584,
+        "script_count": 13394,
+        "slot_utilization": 0.11890980113636364,
+        "used_pages": 14334
+      },
+      "independent_runs": 3,
+      "pages": {
+        "combined_client_server_rss_bytes": {
+          "count": 3,
+          "max": 527822848,
+          "min": 527728640,
+          "p50": 527798272,
+          "p90": 527822848,
+          "p95": 527822848,
+          "p99": 527822848
+        },
+        "decode_ms": {
+          "count": 825,
+          "max": 0.601877,
+          "min": 0.27739699999999995,
+          "p50": 0.293328,
+          "p90": 0.320386,
+          "p95": 0.32815099999999997,
+          "p99": 0.491985
+        },
+        "prepare_ms": {
+          "count": 825,
+          "max": 31.122179,
+          "min": 26.449317999999998,
+          "p50": 26.595522,
+          "p90": 26.685248,
+          "p95": 26.760919,
+          "p99": 27.260574
+        },
+        "published_setup_bytes": 14336,
+        "response_bytes": 5120,
+        "server_ms": {
+          "count": 825,
+          "max": 10.485377,
+          "min": 6.939097,
+          "p50": 7.569775,
+          "p90": 8.172044,
+          "p95": 8.487198,
+          "p99": 8.898642
+        },
+        "server_setup_ms": {
+          "count": 3,
+          "max": 1665.522876,
+          "min": 1646.9812180000001,
+          "p50": 1657.922612,
+          "p90": 1665.522876,
+          "p95": 1665.522876,
+          "p99": 1665.522876
+        },
+        "total_ms": {
+          "count": 825,
+          "max": 39.275392,
+          "min": 33.780319000000006,
+          "p50": 34.473806,
+          "p90": 35.129452,
+          "p95": 35.401845,
+          "p99": 36.06526
+        },
+        "upload_bytes": 159488
+      },
+      "workloads_first_run": [
+        {
+          "cold_setup_download_bytes": 14336,
+          "directory_queries": 20,
+          "name": "unused_20",
+          "page_queries": 0,
+          "query_response_bytes": 2027520,
+          "summed_measured_serial_core_ms": 425.380312,
+          "verified_events": 0
+        },
+        {
+          "cold_setup_download_bytes": 14336,
+          "directory_queries": 98,
+          "name": "unused_100",
+          "page_queries": 0,
+          "query_response_bytes": 9934848,
+          "summed_measured_serial_core_ms": 2078.2889980000004,
+          "verified_events": 0
+        },
+        {
+          "cold_setup_download_bytes": 28672,
+          "directory_queries": 10,
+          "name": "small_10",
+          "page_queries": 10,
+          "query_response_bytes": 2659840,
+          "summed_measured_serial_core_ms": 557.960272,
+          "verified_events": 10
+        },
+        {
+          "cold_setup_download_bytes": 28672,
+          "directory_queries": 10,
+          "name": "median_10",
+          "page_queries": 10,
+          "query_response_bytes": 2659840,
+          "summed_measured_serial_core_ms": 557.329605,
+          "verified_events": 20
+        },
+        {
+          "cold_setup_download_bytes": 28672,
+          "directory_queries": 1,
+          "name": "large_1",
+          "page_queries": 255,
+          "query_response_bytes": 42076416,
+          "summed_measured_serial_core_ms": 8865.176187999998,
+          "verified_events": 9152
+        },
+        {
+          "cold_setup_download_bytes": 28672,
+          "directory_queries": 1,
+          "name": "large_1_cached_prefix",
+          "page_queries": 239,
+          "query_response_bytes": 39442688,
+          "summed_measured_serial_core_ms": 8313.163008999994,
+          "verified_events": 8576
+        }
+      ]
+    },
+    "k2": {
+      "directory": {
+        "combined_client_server_rss_bytes": {
+          "count": 3,
+          "max": 406982656,
+          "min": 406917120,
+          "p50": 406970368,
+          "p90": 406982656,
+          "p95": 406982656,
+          "p99": 406982656
+        },
+        "decode_ms": {
+          "count": 363,
+          "max": 0.582842,
+          "min": 0.273464,
+          "p50": 0.290194,
+          "p90": 0.30485,
+          "p95": 0.309465,
+          "p99": 0.328726
+        },
+        "prepare_ms": {
+          "count": 363,
+          "max": 17.293677,
+          "min": 16.386423,
+          "p50": 16.453433,
+          "p90": 16.527033,
+          "p95": 16.54935,
+          "p99": 16.824685
+        },
+        "published_setup_bytes": 14336,
+        "response_bytes": 5120,
+        "server_ms": {
+          "count": 363,
+          "max": 7.856549000000001,
+          "min": 5.753176,
+          "p50": 6.403023,
+          "p90": 7.105505,
+          "p95": 7.24556,
+          "p99": 7.417174999999999
+        },
+        "server_setup_ms": {
+          "count": 3,
+          "max": 1401.334087,
+          "min": 1395.8743359999999,
+          "p50": 1396.702399,
+          "p90": 1401.334087,
+          "p95": 1401.334087,
+          "p99": 1401.334087
+        },
+        "total_ms": {
+          "count": 363,
+          "max": 24.714586999999998,
+          "min": 22.456531,
+          "p50": 23.158694,
+          "p90": 23.922022000000002,
+          "p95": 24.063045000000002,
+          "p99": 24.273884
+        },
+        "upload_bytes": 106496
+      },
+      "geometry": {
+        "candidate_buckets_per_script": 1,
+        "directory_rows": 4096,
+        "inline_capacity": 2,
+        "page_rows": 4096,
+        "row_bytes": 3584,
+        "script_count": 13394,
+        "slot_utilization": 0.2515399639423077,
+        "used_pages": 3715
+      },
+      "independent_runs": 3,
+      "pages": {
+        "combined_client_server_rss_bytes": {
+          "count": 3,
+          "max": 406982656,
+          "min": 406896640,
+          "p50": 406929408,
+          "p90": 406982656,
+          "p95": 406982656,
+          "p99": 406982656
+        },
+        "decode_ms": {
+          "count": 765,
+          "max": 0.6086239999999999,
+          "min": 0.27780099999999996,
+          "p50": 0.291489,
+          "p90": 0.31336899999999995,
+          "p95": 0.321092,
+          "p99": 0.582295
+        },
+        "prepare_ms": {
+          "count": 765,
+          "max": 17.438678,
+          "min": 16.36553,
+          "p50": 16.458515,
+          "p90": 16.532580000000003,
+          "p95": 16.55788,
+          "p99": 16.948643999999998
+        },
+        "published_setup_bytes": 14336,
+        "response_bytes": 5120,
+        "server_ms": {
+          "count": 765,
+          "max": 8.536899,
+          "min": 5.557094,
+          "p50": 6.466747,
+          "p90": 7.123957,
+          "p95": 7.247406,
+          "p99": 7.540262
+        },
+        "server_setup_ms": {
+          "count": 3,
+          "max": 1401.063387,
+          "min": 1392.020337,
+          "p50": 1394.153914,
+          "p90": 1401.063387,
+          "p95": 1401.063387,
+          "p99": 1401.063387
+        },
+        "total_ms": {
+          "count": 765,
+          "max": 25.395435000000003,
+          "min": 22.263234,
+          "p50": 23.252651999999998,
+          "p90": 23.924210000000002,
+          "p95": 24.041046,
+          "p99": 24.361227999999997
+        },
+        "upload_bytes": 106496
+      },
+      "workloads_first_run": [
+        {
+          "cold_setup_download_bytes": 14336,
+          "directory_queries": 20,
+          "name": "unused_20",
+          "page_queries": 0,
+          "query_response_bytes": 2232320,
+          "summed_measured_serial_core_ms": 466.2602970000001,
+          "verified_events": 0
+        },
+        {
+          "cold_setup_download_bytes": 14336,
+          "directory_queries": 100,
+          "name": "unused_100",
+          "page_queries": 0,
+          "query_response_bytes": 11161600,
+          "summed_measured_serial_core_ms": 2324.8134369999993,
+          "verified_events": 0
+        },
+        {
+          "cold_setup_download_bytes": 14336,
+          "directory_queries": 10,
+          "name": "small_10",
+          "page_queries": 0,
+          "query_response_bytes": 1116160,
+          "summed_measured_serial_core_ms": 230.890295,
+          "verified_events": 10
+        },
+        {
+          "cold_setup_download_bytes": 14336,
+          "directory_queries": 10,
+          "name": "median_10",
+          "page_queries": 0,
+          "query_response_bytes": 1116160,
+          "summed_measured_serial_core_ms": 232.478405,
+          "verified_events": 20
+        },
+        {
+          "cold_setup_download_bytes": 28672,
+          "directory_queries": 1,
+          "name": "large_1",
+          "page_queries": 255,
+          "query_response_bytes": 28573696,
+          "summed_measured_serial_core_ms": 5988.910116000003,
+          "verified_events": 9152
+        },
+        {
+          "cold_setup_download_bytes": 28672,
+          "directory_queries": 1,
+          "name": "large_1_cached_prefix",
+          "page_queries": 239,
+          "query_response_bytes": 26787840,
+          "summed_measured_serial_core_ms": 5613.597467000001,
+          "verified_events": 8576
+        }
+      ]
+    },
+    "k2-r10752": {
+      "directory": {
+        "combined_client_server_rss_bytes": {
+          "count": 1,
+          "max": 1256185856,
+          "min": 1256185856,
+          "p50": 1256185856,
+          "p90": 1256185856,
+          "p95": 1256185856,
+          "p99": 1256185856
+        },
+        "decode_ms": {
+          "count": 118,
+          "max": 1.099191,
+          "min": 0.6699609999999999,
+          "p50": 0.707686,
+          "p90": 0.7397400000000001,
+          "p95": 0.971631,
+          "p99": 1.094024
+        },
+        "prepare_ms": {
+          "count": 118,
+          "max": 17.991198999999998,
+          "min": 14.387048,
+          "p50": 14.49136,
+          "p90": 14.676062,
+          "p95": 15.131771,
+          "p99": 16.463294
+        },
+        "published_setup_bytes": 43008,
+        "response_bytes": 15360,
+        "server_ms": {
+          "count": 118,
+          "max": 19.597872,
+          "min": 14.634487,
+          "p50": 16.415115,
+          "p90": 16.97605,
+          "p95": 17.265335,
+          "p99": 19.03326
+        },
+        "server_setup_ms": {
+          "count": 1,
+          "max": 1883.5524769999997,
+          "min": 1883.5524769999997,
+          "p50": 1883.5524769999997,
+          "p90": 1883.5524769999997,
+          "p95": 1883.5524769999997,
+          "p99": 1883.5524769999997
+        },
+        "total_ms": {
+          "count": 118,
+          "max": 36.198217,
+          "min": 29.906984,
+          "p50": 31.628455,
+          "p90": 32.291897999999996,
+          "p95": 32.970172,
+          "p99": 34.932134
+        },
+        "upload_bytes": 96256
+      },
+      "geometry": {
+        "candidate_buckets_per_script": 1,
+        "directory_rows": 2048,
+        "inline_capacity": 2,
+        "page_rows": 4096,
+        "row_bytes": 10752,
+        "script_count": 13394,
+        "slot_utilization": 0.15951314786585366,
+        "used_pages": 3033
+      },
+      "independent_runs": 1,
+      "pages": {
+        "combined_client_server_rss_bytes": {
+          "count": 1,
+          "max": 1328463872,
+          "min": 1328463872,
+          "p50": 1328463872,
+          "p90": 1328463872,
+          "p95": 1328463872,
+          "p99": 1328463872
+        },
+        "decode_ms": {
+          "count": 83,
+          "max": 1.413853,
+          "min": 0.678311,
+          "p50": 0.7041200000000001,
+          "p90": 1.0214480000000001,
+          "p95": 1.130967,
+          "p99": 1.413853
+        },
+        "prepare_ms": {
+          "count": 83,
+          "max": 21.366585,
+          "min": 16.384045999999998,
+          "p50": 16.472058,
+          "p90": 16.754965,
+          "p95": 16.981251999999998,
+          "p99": 21.366585
+        },
+        "published_setup_bytes": 43008,
+        "response_bytes": 15360,
+        "server_ms": {
+          "count": 83,
+          "max": 19.100662,
+          "min": 15.396072,
+          "p50": 17.065606,
+          "p90": 17.596205,
+          "p95": 18.136213,
+          "p99": 19.100662
+        },
+        "server_setup_ms": {
+          "count": 1,
+          "max": 2011.3790909999998,
+          "min": 2011.3790909999998,
+          "p50": 2011.3790909999998,
+          "p90": 2011.3790909999998,
+          "p95": 2011.3790909999998,
+          "p99": 2011.3790909999998
+        },
+        "total_ms": {
+          "count": 83,
+          "max": 38.422113,
+          "min": 32.516821,
+          "p50": 34.334146000000004,
+          "p90": 35.222147,
+          "p95": 35.509085000000006,
+          "p99": 38.422113
+        },
+        "upload_bytes": 106496
+      },
+      "workloads_first_run": [
+        {
+          "cold_setup_download_bytes": 43008,
+          "directory_queries": 20,
+          "name": "unused_20",
+          "page_queries": 0,
+          "query_response_bytes": 2232320,
+          "summed_measured_serial_core_ms": 630.074346,
+          "verified_events": 0
+        },
+        {
+          "cold_setup_download_bytes": 43008,
+          "directory_queries": 98,
+          "name": "unused_100",
+          "page_queries": 0,
+          "query_response_bytes": 10938368,
+          "summed_measured_serial_core_ms": 3099.5976919999976,
+          "verified_events": 0
+        },
+        {
+          "cold_setup_download_bytes": 43008,
+          "directory_queries": 10,
+          "name": "small_10",
+          "page_queries": 0,
+          "query_response_bytes": 1116160,
+          "summed_measured_serial_core_ms": 316.69341,
+          "verified_events": 10
+        },
+        {
+          "cold_setup_download_bytes": 43008,
+          "directory_queries": 10,
+          "name": "median_10",
+          "page_queries": 0,
+          "query_response_bytes": 1116160,
+          "summed_measured_serial_core_ms": 318.90804,
+          "verified_events": 20
+        },
+        {
+          "cold_setup_download_bytes": 86016,
+          "directory_queries": 1,
+          "name": "large_1",
+          "page_queries": 83,
+          "query_response_bytes": 10225664,
+          "summed_measured_serial_core_ms": 2880.5495560000004,
+          "verified_events": 9152
+        },
+        {
+          "cold_setup_download_bytes": 86016,
+          "directory_queries": 1,
+          "name": "large_1_cached_prefix",
+          "page_queries": 78,
+          "query_response_bytes": 9616384,
+          "summed_measured_serial_core_ms": 2704.736216,
+          "verified_events": 8576
+        }
+      ]
+    },
+    "k2-r17920": {
+      "directory": {
+        "combined_client_server_rss_bytes": {
+          "count": 1,
+          "max": 2011193344,
+          "min": 2011193344,
+          "p50": 2011193344,
+          "p90": 2011193344,
+          "p95": 2011193344,
+          "p99": 2011193344
+        },
+        "decode_ms": {
+          "count": 118,
+          "max": 2.280164,
+          "min": 1.0694439999999998,
+          "p50": 1.096411,
+          "p90": 1.263263,
+          "p95": 1.4244299999999999,
+          "p99": 1.850679
+        },
+        "prepare_ms": {
+          "count": 118,
+          "max": 16.042596,
+          "min": 14.398275,
+          "p50": 14.491709,
+          "p90": 14.598669,
+          "p95": 15.116691,
+          "p99": 15.910226999999999
+        },
+        "published_setup_bytes": 71680,
+        "response_bytes": 25600,
+        "server_ms": {
+          "count": 118,
+          "max": 28.616238,
+          "min": 23.758145000000003,
+          "p50": 25.594635,
+          "p90": 26.487538,
+          "p95": 26.967785000000003,
+          "p99": 28.2685
+        },
+        "server_setup_ms": {
+          "count": 1,
+          "max": 2800.224787,
+          "min": 2800.224787,
+          "p50": 2800.224787,
+          "p90": 2800.224787,
+          "p95": 2800.224787,
+          "p99": 2800.224787
+        },
+        "total_ms": {
+          "count": 118,
+          "max": 45.158884,
+          "min": 39.342716,
+          "p50": 41.252084,
+          "p90": 42.064335,
+          "p95": 43.069224000000006,
+          "p99": 45.10945
+        },
+        "upload_bytes": 96256
+      },
+      "geometry": {
+        "candidate_buckets_per_script": 1,
+        "directory_rows": 2048,
+        "inline_capacity": 2,
+        "page_rows": 4096,
+        "row_bytes": 17920,
+        "script_count": 13394,
+        "slot_utilization": 0.09478317481884058,
+        "used_pages": 2916
+      },
+      "independent_runs": 1,
+      "pages": {
+        "combined_client_server_rss_bytes": {
+          "count": 1,
+          "max": 2131898368,
+          "min": 2131898368,
+          "p50": 2131898368,
+          "p90": 2131898368,
+          "p95": 2131898368,
+          "p99": 2131898368
+        },
+        "decode_ms": {
+          "count": 50,
+          "max": 1.39143,
+          "min": 1.0652949999999999,
+          "p50": 1.092386,
+          "p90": 1.116148,
+          "p95": 1.148491,
+          "p99": 1.39143
+        },
+        "prepare_ms": {
+          "count": 50,
+          "max": 20.986169999999998,
+          "min": 16.435374999999997,
+          "p50": 16.513441,
+          "p90": 16.719153000000002,
+          "p95": 16.993288,
+          "p99": 20.986169999999998
+        },
+        "published_setup_bytes": 71680,
+        "response_bytes": 25600,
+        "server_ms": {
+          "count": 50,
+          "max": 29.898944,
+          "min": 24.849185,
+          "p50": 26.675658000000002,
+          "p90": 27.318027,
+          "p95": 27.829409,
+          "p99": 29.898944
+        },
+        "server_setup_ms": {
+          "count": 1,
+          "max": 3179.247114,
+          "min": 3179.247114,
+          "p50": 3179.247114,
+          "p90": 3179.247114,
+          "p95": 3179.247114,
+          "p99": 3179.247114
+        },
+        "total_ms": {
+          "count": 50,
+          "max": 51.995348,
+          "min": 42.407605000000004,
+          "p50": 44.247087,
+          "p90": 45.171612,
+          "p95": 45.753579,
+          "p99": 51.995348
+        },
+        "upload_bytes": 106496
+      },
+      "workloads_first_run": [
+        {
+          "cold_setup_download_bytes": 71680,
+          "directory_queries": 20,
+          "name": "unused_20",
+          "page_queries": 0,
+          "query_response_bytes": 2437120,
+          "summed_measured_serial_core_ms": 826.408767,
+          "verified_events": 0
+        },
+        {
+          "cold_setup_download_bytes": 71680,
+          "directory_queries": 98,
+          "name": "unused_100",
+          "page_queries": 0,
+          "query_response_bytes": 11941888,
+          "summed_measured_serial_core_ms": 4038.4306799999995,
+          "verified_events": 0
+        },
+        {
+          "cold_setup_download_bytes": 71680,
+          "directory_queries": 10,
+          "name": "small_10",
+          "page_queries": 0,
+          "query_response_bytes": 1218560,
+          "summed_measured_serial_core_ms": 411.83708099999996,
+          "verified_events": 10
+        },
+        {
+          "cold_setup_download_bytes": 71680,
+          "directory_queries": 10,
+          "name": "median_10",
+          "page_queries": 0,
+          "query_response_bytes": 1218560,
+          "summed_measured_serial_core_ms": 415.038665,
+          "verified_events": 20
+        },
+        {
+          "cold_setup_download_bytes": 143360,
+          "directory_queries": 1,
+          "name": "large_1",
+          "page_queries": 50,
+          "query_response_bytes": 6726656,
+          "summed_measured_serial_core_ms": 2262.3946260000002,
+          "verified_events": 9152
+        },
+        {
+          "cold_setup_download_bytes": 143360,
+          "directory_queries": 1,
+          "name": "large_1_cached_prefix",
+          "page_queries": 47,
+          "query_response_bytes": 6330368,
+          "summed_measured_serial_core_ms": 2128.8252630000006,
+          "verified_events": 8576
+        }
+      ]
+    },
+    "k2-r7168": {
+      "directory": {
+        "combined_client_server_rss_bytes": {
+          "count": 1,
+          "max": 878338048,
+          "min": 878338048,
+          "p50": 878338048,
+          "p90": 878338048,
+          "p95": 878338048,
+          "p99": 878338048
+        },
+        "decode_ms": {
+          "count": 118,
+          "max": 0.6896800000000001,
+          "min": 0.47747,
+          "p50": 0.498031,
+          "p90": 0.548681,
+          "p95": 0.635589,
+          "p99": 0.684893
+        },
+        "prepare_ms": {
+          "count": 118,
+          "max": 16.487610999999998,
+          "min": 14.399626,
+          "p50": 14.487849,
+          "p90": 14.766064,
+          "p95": 15.185361,
+          "p99": 15.442128
+        },
+        "published_setup_bytes": 28672,
+        "response_bytes": 10240,
+        "server_ms": {
+          "count": 118,
+          "max": 13.341735,
+          "min": 10.132281,
+          "p50": 11.215447999999999,
+          "p90": 12.186255,
+          "p95": 12.493039,
+          "p99": 12.829238
+        },
+        "server_setup_ms": {
+          "count": 1,
+          "max": 1590.814709,
+          "min": 1590.814709,
+          "p50": 1590.814709,
+          "p90": 1590.814709,
+          "p95": 1590.814709,
+          "p99": 1590.814709
+        },
+        "total_ms": {
+          "count": 118,
+          "max": 28.740294,
+          "min": 25.124214,
+          "p50": 26.269893999999997,
+          "p90": 27.424047,
+          "p95": 27.734603,
+          "p99": 28.469571
+        },
+        "upload_bytes": 96256
+      },
+      "geometry": {
+        "candidate_buckets_per_script": 1,
+        "directory_rows": 2048,
+        "inline_capacity": 2,
+        "page_rows": 4096,
+        "row_bytes": 7168,
+        "script_count": 13394,
+        "slot_utilization": 0.24222366898148148,
+        "used_pages": 3193
+      },
+      "independent_runs": 1,
+      "pages": {
+        "combined_client_server_rss_bytes": {
+          "count": 1,
+          "max": 926658560,
+          "min": 926658560,
+          "p50": 926658560,
+          "p90": 926658560,
+          "p95": 926658560,
+          "p99": 926658560
+        },
+        "decode_ms": {
+          "count": 124,
+          "max": 0.9960920000000001,
+          "min": 0.476563,
+          "p50": 0.50124,
+          "p90": 0.612776,
+          "p95": 0.734388,
+          "p99": 0.8893570000000001
+        },
+        "prepare_ms": {
+          "count": 124,
+          "max": 22.568501,
+          "min": 16.391466,
+          "p50": 16.524699000000002,
+          "p90": 17.271983000000002,
+          "p95": 17.461599,
+          "p99": 22.233269
+        },
+        "published_setup_bytes": 28672,
+        "response_bytes": 10240,
+        "server_ms": {
+          "count": 124,
+          "max": 14.906776,
+          "min": 10.261645999999999,
+          "p50": 11.354707000000001,
+          "p90": 12.349472,
+          "p95": 13.094290999999998,
+          "p99": 13.575159999999999
+        },
+        "server_setup_ms": {
+          "count": 1,
+          "max": 1699.9686860000002,
+          "min": 1699.9686860000002,
+          "p50": 1699.9686860000002,
+          "p90": 1699.9686860000002,
+          "p95": 1699.9686860000002,
+          "p99": 1699.9686860000002
+        },
+        "total_ms": {
+          "count": 124,
+          "max": 36.431313,
+          "min": 27.239536,
+          "p50": 28.67252,
+          "p90": 29.927882,
+          "p95": 30.408114,
+          "p99": 35.894408000000006
+        },
+        "upload_bytes": 106496
+      },
+      "workloads_first_run": [
+        {
+          "cold_setup_download_bytes": 28672,
+          "directory_queries": 20,
+          "name": "unused_20",
+          "page_queries": 0,
+          "query_response_bytes": 2129920,
+          "summed_measured_serial_core_ms": 528.33973,
+          "verified_events": 0
+        },
+        {
+          "cold_setup_download_bytes": 28672,
+          "directory_queries": 98,
+          "name": "unused_100",
+          "page_queries": 0,
+          "query_response_bytes": 10436608,
+          "summed_measured_serial_core_ms": 2583.9077489999995,
+          "verified_events": 0
+        },
+        {
+          "cold_setup_download_bytes": 28672,
+          "directory_queries": 10,
+          "name": "small_10",
+          "page_queries": 0,
+          "query_response_bytes": 1064960,
+          "summed_measured_serial_core_ms": 266.139643,
+          "verified_events": 10
+        },
+        {
+          "cold_setup_download_bytes": 28672,
+          "directory_queries": 10,
+          "name": "median_10",
+          "page_queries": 0,
+          "query_response_bytes": 1064960,
+          "summed_measured_serial_core_ms": 264.401419,
+          "verified_events": 20
+        },
+        {
+          "cold_setup_download_bytes": 57344,
+          "directory_queries": 1,
+          "name": "large_1",
+          "page_queries": 124,
+          "query_response_bytes": 14581760,
+          "summed_measured_serial_core_ms": 3604.335342999999,
+          "verified_events": 9152
+        },
+        {
+          "cold_setup_download_bytes": 57344,
+          "directory_queries": 1,
+          "name": "large_1_cached_prefix",
+          "page_queries": 117,
+          "query_response_bytes": 13764608,
+          "summed_measured_serial_core_ms": 3399.4053359999994,
+          "verified_events": 8576
+        }
+      ]
+    },
+    "k4": {
+      "directory": {
+        "combined_client_server_rss_bytes": {
+          "count": 3,
+          "max": 455258112,
+          "min": 455188480,
+          "p50": 455233536,
+          "p90": 455258112,
+          "p95": 455258112,
+          "p99": 455258112
+        },
+        "decode_ms": {
+          "count": 360,
+          "max": 0.619784,
+          "min": 0.279045,
+          "p50": 0.29214300000000004,
+          "p90": 0.313564,
+          "p95": 0.319916,
+          "p99": 0.587554
+        },
+        "prepare_ms": {
+          "count": 360,
+          "max": 25.293568999999998,
+          "min": 20.394681000000002,
+          "p50": 20.532654,
+          "p90": 20.64344,
+          "p95": 20.773128,
+          "p99": 21.74177
+        },
+        "published_setup_bytes": 14336,
+        "response_bytes": 5120,
+        "server_ms": {
+          "count": 360,
+          "max": 8.823682,
+          "min": 6.102689,
+          "p50": 6.755811,
+          "p90": 7.51558,
+          "p95": 7.6843509999999995,
+          "p99": 8.210156999999999
+        },
+        "server_setup_ms": {
+          "count": 3,
+          "max": 1504.5027659999998,
+          "min": 1493.496574,
+          "p50": 1498.749637,
+          "p90": 1504.5027659999998,
+          "p95": 1504.5027659999998,
+          "p99": 1504.5027659999998
+        },
+        "total_ms": {
+          "count": 360,
+          "max": 32.668056,
+          "min": 27.05206,
+          "p50": 27.621902,
+          "p90": 28.479777000000002,
+          "p95": 28.664727,
+          "p99": 29.50157
+        },
+        "upload_bytes": 128000
+      },
+      "geometry": {
+        "candidate_buckets_per_script": 1,
+        "directory_rows": 8192,
+        "inline_capacity": 4,
+        "page_rows": 4096,
+        "row_bytes": 3584,
+        "script_count": 13394,
+        "slot_utilization": 0.23357282366071427,
+        "used_pages": 2262
+      },
+      "independent_runs": 3,
+      "pages": {
+        "combined_client_server_rss_bytes": {
+          "count": 3,
+          "max": 406937600,
+          "min": 406929408,
+          "p50": 406929408,
+          "p90": 406937600,
+          "p95": 406937600,
+          "p99": 406937600
+        },
+        "decode_ms": {
+          "count": 765,
+          "max": 0.583678,
+          "min": 0.27827,
+          "p50": 0.29158500000000004,
+          "p90": 0.31227400000000005,
+          "p95": 0.31828500000000004,
+          "p99": 0.365174
+        },
+        "prepare_ms": {
+          "count": 765,
+          "max": 20.114462,
+          "min": 16.367854,
+          "p50": 16.459265000000002,
+          "p90": 16.526233,
+          "p95": 16.575059,
+          "p99": 16.928049
+        },
+        "published_setup_bytes": 14336,
+        "response_bytes": 5120,
+        "server_ms": {
+          "count": 765,
+          "max": 8.171578,
+          "min": 5.678632,
+          "p50": 6.455521,
+          "p90": 7.082192,
+          "p95": 7.221,
+          "p99": 7.541095
+        },
+        "server_setup_ms": {
+          "count": 3,
+          "max": 1396.9043530000001,
+          "min": 1391.333584,
+          "p50": 1394.461111,
+          "p90": 1396.9043530000001,
+          "p95": 1396.9043530000001,
+          "p99": 1396.9043530000001
+        },
+        "total_ms": {
+          "count": 765,
+          "max": 27.283953,
+          "min": 22.359561,
+          "p50": 23.229207000000002,
+          "p90": 23.877729,
+          "p95": 24.020424,
+          "p99": 24.397572999999998
+        },
+        "upload_bytes": 106496
+      },
+      "workloads_first_run": [
+        {
+          "cold_setup_download_bytes": 14336,
+          "directory_queries": 20,
+          "name": "unused_20",
+          "page_queries": 0,
+          "query_response_bytes": 2662400,
+          "summed_measured_serial_core_ms": 555.045769,
+          "verified_events": 0
+        },
+        {
+          "cold_setup_download_bytes": 14336,
+          "directory_queries": 99,
+          "name": "unused_100",
+          "page_queries": 0,
+          "query_response_bytes": 13178880,
+          "summed_measured_serial_core_ms": 2761.055934,
+          "verified_events": 0
+        },
+        {
+          "cold_setup_download_bytes": 14336,
+          "directory_queries": 10,
+          "name": "small_10",
+          "page_queries": 0,
+          "query_response_bytes": 1331200,
+          "summed_measured_serial_core_ms": 276.716002,
+          "verified_events": 10
+        },
+        {
+          "cold_setup_download_bytes": 14336,
+          "directory_queries": 10,
+          "name": "median_10",
+          "page_queries": 0,
+          "query_response_bytes": 1331200,
+          "summed_measured_serial_core_ms": 276.19562599999995,
+          "verified_events": 20
+        },
+        {
+          "cold_setup_download_bytes": 28672,
+          "directory_queries": 1,
+          "name": "large_1",
+          "page_queries": 255,
+          "query_response_bytes": 28595200,
+          "summed_measured_serial_core_ms": 5983.089099000006,
+          "verified_events": 9152
+        },
+        {
+          "cold_setup_download_bytes": 28672,
+          "directory_queries": 1,
+          "name": "large_1_cached_prefix",
+          "page_queries": 239,
+          "query_response_bytes": 26809344,
+          "summed_measured_serial_core_ms": 5610.9872840000035,
+          "verified_events": 8576
+        }
+      ]
+    },
+    "k8": {
+      "directory": {
+        "combined_client_server_rss_bytes": {
+          "count": 3,
+          "max": 1130995712,
+          "min": 1130975232,
+          "p50": 1130983424,
+          "p90": 1130995712,
+          "p95": 1130995712,
+          "p99": 1130995712
+        },
+        "decode_ms": {
+          "count": 363,
+          "max": 0.59646,
+          "min": 0.273742,
+          "p50": 0.28613,
+          "p90": 0.30861099999999997,
+          "p95": 0.322139,
+          "p99": 0.587614
+        },
+        "prepare_ms": {
+          "count": 363,
+          "max": 81.997527,
+          "min": 76.608548,
+          "p50": 76.999428,
+          "p90": 77.275519,
+          "p95": 77.40863300000001,
+          "p99": 77.79744500000001
+        },
+        "published_setup_bytes": 14336,
+        "response_bytes": 5120,
+        "server_ms": {
+          "count": 363,
+          "max": 16.329893000000002,
+          "min": 12.578612,
+          "p50": 13.68666,
+          "p90": 14.356967,
+          "p95": 14.914926,
+          "p99": 15.743403999999998
+        },
+        "server_setup_ms": {
+          "count": 3,
+          "max": 2961.8176160000003,
+          "min": 2952.363375,
+          "p50": 2961.5236999999997,
+          "p90": 2961.8176160000003,
+          "p95": 2961.8176160000003,
+          "p99": 2961.8176160000003
+        },
+        "total_ms": {
+          "count": 363,
+          "max": 96.051847,
+          "min": 89.77608099999999,
+          "p50": 91.012819,
+          "p90": 91.89232799999999,
+          "p95": 92.349467,
+          "p99": 92.976502
+        },
+        "upload_bytes": 430080
+      },
+      "geometry": {
+        "candidate_buckets_per_script": 1,
+        "directory_rows": 65536,
+        "inline_capacity": 8,
+        "page_rows": 2048,
+        "row_bytes": 3584,
+        "script_count": 13394,
+        "slot_utilization": 0.05109405517578125,
+        "used_pages": 1539
+      },
+      "independent_runs": 3,
+      "pages": {
+        "combined_client_server_rss_bytes": {
+          "count": 3,
+          "max": 382898176,
+          "min": 382836736,
+          "p50": 382836736,
+          "p90": 382898176,
+          "p95": 382898176,
+          "p99": 382898176
+        },
+        "decode_ms": {
+          "count": 762,
+          "max": 0.6066389999999999,
+          "min": 0.275508,
+          "p50": 0.292023,
+          "p90": 0.31445,
+          "p95": 0.320139,
+          "p99": 0.41585
+        },
+        "prepare_ms": {
+          "count": 762,
+          "max": 17.402882,
+          "min": 14.359524,
+          "p50": 14.455106,
+          "p90": 14.511582,
+          "p95": 14.561676,
+          "p99": 15.013703
+        },
+        "published_setup_bytes": 14336,
+        "response_bytes": 5120,
+        "server_ms": {
+          "count": 762,
+          "max": 8.390379,
+          "min": 5.335819000000001,
+          "p50": 6.396592,
+          "p90": 6.912243,
+          "p95": 7.0878499999999995,
+          "p99": 7.432583
+        },
+        "server_setup_ms": {
+          "count": 3,
+          "max": 1345.929597,
+          "min": 1338.873111,
+          "p50": 1344.4354899999998,
+          "p90": 1345.929597,
+          "p95": 1345.929597,
+          "p99": 1345.929597
+        },
+        "total_ms": {
+          "count": 762,
+          "max": 26.075415,
+          "min": 20.111615999999998,
+          "p50": 21.155764,
+          "p90": 21.735125,
+          "p95": 21.877088,
+          "p99": 22.288167
+        },
+        "upload_bytes": 96256
+      },
+      "workloads_first_run": [
+        {
+          "cold_setup_download_bytes": 14336,
+          "directory_queries": 20,
+          "name": "unused_20",
+          "page_queries": 0,
+          "query_response_bytes": 8704000,
+          "summed_measured_serial_core_ms": 1819.6367820000003,
+          "verified_events": 0
+        },
+        {
+          "cold_setup_download_bytes": 14336,
+          "directory_queries": 100,
+          "name": "unused_100",
+          "page_queries": 0,
+          "query_response_bytes": 43520000,
+          "summed_measured_serial_core_ms": 9120.335551999999,
+          "verified_events": 0
+        },
+        {
+          "cold_setup_download_bytes": 14336,
+          "directory_queries": 10,
+          "name": "small_10",
+          "page_queries": 0,
+          "query_response_bytes": 4352000,
+          "summed_measured_serial_core_ms": 911.223511,
+          "verified_events": 10
+        },
+        {
+          "cold_setup_download_bytes": 14336,
+          "directory_queries": 10,
+          "name": "median_10",
+          "page_queries": 0,
+          "query_response_bytes": 4352000,
+          "summed_measured_serial_core_ms": 910.7731550000001,
+          "verified_events": 20
+        },
+        {
+          "cold_setup_download_bytes": 28672,
+          "directory_queries": 1,
+          "name": "large_1",
+          "page_queries": 254,
+          "query_response_bytes": 26184704,
+          "summed_measured_serial_core_ms": 5460.1508650000005,
+          "verified_events": 9152
+        },
+        {
+          "cold_setup_download_bytes": 28672,
+          "directory_queries": 1,
+          "name": "large_1_cached_prefix",
+          "page_queries": 238,
+          "query_response_bytes": 24562688,
+          "summed_measured_serial_core_ms": 5123.478549999999,
+          "verified_events": 8576
+        }
+      ]
+    },
+    "k8-two": {
+      "directory": {
+        "combined_client_server_rss_bytes": {
+          "count": 3,
+          "max": 455405568,
+          "min": 455315456,
+          "p50": 455335936,
+          "p90": 455405568,
+          "p95": 455405568,
+          "p99": 455405568
+        },
+        "decode_ms": {
+          "count": 714,
+          "max": 0.606267,
+          "min": 0.277302,
+          "p50": 0.293772,
+          "p90": 0.315912,
+          "p95": 0.323033,
+          "p99": 0.5037470000000001
+        },
+        "prepare_ms": {
+          "count": 714,
+          "max": 25.580377000000002,
+          "min": 20.385254,
+          "p50": 20.539624999999997,
+          "p90": 20.618667,
+          "p95": 20.685879,
+          "p99": 21.038987
+        },
+        "published_setup_bytes": 14336,
+        "response_bytes": 5120,
+        "server_ms": {
+          "count": 714,
+          "max": 8.342086,
+          "min": 5.949735,
+          "p50": 6.760756,
+          "p90": 7.5480089999999995,
+          "p95": 7.6954959999999994,
+          "p99": 8.009032
+        },
+        "server_setup_ms": {
+          "count": 3,
+          "max": 1506.966698,
+          "min": 1500.7592189999998,
+          "p50": 1500.7931370000001,
+          "p90": 1506.966698,
+          "p95": 1506.966698,
+          "p99": 1506.966698
+        },
+        "total_ms": {
+          "count": 714,
+          "max": 32.454389,
+          "min": 26.742338,
+          "p50": 27.611065,
+          "p90": 28.414875,
+          "p95": 28.570277,
+          "p99": 28.973995
+        },
+        "upload_bytes": 128000
+      },
+      "geometry": {
+        "candidate_buckets_per_script": 2,
+        "directory_rows": 8192,
+        "inline_capacity": 8,
+        "page_rows": 2048,
+        "row_bytes": 3584,
+        "script_count": 13394,
+        "slot_utilization": 0.40875244140625,
+        "used_pages": 1539
+      },
+      "independent_runs": 3,
+      "pages": {
+        "combined_client_server_rss_bytes": {
+          "count": 3,
+          "max": 382812160,
+          "min": 382787584,
+          "p50": 382795776,
+          "p90": 382812160,
+          "p95": 382812160,
+          "p99": 382812160
+        },
+        "decode_ms": {
+          "count": 762,
+          "max": 0.5974700000000001,
+          "min": 0.278628,
+          "p50": 0.293297,
+          "p90": 0.312223,
+          "p95": 0.32024400000000003,
+          "p99": 0.5790040000000001
+        },
+        "prepare_ms": {
+          "count": 762,
+          "max": 17.488994,
+          "min": 14.362868,
+          "p50": 14.468725,
+          "p90": 14.538960999999999,
+          "p95": 14.604004,
+          "p99": 15.128897
+        },
+        "published_setup_bytes": 14336,
+        "response_bytes": 5120,
+        "server_ms": {
+          "count": 762,
+          "max": 8.431464,
+          "min": 5.283173000000001,
+          "p50": 6.455996000000001,
+          "p90": 6.945988,
+          "p95": 7.095025,
+          "p99": 7.473511
+        },
+        "server_setup_ms": {
+          "count": 3,
+          "max": 1353.966192,
+          "min": 1343.35443,
+          "p50": 1350.647737,
+          "p90": 1353.966192,
+          "p95": 1353.966192,
+          "p99": 1353.966192
+        },
+        "total_ms": {
+          "count": 762,
+          "max": 24.394263,
+          "min": 20.17617,
+          "p50": 21.238049,
+          "p90": 21.769655999999998,
+          "p95": 21.943684,
+          "p99": 22.379036000000003
+        },
+        "upload_bytes": 96256
+      },
+      "workloads_first_run": [
+        {
+          "cold_setup_download_bytes": 14336,
+          "directory_queries": 40,
+          "name": "unused_20",
+          "page_queries": 0,
+          "query_response_bytes": 5324800,
+          "summed_measured_serial_core_ms": 1110.4616210000002,
+          "verified_events": 0
+        },
+        {
+          "cold_setup_download_bytes": 14336,
+          "directory_queries": 199,
+          "name": "unused_100",
+          "page_queries": 0,
+          "query_response_bytes": 26490880,
+          "summed_measured_serial_core_ms": 5541.577467999997,
+          "verified_events": 0
+        },
+        {
+          "cold_setup_download_bytes": 14336,
+          "directory_queries": 20,
+          "name": "small_10",
+          "page_queries": 0,
+          "query_response_bytes": 2662400,
+          "summed_measured_serial_core_ms": 556.7033970000001,
+          "verified_events": 10
+        },
+        {
+          "cold_setup_download_bytes": 14336,
+          "directory_queries": 20,
+          "name": "median_10",
+          "page_queries": 0,
+          "query_response_bytes": 2662400,
+          "summed_measured_serial_core_ms": 558.990588,
+          "verified_events": 20
+        },
+        {
+          "cold_setup_download_bytes": 28672,
+          "directory_queries": 2,
+          "name": "large_1",
+          "page_queries": 254,
+          "query_response_bytes": 26015744,
+          "summed_measured_serial_core_ms": 5438.850345999997,
+          "verified_events": 9152
+        },
+        {
+          "cold_setup_download_bytes": 28672,
+          "directory_queries": 2,
+          "name": "large_1_cached_prefix",
+          "page_queries": 238,
+          "query_response_bytes": 24393728,
+          "summed_measured_serial_core_ms": 5099.350969999995,
+          "verified_events": 8576
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,245 @@
+{
+  "block_time_span_seconds": 9610,
+  "classification": "measured bounded sample; reconstructed protobuf and experimental Bloom filters",
+  "compact_payload": {
+    "caveat": "reconstructed transparent-only payload; not captured gRPC or incremental mixed-pool wire",
+    "excludes": [
+      "shielded data",
+      "chainMetadata",
+      "fee",
+      "HTTP/2 and TLS",
+      "request bytes"
+    ],
+    "grpc_framed_uncompressed_bytes": 305577,
+    "grpc_per_message_gzip_bytes": 272264,
+    "protobuf_bytes": 304937,
+    "whole_batch_gzip_bytes": 217767
+  },
+  "completion": {
+    "anchor_hash": "00000000000c3d327246f363ae3eb1e51531ad1727d57fc4e0798928fe35e11c",
+    "blocks": 128,
+    "rpc_calls_at_128_block_progress": 1898,
+    "seal_verification": "archive getblockhash(3470523) matched after collection stopped",
+    "type": "complete",
+    "unresolved_prevouts": 0
+  },
+  "counts": {
+    "distinct_supported_scripts_with_sample_activity": 1485,
+    "outputs_created_and_spent_within_sample": 1294,
+    "supported_coinbase_receives": 254,
+    "supported_receives": 2558,
+    "supported_spends": 3387,
+    "unsupported_receives": 3,
+    "unsupported_spends": 0
+  },
+  "environment": {
+    "protobuf": "6.33.5",
+    "protoc": "libprotoc 34.1",
+    "python": "3.13.13",
+    "zlib": "1.2.12"
+  },
+  "filters": [
+    {
+      "affected_scripts_per_interval": {
+        "count": 128,
+        "max": 122,
+        "p50": 18,
+        "p90": 57,
+        "p95": 69,
+        "p99": 103,
+        "sum": 3200
+      },
+      "false_negative_checks": "all inserted scripts passed",
+      "filter_batch_gzip_bytes": 12959,
+      "filter_bytes_with_envelopes": 18990,
+      "interval_blocks": 1,
+      "observed_absent_script_filter_matches": 1,
+      "observed_distinct_absent_scripts_matching": 1,
+      "target_false_positive_rate": 0.0001
+    },
+    {
+      "affected_scripts_per_interval": {
+        "count": 128,
+        "max": 122,
+        "p50": 18,
+        "p90": 57,
+        "p95": 69,
+        "p99": 103,
+        "sum": 3200
+      },
+      "false_negative_checks": "all inserted scripts passed",
+      "filter_batch_gzip_bytes": 14859,
+      "filter_bytes_with_envelopes": 20864,
+      "interval_blocks": 1,
+      "observed_absent_script_filter_matches": 0,
+      "observed_distinct_absent_scripts_matching": 0,
+      "target_false_positive_rate": 1e-05
+    },
+    {
+      "affected_scripts_per_interval": {
+        "count": 128,
+        "max": 122,
+        "p50": 18,
+        "p90": 57,
+        "p95": 69,
+        "p99": 103,
+        "sum": 3200
+      },
+      "false_negative_checks": "all inserted scripts passed",
+      "filter_batch_gzip_bytes": 16854,
+      "filter_bytes_with_envelopes": 22829,
+      "interval_blocks": 1,
+      "observed_absent_script_filter_matches": 0,
+      "observed_distinct_absent_scripts_matching": 0,
+      "target_false_positive_rate": 1e-06
+    },
+    {
+      "affected_scripts_per_interval": {
+        "count": 8,
+        "max": 386,
+        "p50": 284,
+        "p90": 386,
+        "p95": 386,
+        "p99": 386,
+        "sum": 2268
+      },
+      "false_negative_checks": "all inserted scripts passed",
+      "filter_batch_gzip_bytes": 5904,
+      "filter_bytes_with_envelopes": 6144,
+      "interval_blocks": 16,
+      "observed_absent_script_filter_matches": 0,
+      "observed_distinct_absent_scripts_matching": 0,
+      "target_false_positive_rate": 0.0001
+    },
+    {
+      "affected_scripts_per_interval": {
+        "count": 8,
+        "max": 386,
+        "p50": 284,
+        "p90": 386,
+        "p95": 386,
+        "p99": 386,
+        "sum": 2268
+      },
+      "false_negative_checks": "all inserted scripts passed",
+      "filter_batch_gzip_bytes": 7255,
+      "filter_bytes_with_envelopes": 7501,
+      "interval_blocks": 16,
+      "observed_absent_script_filter_matches": 0,
+      "observed_distinct_absent_scripts_matching": 0,
+      "target_false_positive_rate": 1e-05
+    },
+    {
+      "affected_scripts_per_interval": {
+        "count": 8,
+        "max": 386,
+        "p50": 284,
+        "p90": 386,
+        "p95": 386,
+        "p99": 386,
+        "sum": 2268
+      },
+      "false_negative_checks": "all inserted scripts passed",
+      "filter_batch_gzip_bytes": 8618,
+      "filter_bytes_with_envelopes": 8860,
+      "interval_blocks": 16,
+      "observed_absent_script_filter_matches": 0,
+      "observed_distinct_absent_scripts_matching": 0,
+      "target_false_positive_rate": 1e-06
+    },
+    {
+      "affected_scripts_per_interval": {
+        "count": 1,
+        "max": 1485,
+        "p50": 1485,
+        "p90": 1485,
+        "p95": 1485,
+        "p99": 1485,
+        "sum": 1485
+      },
+      "false_negative_checks": "all inserted scripts passed",
+      "filter_batch_gzip_bytes": 3670,
+      "filter_bytes_with_envelopes": 3647,
+      "interval_blocks": 128,
+      "observed_absent_script_filter_matches": 0,
+      "observed_distinct_absent_scripts_matching": 0,
+      "target_false_positive_rate": 0.0001
+    },
+    {
+      "affected_scripts_per_interval": {
+        "count": 1,
+        "max": 1485,
+        "p50": 1485,
+        "p90": 1485,
+        "p95": 1485,
+        "p99": 1485,
+        "sum": 1485
+      },
+      "false_negative_checks": "all inserted scripts passed",
+      "filter_batch_gzip_bytes": 4560,
+      "filter_bytes_with_envelopes": 4537,
+      "interval_blocks": 128,
+      "observed_absent_script_filter_matches": 0,
+      "observed_distinct_absent_scripts_matching": 0,
+      "target_false_positive_rate": 1e-05
+    },
+    {
+      "affected_scripts_per_interval": {
+        "count": 1,
+        "max": 1485,
+        "p50": 1485,
+        "p90": 1485,
+        "p95": 1485,
+        "p99": 1485,
+        "sum": 1485
+      },
+      "false_negative_checks": "all inserted scripts passed",
+      "filter_batch_gzip_bytes": 5449,
+      "filter_bytes_with_envelopes": 5426,
+      "interval_blocks": 128,
+      "observed_absent_script_filter_matches": 0,
+      "observed_distinct_absent_scripts_matching": 0,
+      "target_false_positive_rate": 1e-06
+    }
+  ],
+  "limits": [
+    "recent contiguous sample, not full history",
+    "100 synthetic absent scripts, not real wallets",
+    "no directory/page PIR execution",
+    "no mobile latency or memory measurement",
+    "prototype Bloom encoding, not a selected protocol"
+  ],
+  "manifest": {
+    "anchor_hash": "00000000000c3d327246f363ae3eb1e51531ad1727d57fc4e0798928fe35e11c",
+    "anchor_height": 3470523,
+    "archive_host": "archive-vct-off",
+    "capture_mode": "first 128 complete blocks from bounded collection; final anchor rechecked by archive getblockhash after stopping collector",
+    "classification": "bounded public chain sample, not historical census",
+    "collected_at": "2026-09-04T21:32:08.304668+00:00",
+    "genesis_hash": "00040fe8ec8471911baa1db1266ea15dd06b4a8a5c453883c000b031973dce08",
+    "max_rpc_requests_per_second": 10.0,
+    "network": "main",
+    "node_tip_at_start": 3472069,
+    "original_requested_anchor": 3471419,
+    "pruned": false,
+    "start_height": 3470396,
+    "type": "manifest"
+  },
+  "proto_sha256": "d8d0c8aaa5ceec7d5dcc188ef25b04011df2ec0254901620fce982fc13aeb32d",
+  "sample_events_per_script": {
+    "count": 1485,
+    "max": 678,
+    "p50": 2,
+    "p90": 4,
+    "p95": 7,
+    "p99": 59,
+    "sum": 5945
+  },
+  "sample_inline_coverage": {
+    "0": 0.0,
+    "2": 0.802020202020202,
+    "4": 0.9124579124579124,
+    "8": 0.9636363636363636
+  },
+  "sample_sha256": "fd4c5a21200a8dfa4502b71a09849fcf4a1232e9db916b647773716b2e10843a"
+}

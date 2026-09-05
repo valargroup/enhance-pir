@@ -1,0 +1,116 @@
+{
+  "budget_resume": {
+    "application_bytes": 7335211,
+    "completed": true,
+    "cost": {
+      "core_ms": 2229.6203639999994,
+      "public_download_bytes": 174379,
+      "queries": 51,
+      "response_bytes": 1285120,
+      "setup_download_bytes": 444416,
+      "upload_bytes": 5431296
+    },
+    "pauses": 5,
+    "verified_events": 9152
+  },
+  "classification": "sample application-byte screen; not product/device gates",
+  "lost_response": {
+    "application_bytes": 426283,
+    "completed": true,
+    "cost": {
+      "core_ms": 47.090344,
+      "public_download_bytes": 174379,
+      "queries": 2,
+      "response_bytes": 10240,
+      "setup_download_bytes": 28672,
+      "upload_bytes": 212992
+    },
+    "pauses": 1,
+    "verified_events": 2
+  },
+  "product_gates": {
+    "30_and_180_day_catchup": "unmeasured",
+    "concurrent_publication_and_load": "unmeasured",
+    "full_restoration": "unmeasured",
+    "mobile_latency_and_peak_memory": "unmeasured",
+    "network_privacy_and_transport": "unmeasured",
+    "representative_wallet_population": "unmeasured"
+  },
+  "workloads": {
+    "large_1": {
+      "application_bytes": 6976811,
+      "checkpoint": 3470267,
+      "compact_increment_bytes_same_coverage": 2888097,
+      "harness_wall_seconds_range": [
+        7.504874045989709,
+        7.600869173009414
+      ],
+      "queries": 51,
+      "ratio_to_compact": 2.4157121454023187,
+      "runs": 3,
+      "sample_50_percent_byte_screen": "fail",
+      "savings_percent": -141.57121454023186,
+      "verified_events": 9152
+    },
+    "large_half_day": {
+      "application_bytes": 6976811,
+      "checkpoint": 3470843,
+      "compact_increment_bytes_same_coverage": 1423042,
+      "harness_wall_seconds_range": [
+        7.626929332007421,
+        7.700365892000264
+      ],
+      "queries": 51,
+      "ratio_to_compact": 4.902744261940266,
+      "runs": 3,
+      "sample_50_percent_byte_screen": "fail",
+      "savings_percent": -390.2744261940266,
+      "verified_events": 8576
+    },
+    "median_10": {
+      "application_bytes": 1304875,
+      "checkpoint": 3470267,
+      "compact_increment_bytes_same_coverage": 2888097,
+      "harness_wall_seconds_range": [
+        1.7784447679878213,
+        1.8265231740078889
+      ],
+      "queries": 10,
+      "ratio_to_compact": 0.45181134844155163,
+      "runs": 3,
+      "sample_50_percent_byte_screen": "pass",
+      "savings_percent": 54.81886515584484,
+      "verified_events": 20
+    },
+    "sparse_1": {
+      "application_bytes": 300331,
+      "checkpoint": 3470267,
+      "compact_increment_bytes_same_coverage": 2888097,
+      "harness_wall_seconds_range": [
+        1.5360273869882803,
+        1.5380687979923096
+      ],
+      "queries": 1,
+      "ratio_to_compact": 0.10398923581860305,
+      "runs": 3,
+      "sample_50_percent_byte_screen": "pass",
+      "savings_percent": 89.6010764181397,
+      "verified_events": 2
+    },
+    "unused_100": {
+      "application_bytes": 174379,
+      "checkpoint": 3470267,
+      "compact_increment_bytes_same_coverage": 2888097,
+      "harness_wall_seconds_range": [
+        0.4175968269992154,
+        0.42157824998139404
+      ],
+      "queries": 0,
+      "ratio_to_compact": 0.06037851221756056,
+      "runs": 3,
+      "sample_50_percent_byte_screen": "pass",
+      "savings_percent": 93.96214877824394,
+      "verified_events": 0
+    }
+  }
+}

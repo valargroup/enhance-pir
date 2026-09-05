@@ -1,0 +1,27 @@
+{
+  "result": "pass",
+  "policy_checks": [
+    {
+      "case": "single_directory",
+      "mode": "fresh",
+      "result": "pass"
+    },
+    {
+      "case": "two_cold_pages",
+      "mode": "fresh",
+      "result": "pass"
+    },
+    {
+      "case": "two_warm_pages",
+      "mode": "reuse4",
+      "result": "pass"
+    }
+  ],
+  "source": "actual directory rows",
+  "queries_per_process": 5,
+  "batches_per_process": 2,
+  "last_batch_unused_slots": 3,
+  "live_retry": "same immutable bytes, same slot; no extra key upload",
+  "restart": "new process creates new batches through OS-random start_batch; same expected rows recovered",
+  "key_uploads_each_process": 2
+}

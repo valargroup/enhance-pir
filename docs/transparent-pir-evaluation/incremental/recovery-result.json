@@ -1,0 +1,15 @@
+{
+  "classification": "synthetic fork with real PIR retrieval",
+  "tail_sealing": "pass",
+  "reorg_rollback_and_fork_receive_spend": "pass",
+  "cost": {
+    "core_ms": 189.75802099999999,
+    "public_download_bytes": 2535,
+    "queries": 6,
+    "response_bytes": 92160,
+    "setup_download_bytes": 258048,
+    "upload_bytes": 577536
+  },
+  "verified_events": 4,
+  "final_utxos": 0
+}

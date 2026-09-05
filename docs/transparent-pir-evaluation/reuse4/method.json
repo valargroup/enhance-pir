@@ -1,0 +1,14 @@
+{
+  "hardware": "dedicated 8-vCPU Intel Xeon Platinum 8358 / 32 GiB Linux host",
+  "rust": "1.89.0",
+  "RAYON_NUM_THREADS": 8,
+  "RUSTFLAGS": "-C target-cpu=native",
+  "release_profile": "opt-level 3, thin LTO, codegen-units 1",
+  "order": "all fresh runs, then all adaptive reuse runs; not interleaved",
+  "repetitions": "one cold plus two warm repeats for each workload; same generation, reset ledger fixture",
+  "warm_definition": "public c1 cache retained per workload, new private secrets every batch; public filters downloaded on each replay",
+  "timing_limit": "each process rebuilds server preprocessing and public decoding data; caching is payload accounting, not a warm-runtime benchmark",
+  "integration": "four independent public matrix slots, maximum one new query per slot per secret, fresh batch on restart",
+  "dependencies": "exact uncommitted sibling source preserved in ipir-source.tar.gz and source-manifest.json",
+  "final_policy": "reuse only when key savings exceed missing public c1 bytes; single-query and short cold-page stages remain fresh"
+}

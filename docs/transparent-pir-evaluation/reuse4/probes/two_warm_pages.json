@@ -1,0 +1,61 @@
+{
+  "batches": 1,
+  "cached_public_mask": 15,
+  "classification": "row-file four-slot experiment; local IPC, no network",
+  "columns": 10240,
+  "combined_client_server_end_rss_bytes": 4266516480,
+  "combined_client_server_ready_rss_bytes": 4265160704,
+  "database_build_ms": 416.210405,
+  "decryption_threshold": 2199023255543,
+  "extra_public_bytes_for_reuse": 0,
+  "key_uploads": 1,
+  "max_decryption_error": 49732604964,
+  "mode": "reuse4",
+  "packing_cache_payload_bytes": 2012610560,
+  "policy": "auto",
+  "predicted_key_saving_bytes": 86016,
+  "preparation_ms_per_set": [
+    2883.8513749999997,
+    2960.565795,
+    2821.722972,
+    2840.94009
+  ],
+  "public_c1_bytes_per_set": 71680,
+  "public_matrix_generation_ms": 0.183414,
+  "public_sets": 4,
+  "published_setup_bytes": 286720,
+  "row_bytes": 17920,
+  "rows": 4096,
+  "samples": [
+    {
+      "batch": 0,
+      "decode_ms": 1.1192719999999998,
+      "key_upload_bytes": 86016,
+      "prepare_ms": 16.49802,
+      "query_body_bytes": 20480,
+      "response_bytes": 25600,
+      "retry": false,
+      "row": 0,
+      "server_ms": 26.400507,
+      "slot": 0,
+      "total_ms": 44.017799000000004,
+      "upload_bytes": 106496
+    },
+    {
+      "batch": 0,
+      "decode_ms": 1.125974,
+      "key_upload_bytes": 0,
+      "prepare_ms": 3.978413,
+      "query_body_bytes": 20480,
+      "response_bytes": 25600,
+      "retry": false,
+      "row": 1,
+      "server_ms": 24.422047000000003,
+      "slot": 1,
+      "total_ms": 29.526434000000002,
+      "upload_bytes": 20480
+    }
+  ],
+  "unique_queries": 2,
+  "unused_final_batch_slots": 2
+}

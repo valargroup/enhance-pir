@@ -1,0 +1,672 @@
+{
+  "bip158": {
+    "M": 784931,
+    "P": 19,
+    "profile": "zcash-transparent-basic-v1"
+  },
+  "blocks": 1152,
+  "bloom_probability": 1e-06,
+  "build_seconds": {
+    "bip158_complete": 0.021,
+    "bloom_complete": 1.036,
+    "bloom_supported": 0.793
+  },
+  "busiest_script_activity": 1152,
+  "classification": "bounded single-day mainnet sample; not a wallet-population average",
+  "coverage_difference_observable_here": false,
+  "coverage_note": "Every distinct script in this day is P2PKH or P2SH, so the supported-script set and the complete script set coincide and the measured size difference is entirely encoding. Broader coverage still changes what the filter can report on intervals that do contain other script forms; this sample cannot quantify that.",
+  "distinct_active_scripts": 13394,
+  "encoding_and_coverage": {
+    "full-day-1152": {
+      "blocks": 1152,
+      "delivered_envelope_bytes": {
+        "bip158_complete": 138716,
+        "bloom_complete": 170670,
+        "bloom_supported": 170670
+      },
+      "elements_complete": 34062,
+      "height_range": [
+        3470268,
+        3471419
+      ],
+      "ordinary_retrieval_bytes": 2888097,
+      "raw_filter_bytes": {
+        "bip158_complete": 91136,
+        "bloom_complete": 123004,
+        "bloom_supported": 123004
+      }
+    },
+    "half-day-576": {
+      "blocks": 576,
+      "delivered_envelope_bytes": {
+        "bip158_complete": 61957,
+        "bloom_complete": 75228,
+        "bloom_supported": 75228
+      },
+      "elements_complete": 14226,
+      "height_range": [
+        3470844,
+        3471419
+      ],
+      "ordinary_retrieval_bytes": 1423042,
+      "raw_filter_bytes": {
+        "bip158_complete": 38193,
+        "bloom_complete": 51426,
+        "bloom_supported": 51426
+      }
+    },
+    "suffix-116": {
+      "blocks": 116,
+      "delivered_envelope_bytes": {
+        "bip158_complete": 11014,
+        "bloom_complete": 13122,
+        "bloom_supported": 13122
+      },
+      "elements_complete": 2278,
+      "height_range": [
+        3471304,
+        3471419
+      ],
+      "ordinary_retrieval_bytes": 224877,
+      "raw_filter_bytes": {
+        "bip158_complete": 6150,
+        "bloom_complete": 8246,
+        "bloom_supported": 8246
+      }
+    },
+    "suffix-12": {
+      "blocks": 12,
+      "delivered_envelope_bytes": {
+        "bip158_complete": 1077,
+        "bloom_complete": 1235,
+        "bloom_supported": 1235
+      },
+      "elements_complete": 176,
+      "height_range": [
+        3471408,
+        3471419
+      ],
+      "ordinary_retrieval_bytes": 9492,
+      "raw_filter_bytes": {
+        "bip158_complete": 479,
+        "bloom_complete": 637,
+        "bloom_supported": 637
+      }
+    },
+    "suffix-288": {
+      "blocks": 288,
+      "delivered_envelope_bytes": {
+        "bip158_complete": 28655,
+        "bloom_complete": 34419,
+        "bloom_supported": 34419
+      },
+      "elements_complete": 6211,
+      "height_range": [
+        3471132,
+        3471419
+      ],
+      "ordinary_retrieval_bytes": 446142,
+      "raw_filter_bytes": {
+        "bip158_complete": 16723,
+        "bloom_complete": 22469,
+        "bloom_supported": 22469
+      }
+    }
+  },
+  "end_height": 3471419,
+  "false_positive_probe": {
+    "blocks": 12,
+    "classification": "deterministic absent scripts; a rate, not a proof of any bound",
+    "coalesced_private_block_requests": 0,
+    "expected_rate_1_over_M": 1.2739973322495864e-06,
+    "matches": 0,
+    "observed_rate": 0.0,
+    "script_filter_tests": 120000,
+    "scripts": 10000
+  },
+  "profiles": {
+    "100-unchanged": {
+      "intervals": {
+        "full-day-1152": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.05,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "blocks_with_real_activity": 0,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "delivered_envelope_bytes_bip158": 138716
+        },
+        "half-day-576": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.024,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "blocks_with_real_activity": 0,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "delivered_envelope_bytes_bip158": 61957
+        },
+        "suffix-116": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.008,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "blocks_with_real_activity": 0,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "delivered_envelope_bytes_bip158": 11014
+        },
+        "suffix-12": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.005,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "blocks_with_real_activity": 0,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "delivered_envelope_bytes_bip158": 1077
+        },
+        "suffix-288": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.014,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "blocks_with_real_activity": 0,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "delivered_envelope_bytes_bip158": 28655
+        }
+      },
+      "script_count": 100
+    },
+    "busiest-address": {
+      "intervals": {
+        "full-day-1152": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.009,
+            "matched_blocks": 1152,
+            "true_positive_script_hits": 1152
+          },
+          "blocks_with_real_activity": 1152,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 1152,
+            "true_positive_script_hits": 1152
+          },
+          "delivered_envelope_bytes_bip158": 138716
+        },
+        "half-day-576": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.01,
+            "matched_blocks": 576,
+            "true_positive_script_hits": 576
+          },
+          "blocks_with_real_activity": 576,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 576,
+            "true_positive_script_hits": 576
+          },
+          "delivered_envelope_bytes_bip158": 61957
+        },
+        "suffix-116": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.004,
+            "matched_blocks": 116,
+            "true_positive_script_hits": 116
+          },
+          "blocks_with_real_activity": 116,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 116,
+            "true_positive_script_hits": 116
+          },
+          "delivered_envelope_bytes_bip158": 11014
+        },
+        "suffix-12": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.004,
+            "matched_blocks": 12,
+            "true_positive_script_hits": 12
+          },
+          "blocks_with_real_activity": 12,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 12,
+            "true_positive_script_hits": 12
+          },
+          "delivered_envelope_bytes_bip158": 1077
+        },
+        "suffix-288": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.006,
+            "matched_blocks": 288,
+            "true_positive_script_hits": 288
+          },
+          "blocks_with_real_activity": 288,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 288,
+            "true_positive_script_hits": 288
+          },
+          "delivered_envelope_bytes_bip158": 28655
+        }
+      },
+      "script_count": 1
+    },
+    "mix-100-mostly-inactive": {
+      "intervals": {
+        "full-day-1152": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.043,
+            "matched_blocks": 6,
+            "true_positive_script_hits": 6
+          },
+          "blocks_with_real_activity": 6,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 6,
+            "true_positive_script_hits": 6
+          },
+          "delivered_envelope_bytes_bip158": 138716
+        },
+        "half-day-576": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.025,
+            "matched_blocks": 6,
+            "true_positive_script_hits": 6
+          },
+          "blocks_with_real_activity": 6,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 6,
+            "true_positive_script_hits": 6
+          },
+          "delivered_envelope_bytes_bip158": 61957
+        },
+        "suffix-116": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.009,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "blocks_with_real_activity": 0,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "delivered_envelope_bytes_bip158": 11014
+        },
+        "suffix-12": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.005,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "blocks_with_real_activity": 0,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "delivered_envelope_bytes_bip158": 1077
+        },
+        "suffix-288": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.015,
+            "matched_blocks": 2,
+            "true_positive_script_hits": 2
+          },
+          "blocks_with_real_activity": 2,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 2,
+            "true_positive_script_hits": 2
+          },
+          "delivered_envelope_bytes_bip158": 28655
+        }
+      },
+      "script_count": 100
+    },
+    "mix-1000-mostly-inactive": {
+      "intervals": {
+        "full-day-1152": {
+          "bip158": {
+            "extra_private_block_requests": 2,
+            "false_positive_script_hits": 2,
+            "match_seconds": 0.852,
+            "matched_blocks": 12,
+            "true_positive_script_hits": 10
+          },
+          "blocks_with_real_activity": 10,
+          "bloom_complete": {
+            "extra_private_block_requests": 1,
+            "false_positive_script_hits": 1,
+            "matched_blocks": 11,
+            "true_positive_script_hits": 10
+          },
+          "delivered_envelope_bytes_bip158": 138716
+        },
+        "half-day-576": {
+          "bip158": {
+            "extra_private_block_requests": 2,
+            "false_positive_script_hits": 2,
+            "match_seconds": 0.272,
+            "matched_blocks": 8,
+            "true_positive_script_hits": 6
+          },
+          "blocks_with_real_activity": 6,
+          "bloom_complete": {
+            "extra_private_block_requests": 1,
+            "false_positive_script_hits": 1,
+            "matched_blocks": 7,
+            "true_positive_script_hits": 6
+          },
+          "delivered_envelope_bytes_bip158": 61957
+        },
+        "suffix-116": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.051,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "blocks_with_real_activity": 0,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "delivered_envelope_bytes_bip158": 11014
+        },
+        "suffix-12": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.01,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "blocks_with_real_activity": 0,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "delivered_envelope_bytes_bip158": 1077
+        },
+        "suffix-288": {
+          "bip158": {
+            "extra_private_block_requests": 2,
+            "false_positive_script_hits": 2,
+            "match_seconds": 0.127,
+            "matched_blocks": 4,
+            "true_positive_script_hits": 2
+          },
+          "blocks_with_real_activity": 2,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 2,
+            "true_positive_script_hits": 2
+          },
+          "delivered_envelope_bytes_bip158": 28655
+        }
+      },
+      "script_count": 1000
+    },
+    "one-two-activity": {
+      "intervals": {
+        "full-day-1152": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.009,
+            "matched_blocks": 2,
+            "true_positive_script_hits": 2
+          },
+          "blocks_with_real_activity": 2,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 2,
+            "true_positive_script_hits": 2
+          },
+          "delivered_envelope_bytes_bip158": 138716
+        },
+        "half-day-576": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.007,
+            "matched_blocks": 2,
+            "true_positive_script_hits": 2
+          },
+          "blocks_with_real_activity": 2,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 2,
+            "true_positive_script_hits": 2
+          },
+          "delivered_envelope_bytes_bip158": 61957
+        },
+        "suffix-116": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.005,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "blocks_with_real_activity": 0,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "delivered_envelope_bytes_bip158": 11014
+        },
+        "suffix-12": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.004,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "blocks_with_real_activity": 0,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "delivered_envelope_bytes_bip158": 1077
+        },
+        "suffix-288": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.005,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "blocks_with_real_activity": 0,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "delivered_envelope_bytes_bip158": 28655
+        }
+      },
+      "script_count": 1
+    },
+    "ten-two-activity": {
+      "intervals": {
+        "full-day-1152": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.013,
+            "matched_blocks": 19,
+            "true_positive_script_hits": 20
+          },
+          "blocks_with_real_activity": 19,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 19,
+            "true_positive_script_hits": 20
+          },
+          "delivered_envelope_bytes_bip158": 138716
+        },
+        "half-day-576": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.009,
+            "matched_blocks": 12,
+            "true_positive_script_hits": 13
+          },
+          "blocks_with_real_activity": 12,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 12,
+            "true_positive_script_hits": 13
+          },
+          "delivered_envelope_bytes_bip158": 61957
+        },
+        "suffix-116": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.005,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "blocks_with_real_activity": 0,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "delivered_envelope_bytes_bip158": 11014
+        },
+        "suffix-12": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.004,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "blocks_with_real_activity": 0,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 0,
+            "true_positive_script_hits": 0
+          },
+          "delivered_envelope_bytes_bip158": 1077
+        },
+        "suffix-288": {
+          "bip158": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "match_seconds": 0.007,
+            "matched_blocks": 4,
+            "true_positive_script_hits": 4
+          },
+          "blocks_with_real_activity": 4,
+          "bloom_complete": {
+            "extra_private_block_requests": 0,
+            "false_positive_script_hits": 0,
+            "matched_blocks": 4,
+            "true_positive_script_hits": 4
+          },
+          "delivered_envelope_bytes_bip158": 28655
+        }
+      },
+      "script_count": 10
+    }
+  },
+  "sample": "docs/transparent-pir-evaluation/mainnet-study/mainnet-day.jsonl.gz",
+  "scripts_outside_the_supported_set": 0,
+  "start_height": 3470268
+}

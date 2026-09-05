@@ -1,0 +1,42 @@
+{
+  "batches": 1,
+  "classification": "row-file four-slot experiment; local IPC, no network",
+  "columns": 2048,
+  "combined_client_server_end_rss_bytes": 492232704,
+  "combined_client_server_ready_rss_bytes": 492105728,
+  "database_build_ms": 78.96358000000001,
+  "decryption_threshold": 2199023255543,
+  "key_uploads": 1,
+  "max_decryption_error": 57970024501,
+  "mode": "fresh",
+  "packing_cache_payload_bytes": 100630528,
+  "policy": "fresh",
+  "preparation_ms_per_set": [
+    1377.511055
+  ],
+  "public_c1_bytes_per_set": 14336,
+  "public_matrix_generation_ms": 0.196327,
+  "public_sets": 1,
+  "published_setup_bytes": 14336,
+  "row_bytes": 3584,
+  "rows": 4096,
+  "samples": [
+    {
+      "batch": 0,
+      "decode_ms": 0.31268799999999997,
+      "key_upload_bytes": 86016,
+      "prepare_ms": 16.363444,
+      "query_body_bytes": 20480,
+      "response_bytes": 5120,
+      "retry": false,
+      "row": 2549,
+      "server_ms": 6.9405220000000005,
+      "slot": 0,
+      "total_ms": 23.616654000000004,
+      "upload_bytes": 106496
+    }
+  ],
+  "unique_queries": 1,
+  "unused_final_batch_slots": 0,
+  "charged_public_download_bytes": 14336
+}

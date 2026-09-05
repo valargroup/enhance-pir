@@ -1,0 +1,25 @@
+{
+  "date": "2026-09-04",
+  "classification": "serialized application payload experiment on public mainnet data; not a wallet or network performance trial",
+  "host": "roman-ipir-bench-8vcpu",
+  "hardware": "8 vCPU Intel Xeon Platinum 8358, 32 GiB RAM",
+  "binary_sha256": "c742ec2e2d7c05b0d229c5117d7731bed9bfc4d8940a1ebc4048227742d077bf",
+  "dependency_source": "../reuse4/ipir-source.tar.gz",
+  "measured_source": "measured-source.tar.gz",
+  "sample": "../mainnet-study/mainnet-day.jsonl.gz",
+  "baseline": "baseline.json",
+  "strategy": "private binary search of existing complete event pages followed by suffix retrieval; separate backend invocation per adaptive probe",
+  "reuse_policy": "existing auto byte-aware policy, four sets for beneficial batches, fresh secret on each backend batch",
+  "cache_policy": "independent cache per checkpoint and strategy, one cold then one warm repetition; public C1 byte accounting only; full manifest and filter bundle charged each run",
+  "oracle": "independent raw transaction dictionaries; exact event multiset, UTXOs, completed checkpoint required before recording",
+  "trust": "complete sorted indexer and wallet-supplied accepted chain; no malicious-indexer completeness proof or new cryptographic composition claim",
+  "leakage": "PIR selections hide page IDs; query counts and adaptive round timing observable",
+  "validation": "24 Python tests passed, one optional older-binary test skipped; real mainnet PIR runs validate decoded rows and independent ledger oracle",
+  "limitations": [
+    "synthetic single-script checkpoint fixtures",
+    "one cold and one warm run per case, no timing confidence claim",
+    "HTTP/TLS and device measurements excluded",
+    "partial private batches are not retained across adaptive rounds",
+    "no new cache sets beyond existing backend; runtime rebuilds preprocessing per invocation"
+  ]
+}

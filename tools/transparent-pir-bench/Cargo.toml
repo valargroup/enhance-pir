@@ -1,0 +1,16 @@
+[package]
+name = "transparent-pir-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+ipir-sp = { git = "https://github.com/valargroup/ipir-sp.git", rev = "e875404cef33661906ab60af236dfb327e6b28b1" }
+inspiring = { git = "https://github.com/valargroup/ipir-sp.git", rev = "e875404cef33661906ab60af236dfb327e6b28b1" }
+serde_json = "1"
+sysinfo = "0.36"
+
+[profile.release]
+debug = false
