@@ -52,18 +52,29 @@ pub async fn reconcile(
     Ok(())
 }
 
-/// Builds and appends the filter for one block.
+/// The filter for one block, and what resolving it cost.
+pub struct BuiltFilter {
+    pub block_hash: BlockHash,
+    pub filter: transparent_filter::FilterBytes,
+    pub rpc_lookups: u64,
+    pub cache_hits: u64,
+}
+
+/// Fetches a block and builds its filter, touching no shared state.
 ///
-/// Returns the block hash. An unresolvable previous output propagates as an
-/// error and nothing is appended: publishing a partial filter would be worse
-/// than publishing nothing, because a wallet cannot tell the difference.
-pub async fn ingest_block(
+/// Deliberately takes no lock. Resolving previous outputs can mean many RPC
+/// round trips, and holding the store's write lock across them would stop the
+/// service answering range requests from the coverage it already has. The lock
+/// is taken only for the append that follows.
+///
+/// An unresolvable previous output propagates as an error and nothing is
+/// appended: publishing a partial filter would be worse than publishing
+/// nothing, because a wallet cannot tell the difference.
+pub async fn build_block_filter(
     zakura: &ZakuraClient,
-    store: &mut FilterStore,
     cache: &mut OutputCache,
-    state: &ServiceState,
     height: u64,
-) -> Result<BlockHash, BoxError> {
+) -> Result<BuiltFilter, BoxError> {
     let (hash_display, block) = zakura.block(height).await?;
     let block_hash = BlockHash::from_display_hex(&hash_display)?;
 
@@ -92,9 +103,12 @@ pub async fn ingest_block(
     let elements = elements?;
 
     let filter = build_filter(block_hash, &elements)?;
-    store.append(height, block_hash, filter.as_slice())?;
-    state.metrics().observe_block(rpc_lookups, cache_hits);
-    Ok(block_hash)
+    Ok(BuiltFilter {
+        block_hash,
+        filter,
+        rpc_lookups,
+        cache_hits,
+    })
 }
 
 /// The ingest loop: reconcile, catch up, commit, repeat.
@@ -130,18 +144,27 @@ pub async fn run(
 
         let mut since_commit = 0u64;
         while next <= tip {
-            // The write lock is taken per block so range requests can still be
-            // served from the coverage that already exists during a long
-            // backfill.
-            let mut inner = state.inner().write().await;
-            let store = &mut inner.store;
-            ingest_block(&zakura, store, &mut cache, &state, next).await?;
-            since_commit += 1;
-            if since_commit >= commit_every {
-                store.commit()?;
-                since_commit = 0;
+            // Fetch and build outside the lock; take it only to append.
+            let built = build_block_filter(&zakura, &mut cache, next).await?;
+            {
+                let mut inner = state.inner().write().await;
+                let store = &mut inner.store;
+                // Coverage cannot have moved: this task is the only writer.
+                // Checking anyway keeps the append total rather than relying on
+                // that staying true.
+                if store.next_height() != next {
+                    break;
+                }
+                store.append(next, built.block_hash, built.filter.as_slice())?;
+                since_commit += 1;
+                if since_commit >= commit_every {
+                    store.commit()?;
+                    since_commit = 0;
+                }
             }
-            drop(inner);
+            state
+                .metrics()
+                .observe_block(built.rpc_lookups, built.cache_hits);
             next += 1;
         }
         {
