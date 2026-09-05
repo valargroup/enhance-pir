@@ -18,7 +18,7 @@ The active Enhance protocol has one fixed-width, 725-byte record:
 
 ```text
 pir/enhance/                 Enhance protocol types and client
-pir/transparent-spend/       outpoint-keyed spend protocol and client
+pir/transparent-spend/       outpoint-keyed spend protocol; retained, not served
 server/enhance-pir-server/   coordinator, worker, ingest, and storage
 server/pir-apm/              operational dashboard and alerting
 ops/                         deployment tooling and infrastructure
@@ -58,10 +58,12 @@ The public API:
 - `GET /v1/health`
 - `GET /v1/enhance/init`
 - `POST /v1/enhance/query`
-- `GET /v1/transparent-spend/init`
-- `POST /v1/transparent-spend/cold/query`
-- `POST /v1/transparent-spend/warm/query`
 
 See [architecture](docs/architecture.md) and the
 [deployment runbook](docs/enhance-pir-deploy.md). No deployed wallet client
 depends on the former memo/action API.
+
+The transparent-spend PIR tables are not served. The protocol crate and the
+server-side journal remain in the tree, but no worker is provisioned for them
+and the coordinator does not publish them; see
+[architecture](docs/architecture.md).

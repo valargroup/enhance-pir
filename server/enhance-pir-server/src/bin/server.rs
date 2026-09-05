@@ -5,7 +5,6 @@ use enhance_pir_server::coordinator::{
     WorkerTarget,
 };
 use enhance_pir_server::ingest::EnhanceJournal;
-use enhance_pir_server::spend::{SpendJournal, TransparentSpendTables};
 use enhance_pir_server::store::RecordJournal;
 use enhance_pir_server::types::DatabaseId;
 use enhance_pir_server::worker::WorkerState;
@@ -51,6 +50,9 @@ struct Cli {
 #[serde(deny_unknown_fields)]
 struct WorkerConfigFile {
     groups: Vec<WorkerGroupConfig>,
+    /// Accepted and ignored. The transparent-spend tables are not served, but a
+    /// config file written for the previous release must not stop the
+    /// coordinator starting.
     #[serde(default)]
     transparent_spend_groups: Vec<WorkerGroupConfig>,
 }
@@ -70,12 +72,15 @@ struct WorkerConfig {
 }
 
 fn remote_worker_setups(cli: &Cli) -> Result<Vec<TableSetup>, Box<dyn std::error::Error>> {
-    let (enhance, spend) = if let Some(path) = &cli.worker_config {
+    let enhance = if let Some(path) = &cli.worker_config {
         let config = parse_worker_config(&std::fs::read(path)?)?;
-        if config.transparent_spend_groups.is_empty() {
-            return Err("worker config needs a dedicated transparent_spend_groups pool".into());
+        if !config.transparent_spend_groups.is_empty() {
+            tracing::warn!(
+                "worker config declares transparent_spend_groups; those tables are \
+                 no longer served and the entry is ignored"
+            );
         }
-        (config.groups, config.transparent_spend_groups)
+        config.groups
     } else {
         let groups: Vec<_> = cli
             .worker_urls
@@ -89,27 +94,15 @@ fn remote_worker_setups(cli: &Cli) -> Result<Vec<TableSetup>, Box<dyn std::error
                 }],
             })
             .collect();
-        // Kept for local command-line compatibility. Production uses the
-        // explicit config above, which requires a separate spend pool.
-        (groups.clone(), groups)
+        groups
     };
     if enhance.is_empty() {
         return Err("distributed mode requires at least one worker group".into());
     }
-    Ok(vec![
-        TableSetup {
-            table: DatabaseId::Enhance,
-            groups: validate_worker_groups(enhance)?,
-        },
-        TableSetup {
-            table: DatabaseId::TransparentSpendCold,
-            groups: validate_worker_groups(spend.clone())?,
-        },
-        TableSetup {
-            table: DatabaseId::TransparentSpendWarm,
-            groups: validate_worker_groups(spend)?,
-        },
-    ])
+    Ok(vec![TableSetup {
+        table: DatabaseId::Enhance,
+        groups: validate_worker_groups(enhance)?,
+    }])
 }
 
 fn validate_worker_groups(
@@ -237,19 +230,15 @@ async fn ingest(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let zakura = ZakuraClient::from_cookie_file(&cli.zakura_rpc_url, &cli.zakura_cookie)?;
     let mut enhance = EnhanceJournal::open(&cli.data_dir)?;
-    let mut spends = SpendJournal::open(&cli.data_dir)?;
     loop {
         let target = zakura.tip_height().await?;
         reconcile(&zakura, &mut enhance.records, target).await?;
-        reconcile_spends(&zakura, &mut spends, target).await?;
         if target < ACTIVATION_HEIGHT {
             return Err("Zakura has not reached Ironwood activation".into());
         }
-        let enhance_next = enhance
+        let mut next = enhance
             .committed_height()
             .map_or(ACTIVATION_HEIGHT, |height| height + 1);
-        let spend_next = spends.committed_height().map_or(0, |height| height + 1);
-        let mut next = enhance_next.min(spend_next);
         if next <= target {
             state
                 .set_phase(CoordinatorPhase::Syncing {
@@ -260,30 +249,18 @@ async fn ingest(
         }
         while next <= target {
             let block = zakura.block(next).await?;
-            if next >= spend_next {
-                spends.append_block(next, block.hash.clone(), &block.transparent_spends)?;
-                if next.is_multiple_of(1_000) {
-                    spends.sync()?;
-                }
-            }
-            if next >= enhance_next && next >= ACTIVATION_HEIGHT {
-                enhance.append_block(&block)?;
-            }
+            enhance.append_block(&block)?;
             next += 1;
         }
-        spends.sync()?;
-        let current_hash = spends
-            .last_block()
-            .filter(|block| block.height == target)
-            .map(|block| block.hash.clone());
+        let current_hash = enhance
+            .highest_committed()
+            .filter(|(height, _)| *height == target)
+            .map(|(_, hash)| hash);
         let already_published = state.manifest().is_some_and(|manifest| {
             manifest.anchor_height == target
                 && current_hash.as_deref() == Some(manifest.anchor_block_hash.as_str())
         });
-        if enhance.committed_height() == Some(target)
-            && spends.committed_height() == Some(target)
-            && !already_published
-        {
+        if enhance.committed_height() == Some(target) && !already_published {
             // Do not publish a height that ceased to be the best-chain tip
             // while its mutable tail shards were being assembled.
             if zakura.tip_height().await? != target {
@@ -294,10 +271,9 @@ async fn ingest(
                 continue;
             }
             let enhance_table = TableJournal::new(DatabaseId::Enhance, &enhance.records)?;
-            let spend_tables = TransparentSpendTables::build(&spends, target)?;
             state
                 .publish(
-                    &[&enhance_table, &spend_tables.cold, &spend_tables.warm],
+                    &[&enhance_table],
                     Anchor {
                         height: target,
                         hash,
@@ -307,8 +283,7 @@ async fn ingest(
             tracing::info!(
                 tip_height = target,
                 positions = enhance.records.tree_size(),
-                cold_end_height = spend_tables.cold_end_height,
-                "published tip-bound Enhance and transparent-spend PIR generation"
+                "published tip-bound Enhance PIR generation"
             );
         }
         tokio::time::sleep(Duration::from_secs(cli.poll_seconds)).await;
@@ -341,32 +316,6 @@ async fn reconcile(
     }
 }
 
-async fn reconcile_spends(
-    zakura: &ZakuraClient,
-    journal: &mut SpendJournal,
-    tip: u64,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    loop {
-        let Some(last) = journal.last_block().cloned() else {
-            return Ok(());
-        };
-        if last.height <= tip && zakura.block_hash(last.height).await? == last.hash {
-            return Ok(());
-        }
-        let previous = journal
-            .blocks()
-            .iter()
-            .rev()
-            .nth(1)
-            .map(|block| block.height);
-        tracing::warn!(
-            height = last.height,
-            "rewinding transparent-spend journal after best-chain change"
-        );
-        journal.rewind_to_height(previous)?;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_config_requires_a_dedicated_spend_pool() {
+    fn a_config_without_a_spend_pool_is_accepted() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("workers.json");
         std::fs::write(
@@ -393,15 +342,15 @@ mod tests {
             br#"{"groups":[{"name":"group-a","replicas":[{"name":"worker-a","url":"http://10.0.0.2:8091"},{"name":"worker-b","url":"http://10.0.0.3:8091/"}]}]}"#,
         )
         .unwrap();
-        let error = match remote_worker_setups(&cli(Some(path), vec![])) {
-            Ok(_) => panic!("missing transparent spend pool was accepted"),
-            Err(error) => error,
-        };
-        assert!(error.to_string().contains("transparent_spend_groups"));
+        let setups = remote_worker_setups(&cli(Some(path), vec![])).unwrap();
+        assert_eq!(setups.len(), 1);
+        assert_eq!(setups[0].table, DatabaseId::Enhance);
     }
 
     #[test]
-    fn assigns_both_spend_tiers_to_the_new_worker_pool() {
+    fn a_config_still_declaring_a_spend_pool_is_accepted_and_ignored() {
+        // A worker config written for the previous release must not stop the
+        // coordinator starting; the entry is ignored, not rejected.
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("workers.json");
         std::fs::write(
@@ -410,14 +359,9 @@ mod tests {
         )
         .unwrap();
         let setups = remote_worker_setups(&cli(Some(path), vec![])).unwrap();
-        assert_eq!(setups.len(), 3);
+        assert_eq!(setups.len(), 1);
         assert_eq!(setups[0].table, DatabaseId::Enhance);
-        for setup in &setups[1..] {
-            assert_eq!(
-                setup.groups[0].replicas[0].name(),
-                "transparent-spend-worker-01"
-            );
-        }
+        assert_eq!(setups[0].groups[0].replicas[0].name(), "enhance-a");
     }
 
     #[test]

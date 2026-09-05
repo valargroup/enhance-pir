@@ -392,6 +392,10 @@ impl CoordinatorState {
     }
 
     /// Both transparent-spend tiers captured from the same best-chain tip.
+    /// Unreachable in this build: the transparent-spend tables are not
+    /// published and the endpoint that called this is gone. Retained with the
+    /// rest of the spend code so reviving the feature is rewiring rather than
+    /// rewriting. See "Transparent-spend deprecation" in `docs/architecture.md`.
     pub fn transparent_spend_session(&self) -> Option<TransparentSpendSession> {
         let snapshot = self.newest()?;
         let cold_end_height = snapshot.manifest.anchor_height.saturating_sub(WARM_BLOCKS);
@@ -1351,13 +1355,10 @@ const QUERY_BODY_LIMIT: usize = 64 * 1024 * 1024;
 pub fn router(state: CoordinatorState) -> Router {
     let queries = Router::new()
         .route("/v1/enhance/query", post(query))
-        .route("/v1/transparent-spend/cold/query", post(query_spend_cold))
-        .route("/v1/transparent-spend/warm/query", post(query_spend_warm))
         .layer(axum::extract::DefaultBodyLimit::max(QUERY_BODY_LIMIT));
     Router::new()
         .route("/v1/health", get(health))
         .route("/v1/enhance/init", get(enhance_session))
-        .route("/v1/transparent-spend/init", get(transparent_spend_session))
         .merge(queries)
         .route("/metrics", get(handle_metrics))
         .route("/ready", get(ready))
@@ -1522,23 +1523,8 @@ async fn enhance_session(State(state): State<CoordinatorState>) -> Response {
     }
 }
 
-async fn transparent_spend_session(State(state): State<CoordinatorState>) -> Response {
-    match state.transparent_spend_session() {
-        Some(session) => Json(session).into_response(),
-        None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
-    }
-}
-
 async fn query(State(state): State<CoordinatorState>, body: Bytes) -> Response {
     answer(&state, DatabaseId::Enhance, &body).await
-}
-
-async fn query_spend_cold(State(state): State<CoordinatorState>, body: Bytes) -> Response {
-    answer(&state, DatabaseId::TransparentSpendCold, &body).await
-}
-
-async fn query_spend_warm(State(state): State<CoordinatorState>, body: Bytes) -> Response {
-    answer(&state, DatabaseId::TransparentSpendWarm, &body).await
 }
 
 async fn answer(state: &CoordinatorState, table: DatabaseId, body: &[u8]) -> Response {
@@ -1570,6 +1556,25 @@ async fn answer(state: &CoordinatorState, table: DatabaseId, body: &[u8]) -> Res
 
 #[cfg(test)]
 mod tests {
+    /// The transparent-spend tables are deprecated: nothing may publish them
+    /// and no route may expose them. A restored route would otherwise pass
+    /// every other test in this file.
+    #[test]
+    fn only_the_enhance_table_is_served() {
+        assert_eq!(super::DatabaseId::ALL, [super::DatabaseId::Enhance]);
+        let source = std::include_str!("coordinator.rs");
+        for path in [
+            "/v1/transparent-spend/init",
+            "/v1/transparent-spend/cold/query",
+            "/v1/transparent-spend/warm/query",
+        ] {
+            assert!(
+                !source.contains(&format!("route(\"{path}\"")),
+                "{path} is routed again; the spend tables are not published"
+            );
+        }
+    }
+
     #[test]
     fn same_height_reorg_gets_a_distinct_generation() {
         assert_eq!(super::next_generation(None, 100), 100);
