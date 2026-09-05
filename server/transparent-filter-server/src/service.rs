@@ -8,6 +8,7 @@ use axum::routing::get;
 use axum::Router;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use transparent_filter::envelope::MAX_BATCH_BYTES;
 use transparent_filter::envelope::{FilterBatch, FilterRecord, ENVELOPE_VERSION};
 use transparent_filter::wire::{ChainEntry, FilterServiceHealth, FilterServiceInfo};
 use transparent_filter::{BlockHash, FilterLimits, MAX_RECORDS_PER_BATCH};
@@ -263,6 +264,21 @@ async fn range(State(state): State<ServiceState>, Query(params): Query<RangePara
         records,
     };
     let bytes = batch.encode();
+    // A batch the client would refuse to decode must not be sent. Real filters
+    // are far too small for a 1,000-record batch to approach this, so reaching
+    // it means the record cap and the byte cap have drifted apart; say so
+    // rather than emitting bytes that fail at the other end.
+    if bytes.len() > MAX_BATCH_BYTES {
+        return json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            serde_json::json!({
+                "error": format!(
+                    "assembled batch is {} bytes, over the {MAX_BATCH_BYTES}-byte envelope limit",
+                    bytes.len()
+                )
+            }),
+        );
+    }
     state.metrics.observe_range(count, bytes.len() as u64);
     (
         StatusCode::OK,

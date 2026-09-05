@@ -140,8 +140,8 @@ impl ZakuraClient {
     /// Returns results positionally, `None` where the node does not have the
     /// transaction. Batching matters: a block's previous outputs are resolved
     /// one round trip per transaction otherwise, which dominates ingest on any
-    /// link with latency. The Python collector already established that this
-    /// node answers batches (`tools/transparent_pir_collect.py`).
+    /// link with latency. Batches must be JSON-RPC 2.0; the node rejects a
+    /// 1.0 batch with -32600, so single calls elsewhere stay on 1.0.
     pub async fn transactions(
         &self,
         txids: &[String],

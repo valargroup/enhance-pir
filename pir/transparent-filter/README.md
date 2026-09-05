@@ -14,8 +14,8 @@ at `pir/transparent-filter` instead, matching the repository's existing split:
 Filters let a wallet test its own scripts locally. They do not prove the server
 built them honestly or completely. Matching a filter against the wallet's
 accepted block hash binds *where* the filter claims to be, not *what* it
-contains, so advancing coverage on a negative result is sound only under the
-trusted-indexer assumption in `docs/transparent_pir_contract.md`.
+contains, so advancing coverage on a negative result is sound only if the
+filter's author is trusted to have built it over the whole block.
 
 There is no BIP 157 peer verification and no service signalling here.
 

@@ -8,8 +8,8 @@
 //! What it does not do: it does not prove a filter is complete. Matching a
 //! filter against the wallet's accepted block hash binds where the filter
 //! claims to be, not what it claims to contain. Advancing coverage on a
-//! negative result is only sound under the trusted-indexer assumption recorded
-//! in `docs/transparent_pir_contract.md`.
+//! negative result is only sound if the filter's author is trusted to have
+//! built it over the whole block.
 
 pub mod build_filter;
 pub mod client;

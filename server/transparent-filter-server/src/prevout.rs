@@ -3,9 +3,7 @@
 //! Most spends are recent, so a bounded cache of the outputs created by the
 //! blocks just ingested answers the large majority of lookups without any RPC.
 //! The rest go to `getrawtransaction`, which an archive node answers from its
-//! transaction index. This is the strategy the Python collector already
-//! validated against this node over a full mainnet day
-//! (`tools/transparent_pir_collect.py`).
+//! transaction index.
 //!
 //! A lookup that cannot be answered is an error. It is never an empty script:
 //! a filter missing a real spend would tell a wallet it had no activity.
