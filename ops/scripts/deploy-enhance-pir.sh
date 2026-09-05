@@ -504,8 +504,10 @@ as_root systemctl is-active --quiet pir-apm
 
 as_root systemctl enable transparent-filter-server
 as_root systemctl restart transparent-filter-server
-# Only that it starts and answers. Coverage is a long backfill on a first
-# deploy, so readiness is checked separately below rather than gating rollout.
+# Health only, deliberately not /ready. A first deploy starts from an empty
+# store and backfills tens of thousands of blocks, so it is legitimately not
+# ready for a long time; gating the rollout on readiness would fail every
+# initial deploy. This checks the service starts and answers.
 for _ in $(seq 1 30); do
   if curl --fail --silent http://127.0.0.1:8090/v1/health >/dev/null; then break; fi
   sleep 2
