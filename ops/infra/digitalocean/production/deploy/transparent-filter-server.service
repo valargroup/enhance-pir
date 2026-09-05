@@ -1,0 +1,19 @@
+[Unit]
+Description=Zcash transparent activity filter service (BIP 158)
+After=network-online.target zakurad.service
+Wants=network-online.target
+Requires=zakurad.service
+
+[Service]
+Type=simple
+# Loopback only. This service has no public route: the wallet-facing API is not
+# designed yet, and nothing should be reachable from the internet until it is.
+ExecStart=/usr/local/bin/transparent-filter-server --listen 127.0.0.1:8090 --zakura-rpc-url http://127.0.0.1:8232 --zakura-cookie /root/.cache/zakura/.cookie --data-dir /srv/zakura/transparent-filter-data --start-height 3428143
+Restart=on-failure
+RestartSec=10
+User=root
+LimitNOFILE=1048576
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target

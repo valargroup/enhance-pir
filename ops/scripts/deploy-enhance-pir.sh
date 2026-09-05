@@ -129,14 +129,15 @@ if [[ "$MODE" == "validate" ]]; then
 fi
 
 for name in ENHANCE_RELEASE_SHA ENHANCE_ARTIFACT_DIR ENHANCE_SSH_KEY_PATH ENHANCE_KNOWN_HOSTS_PATH \
-  ENHANCE_SERVER_SERVICE_FILE ENHANCE_WORKER_SERVICE_FILE ENHANCE_APM_SERVICE_FILE; do
+  ENHANCE_SERVER_SERVICE_FILE ENHANCE_WORKER_SERVICE_FILE ENHANCE_APM_SERVICE_FILE \
+  TRANSPARENT_FILTER_SERVICE_FILE; do
   require_env "$name"
 done
 if [[ ! "$ENHANCE_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
   echo "ENHANCE_RELEASE_SHA must be a full Git commit SHA" >&2
   exit 2
 fi
-for file in enhance-pir-server enhance-pir-worker enhance-pir-cli pir-apm; do
+for file in enhance-pir-server enhance-pir-worker enhance-pir-cli pir-apm transparent-filter-server; do
   if [[ ! -x "$ENHANCE_ARTIFACT_DIR/$file" ]]; then
     echo "missing executable deployment artifact: $file" >&2
     exit 2
@@ -281,6 +282,8 @@ stage_file "$ENHANCE_ARTIFACT_DIR/pir-apm" "$ENHANCE_COORDINATOR_HOST" pir-apm
 stage_file "$ENHANCE_APM_SERVICE_FILE" "$ENHANCE_COORDINATOR_HOST" pir-apm.service
 stage_file "$apm_env_file" "$ENHANCE_COORDINATOR_HOST" pir-apm.env 0600
 stage_file "$caddyfile_rendered" "$ENHANCE_COORDINATOR_HOST" Caddyfile
+stage_file "$ENHANCE_ARTIFACT_DIR/transparent-filter-server" "$ENHANCE_COORDINATOR_HOST" transparent-filter-server
+stage_file "$TRANSPARENT_FILTER_SERVICE_FILE" "$ENHANCE_COORDINATOR_HOST" transparent-filter-server.service
 
 # Validate the staged Caddyfile before anything is installed, and show how it
 # differs from the live one so a preflight run makes the upcoming change visible.
@@ -314,10 +317,12 @@ show_logs() {
 if [[ "$(id -u)" -eq 0 ]]; then
   journalctl -u enhance-pir-server --no-pager -n 80
   journalctl -u pir-apm --no-pager -n 40
+  journalctl -u transparent-filter-server --no-pager -n 40
   journalctl -u caddy --no-pager -n 20
 else
   sudo -n journalctl -u enhance-pir-server --no-pager -n 80
   sudo -n journalctl -u pir-apm --no-pager -n 40
+  sudo -n journalctl -u transparent-filter-server --no-pager -n 40
   sudo -n journalctl -u caddy --no-pager -n 20
 fi
 REMOTE
@@ -382,6 +387,14 @@ if [[ -x "$rollback/pir-apm" ]]; then
   fi
 else
   as_root systemctl disable --now pir-apm 2>/dev/null || true
+fi
+# Transparent filter service. Independent of the PIR fleet, but rolled back with
+# it so one release is one fleet state.
+if [[ -x "$rollback/transparent-filter-server" ]]; then
+  as_root install -m 0755 "$rollback/transparent-filter-server" /usr/local/bin/transparent-filter-server
+  [[ -r "$rollback/transparent-filter-server.service" ]] && as_root install -m 0644 "$rollback/transparent-filter-server.service" /etc/systemd/system/transparent-filter-server.service
+else
+  as_root systemctl disable --now transparent-filter-server 2>/dev/null || true
 fi
 if as_root test -r "$rollback/Caddyfile"; then
   as_root install -m 0644 -o root -g root "$rollback/Caddyfile" /etc/caddy/Caddyfile
@@ -468,6 +481,16 @@ as_root install -m 0644 "$stage/pir-apm.service" /etc/systemd/system/pir-apm.ser
 as_root install -m 0600 -o root -g root "$stage/pir-apm.env" /etc/default/pir-apm
 as_root caddy validate --config "$stage/Caddyfile" --adapter caddyfile >/dev/null
 as_root install -m 0644 -o root -g root "$stage/Caddyfile" /etc/caddy/Caddyfile
+
+# Transparent filter service: same save-then-replace pattern as the others. It
+# binds loopback and the Caddyfile deliberately gives it no route.
+[[ -x /usr/local/bin/transparent-filter-server ]] && as_root cp -L /usr/local/bin/transparent-filter-server "$rollback/transparent-filter-server"
+[[ -r /etc/systemd/system/transparent-filter-server.service ]] && as_root cp /etc/systemd/system/transparent-filter-server.service "$rollback/transparent-filter-server.service"
+as_root install -m 0755 "$stage/transparent-filter-server" "$release/transparent-filter-server"
+as_root install -m 0755 "$release/transparent-filter-server" /usr/local/bin/transparent-filter-server.next
+as_root mv -f /usr/local/bin/transparent-filter-server.next /usr/local/bin/transparent-filter-server
+as_root install -m 0644 "$stage/transparent-filter-server.service" /etc/systemd/system/transparent-filter-server.service
+
 as_root systemctl daemon-reload
 as_root systemctl enable pir-apm
 as_root systemctl restart pir-apm
@@ -478,6 +501,17 @@ for _ in $(seq 1 10); do
 done
 curl --fail --silent http://127.0.0.1:3002/healthz >/dev/null
 as_root systemctl is-active --quiet pir-apm
+
+as_root systemctl enable transparent-filter-server
+as_root systemctl restart transparent-filter-server
+# Only that it starts and answers. Coverage is a long backfill on a first
+# deploy, so readiness is checked separately below rather than gating rollout.
+for _ in $(seq 1 30); do
+  if curl --fail --silent http://127.0.0.1:8090/v1/health >/dev/null; then break; fi
+  sleep 2
+done
+curl --fail --silent http://127.0.0.1:8090/v1/health >/dev/null
+as_root systemctl is-active --quiet transparent-filter-server
 REMOTE
 }
 
