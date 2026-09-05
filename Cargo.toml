@@ -7,6 +7,7 @@ members = [
     "pir/load-test",
     "server/enhance-pir-server",
     "server/pir-apm",
+    "server/transparent-filter-server",
 ]
 exclude = ["demos/legacy-spendability"]
 

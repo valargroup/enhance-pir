@@ -3605,6 +3605,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "transparent-filter-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "hex",
+ "prometheus",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower",
+ "tower-http 0.5.2",
+ "tracing",
+ "tracing-subscriber",
+ "transparent-filter",
+ "zakura-chain",
+]
+
+[[package]]
 name = "transparent-spend-pir"
 version = "0.1.0"
 dependencies = [

@@ -24,6 +24,7 @@ pub mod profile;
 pub mod script;
 pub mod transport;
 pub mod validate;
+pub mod wire;
 
 pub use build_filter::{build_filter, element_count, FilterBytes};
 pub use client::{
@@ -38,3 +39,4 @@ pub use profile::{MAINNET_GENESIS_DISPLAY, NETWORK, PROFILE, START_HEIGHT};
 pub use script::ScriptBytes;
 pub use transport::{ByteCharges, FileTransport, FilterTransport, RangeRequest};
 pub use validate::{validate_filter, FilterLimits, ValidatedFilter};
+pub use wire::{ChainEntry, FilterServiceHealth, FilterServiceInfo};

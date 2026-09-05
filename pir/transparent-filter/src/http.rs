@@ -7,43 +7,7 @@
 use crate::envelope::FilterBatch;
 use crate::error::FilterError;
 use crate::transport::{ByteCharges, FilterTransport, RangeRequest};
-use serde::{Deserialize, Serialize};
-
-/// Response shape of `GET /v1/filters/info`.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct FilterServiceInfo {
-    /// Genesis block hash in display hex; the chain's identity.
-    pub genesis_hash: String,
-    pub network: String,
-    pub profile: String,
-    pub envelope_version: u16,
-    /// First height this service publishes a filter for.
-    pub start_height: u64,
-    /// Highest height with durable coverage, if any.
-    pub covered_through: Option<u64>,
-    pub covered_block_hash: Option<String>,
-    pub max_records_per_batch: u64,
-    pub max_filter_bytes: usize,
-}
-
-/// Response shape of `GET /v1/health`.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct FilterServiceHealth {
-    /// `syncing`, `serving` or `failed`.
-    pub phase: String,
-    pub detail: Option<String>,
-    pub covered_through: Option<u64>,
-    pub tip_height: Option<u64>,
-    pub filters_stored: u64,
-}
-
-/// One entry of `GET /v1/filters/chain`.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct ChainEntry {
-    pub height: u64,
-    /// Display hex, as a human-facing JSON field.
-    pub block_hash: String,
-}
+use crate::wire::{ChainEntry, FilterServiceHealth, FilterServiceInfo};
 
 /// Fetches ranges over HTTP.
 pub struct HttpTransport {
