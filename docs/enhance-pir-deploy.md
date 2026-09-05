@@ -42,10 +42,9 @@ generation publishes once at least one replica in every used group is ready.
 The first rollout from the legacy flat inventory is an intentional topology
 format migration and requires `ENHANCE_ALLOW_TOPOLOGY_CHANGE=true`; later
 replica replacements do not require that override.
-Each Enhance worker service is cgroup-limited to 2 GiB; the dedicated spend
-worker is limited to 12 GiB. Swap is disabled for both. A replica
-that exceeds the limit is restarted by systemd; its peer continues serving the
-group while it rebuilds on the next publication.
+Each Enhance worker service is cgroup-limited to 2 GiB, with swap disabled. A
+replica that exceeds the limit is restarted by systemd; its peer continues
+serving the group while it rebuilds on the next publication.
 
 Current runtime paths are `/etc/enhance-pir`, `/opt/enhance-pir`,
 `/srv/zakura/enhance-data`, and `/srv/enhance-pir/artifacts`. Active

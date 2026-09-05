@@ -428,6 +428,8 @@ pub fn query_endpoint(_table: DatabaseId) -> &'static str {
 fn table_endpoint(table: DatabaseId, endpoint: &str) -> Option<&'static str> {
     Some(match (table, endpoint) {
         (DatabaseId::Enhance, "query") => "query",
+        // Unreachable in this build: these tables are not published and no
+        // route reaches them. Kept with the rest of the deprecated spend code.
         (DatabaseId::TransparentSpendCold, "query") => "spend_cold_query",
         (DatabaseId::TransparentSpendWarm, "query") => "spend_warm_query",
         _ => return None,

@@ -390,6 +390,10 @@ impl CoordinatorState {
     }
 
     /// Both transparent-spend tiers captured from the same best-chain tip.
+    /// Unreachable in this build: the transparent-spend tables are not
+    /// published and the endpoint that called this is gone. Retained with the
+    /// rest of the spend code so reviving the feature is rewiring rather than
+    /// rewriting. See "Transparent-spend deprecation" in `docs/architecture.md`.
     pub fn transparent_spend_session(&self) -> Option<TransparentSpendSession> {
         let snapshot = self.newest()?;
         let cold_end_height = snapshot.manifest.anchor_height.saturating_sub(WARM_BLOCKS);
@@ -1550,6 +1554,25 @@ async fn answer(state: &CoordinatorState, table: DatabaseId, body: &[u8]) -> Res
 
 #[cfg(test)]
 mod tests {
+    /// The transparent-spend tables are deprecated: nothing may publish them
+    /// and no route may expose them. A restored route would otherwise pass
+    /// every other test in this file.
+    #[test]
+    fn only_the_enhance_table_is_served() {
+        assert_eq!(super::DatabaseId::ALL, [super::DatabaseId::Enhance]);
+        let source = std::include_str!("coordinator.rs");
+        for path in [
+            "/v1/transparent-spend/init",
+            "/v1/transparent-spend/cold/query",
+            "/v1/transparent-spend/warm/query",
+        ] {
+            assert!(
+                !source.contains(&format!("route(\"{path}\"")),
+                "{path} is routed again; the spend tables are not published"
+            );
+        }
+    }
+
     #[test]
     fn same_height_reorg_gets_a_distinct_generation() {
         assert_eq!(super::next_generation(None, 100), 100);
