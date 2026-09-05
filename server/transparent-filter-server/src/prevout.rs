@@ -14,7 +14,12 @@ use crate::extract::{outpoint_label, PreviousOutputs};
 use crate::zakura::ZakuraClient;
 use std::collections::{HashMap, VecDeque};
 use zakura_chain::transaction::Transaction;
-use zakura_chain::transparent::OutPoint;
+use zakura_chain::transparent::{Input, OutPoint};
+
+/// Previous transactions requested per JSON-RPC batch.
+///
+/// Matches the batch size the Python collector uses against this node.
+pub const PREVOUT_BATCH: usize = 16;
 
 /// Number of recently seen transactions whose outputs are retained.
 ///
@@ -147,6 +152,49 @@ impl PreviousOutputs for ZakuraPreviousOutputs<'_> {
         }
         Ok(script)
     }
+}
+
+/// Resolves, in batches, every previous output this block will need.
+///
+/// A pre-pass rather than lazy lookups: resolving during extraction costs one
+/// round trip per missing transaction, which dominates ingest as soon as the
+/// node is not on loopback. After this returns, extraction finds everything in
+/// the cache and issues no further requests.
+///
+/// Outputs created earlier in this same block are already in the cache and are
+/// not requested. A transaction the node cannot supply is left absent, so
+/// extraction still fails closed rather than treating it as an empty script.
+pub async fn prefetch_previous_outputs(
+    zakura: &ZakuraClient,
+    cache: &mut OutputCache,
+    transactions: &[std::sync::Arc<Transaction>],
+) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+    let mut wanted: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for transaction in transactions {
+        for input in transaction.inputs() {
+            let Input::PrevOut { outpoint, .. } = input else {
+                continue;
+            };
+            if cache.get(outpoint).is_some() {
+                continue;
+            }
+            if !seen.insert(outpoint.hash) {
+                continue;
+            }
+            let mut txid = outpoint.hash.0;
+            txid.reverse();
+            wanted.push(hex::encode(txid));
+        }
+    }
+    let mut fetched = 0u64;
+    for chunk in wanted.chunks(PREVOUT_BATCH) {
+        for transaction in zakura.transactions(chunk).await?.into_iter().flatten() {
+            cache.insert_transaction(&transaction);
+            fetched += 1;
+        }
+    }
+    Ok(fetched)
 }
 
 #[cfg(test)]

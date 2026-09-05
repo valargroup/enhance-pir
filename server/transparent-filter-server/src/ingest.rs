@@ -6,7 +6,7 @@
 //! is what makes a reorg a rollback rather than a silently divergent history.
 
 use crate::extract::extract_elements;
-use crate::prevout::{OutputCache, ZakuraPreviousOutputs};
+use crate::prevout::{prefetch_previous_outputs, OutputCache, ZakuraPreviousOutputs};
 use crate::service::{Phase, ServiceState};
 use crate::store::FilterStore;
 use crate::zakura::ZakuraClient;
@@ -79,10 +79,13 @@ pub async fn build_block_filter(
     let block_hash = BlockHash::from_display_hex(&hash_display)?;
 
     // Seed the cache with this block's own transactions before extraction, so a
-    // later block spending them needs no lookup.
+    // later block spending them needs no lookup, and so a same-block spend is
+    // never requested from the node.
     for transaction in &block.transactions {
         cache.insert_transaction(transaction);
     }
+    // Then resolve everything still missing in batches, before extraction runs.
+    let batched = prefetch_previous_outputs(zakura, cache, &block.transactions).await?;
 
     let runtime = tokio::runtime::Handle::current();
     let transactions = block.transactions.clone();
@@ -106,7 +109,9 @@ pub async fn build_block_filter(
     Ok(BuiltFilter {
         block_hash,
         filter,
-        rpc_lookups,
+        // The pre-pass did the fetching; any straggler resolved during
+        // extraction is counted with it.
+        rpc_lookups: rpc_lookups + batched,
         cache_hits,
     })
 }

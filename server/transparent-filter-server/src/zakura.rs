@@ -35,6 +35,8 @@ pub enum ZakuraError {
     Block(String),
     #[error("could not parse transaction {0}: {1}")]
     Transaction(String, String),
+    #[error("malformed RPC batch response: {0}")]
+    Batch(String),
 }
 
 #[derive(Clone)]
@@ -48,6 +50,14 @@ pub struct ZakuraClient {
 #[derive(serde::Deserialize)]
 struct RpcResponse<T> {
     result: Option<T>,
+    error: Option<RpcError>,
+}
+
+/// One entry of a JSON-RPC batch response.
+#[derive(serde::Deserialize)]
+struct BatchEntry {
+    id: Option<i64>,
+    result: Option<String>,
     error: Option<RpcError>,
 }
 
@@ -123,6 +133,95 @@ impl ZakuraClient {
         let transaction = Transaction::zcash_deserialize(raw.as_slice())
             .map_err(|error| ZakuraError::Transaction(txid.to_string(), error.to_string()))?;
         Ok(Some(transaction))
+    }
+
+    /// Fetches several transactions in one JSON-RPC batch.
+    ///
+    /// Returns results positionally, `None` where the node does not have the
+    /// transaction. Batching matters: a block's previous outputs are resolved
+    /// one round trip per transaction otherwise, which dominates ingest on any
+    /// link with latency. The Python collector already established that this
+    /// node answers batches (`tools/transparent_pir_collect.py`).
+    pub async fn transactions(
+        &self,
+        txids: &[String],
+    ) -> Result<Vec<Option<Transaction>>, ZakuraError> {
+        if txids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let requests: Vec<serde_json::Value> = txids
+            .iter()
+            .enumerate()
+            .map(|(index, txid)| {
+                // Batches must be JSON-RPC 2.0: the node rejects a 1.0 batch
+                // with -32600. Single calls elsewhere stay on 1.0, matching
+                // the sibling coordinator and the zcashd convention.
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": index,
+                    "method": "getrawtransaction",
+                    "params": [txid, 0],
+                })
+            })
+            .collect();
+        let response = self
+            .http
+            .post(&self.rpc_url)
+            .basic_auth(&self.username, Some(&self.password))
+            .json(&requests)
+            .send()
+            .await?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(ZakuraError::InvalidCookie);
+        }
+        let entries: Vec<BatchEntry> = response.error_for_status()?.json().await?;
+        if entries.len() != txids.len() {
+            return Err(ZakuraError::Batch(format!(
+                "asked for {} transactions, got {}",
+                txids.len(),
+                entries.len()
+            )));
+        }
+        // A batch response may arrive in any order, so results are placed by
+        // their echoed id rather than by position.
+        let mut out: Vec<Option<Transaction>> = vec![None; txids.len()];
+        let mut seen = vec![false; txids.len()];
+        for entry in entries {
+            let index = entry
+                .id
+                .ok_or_else(|| ZakuraError::Batch("batch response entry has no id".to_string()))?;
+            let index = usize::try_from(index)
+                .ok()
+                .filter(|index| *index < txids.len())
+                .ok_or_else(|| ZakuraError::Batch(format!("batch id {index} is out of range")))?;
+            if std::mem::replace(&mut seen[index], true) {
+                return Err(ZakuraError::Batch(format!(
+                    "batch id {index} appeared twice"
+                )));
+            }
+            if let Some(error) = entry.error {
+                // -5 is "No information available about transaction".
+                if error.code == -5 {
+                    continue;
+                }
+                return Err(ZakuraError::Rpc(error.code, error.message));
+            }
+            let raw_hex = entry
+                .result
+                .ok_or_else(|| ZakuraError::Batch("batch entry has no result".to_string()))?;
+            let raw = hex::decode(raw_hex)?;
+            out[index] = Some(
+                Transaction::zcash_deserialize(raw.as_slice()).map_err(|error| {
+                    ZakuraError::Transaction(txids[index].clone(), error.to_string())
+                })?,
+            );
+        }
+        if seen.iter().any(|seen| !seen) {
+            return Err(ZakuraError::Batch(
+                "batch response is missing an entry".to_string(),
+            ));
+        }
+        Ok(out)
     }
 
     async fn call<T: DeserializeOwned>(
