@@ -2,12 +2,109 @@ use crate::types::{DatabaseId, DatabaseLayout};
 use crate::wire::{decode_crs_blocks, encode_crs_blocks};
 use inspiring::{InspiringError, RlweParams};
 use ipir_sp::server::{CrsBlock, IPIRServer};
-use ipir_sp::YpirSchemeParams;
+use ipir_sp::{IPIRSimpleQuery, YpirSchemeParams};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+
+// Shard composition helpers retained from ipir-sp e875404. The upstream
+// main API exposes the query codec and CRS blocks; aggregation lives here.
+/// Decode the global first-dimension query before slicing it across row shards.
+pub fn deserialize_first_dim_query(
+    rlwe: &RlweParams,
+    ypir: &YpirSchemeParams,
+    query: &[u8],
+) -> Result<Vec<u64>, InspiringError> {
+    let first_dim_query =
+        IPIRSimpleQuery::from_switched_bytes(query, ypir.db_rows, rlwe.q, ypir.query_bits)?
+            .into_first_dim();
+
+    if first_dim_query.len() != ypir.db_rows {
+        return Err(InspiringError::LweShape(format!(
+            "expected {} first-dimension query values, got {}",
+            ypir.db_rows,
+            first_dim_query.len()
+        )));
+    }
+
+    Ok(first_dim_query)
+}
+
+/// Add a worker's SimplePIR intermediate into a coordinator accumulator.
+///
+/// The first-dimension operation is linear over `Z_q`: if row shards partition
+/// a database, summing their fixed-width outputs produces the exact monolithic
+/// matrix-vector product. Inputs are required to be canonical residues so a
+/// corrupt worker cannot smuggle an overflow or a second representation of the
+/// same value across the protocol boundary.
+pub fn add_intermediate_assign_mod(
+    accumulator: &mut [u64],
+    contribution: &[u64],
+    modulus: u64,
+) -> Result<(), InspiringError> {
+    if modulus < 2 {
+        return Err(InspiringError::PreprocessMismatch(
+            "intermediate modulus must be at least two".to_string(),
+        ));
+    }
+    if accumulator.len() != contribution.len() {
+        return Err(InspiringError::LweShape(format!(
+            "intermediate widths differ: {} and {}",
+            accumulator.len(),
+            contribution.len()
+        )));
+    }
+
+    for (left, right) in accumulator.iter_mut().zip(contribution) {
+        if *left >= modulus || *right >= modulus {
+            return Err(InspiringError::PreprocessMismatch(
+                "intermediate coefficient is not reduced modulo q".to_string(),
+            ));
+        }
+        let sum = u128::from(*left) + u128::from(*right);
+        *left = (sum % u128::from(modulus)) as u64;
+    }
+
+    Ok(())
+}
+
+/// Add one shard's partial CRS/hint contribution into the global CRS.
+///
+/// Each contribution must have the complete output-block shape. This function
+/// is deliberately shape-strict because the resulting public `c1` is bound to
+/// the snapshot and a missing coefficient would silently make clients decode
+/// garbage.
+pub fn add_crs_blocks_assign_mod(
+    accumulator: &mut [CrsBlock],
+    contribution: &[CrsBlock],
+    params: &RlweParams,
+) -> Result<(), InspiringError> {
+    if accumulator.len() != contribution.len() {
+        return Err(InspiringError::PreprocessMismatch(format!(
+            "CRS block counts differ: {} and {}",
+            accumulator.len(),
+            contribution.len()
+        )));
+    }
+
+    for (left_block, right_block) in accumulator.iter_mut().zip(contribution) {
+        for block in [&*left_block, right_block] {
+            if block.rows.len() != params.d || block.rows.iter().any(|row| row.len() != params.d) {
+                return Err(InspiringError::PreprocessMismatch(format!(
+                    "CRS block must be {}x{}",
+                    params.d, params.d
+                )));
+            }
+        }
+        for (left_row, right_row) in left_block.rows.iter_mut().zip(&right_block.rows) {
+            add_intermediate_assign_mod(left_row, right_row, params.q)?;
+        }
+    }
+
+    Ok(())
+}
 
 // Version 2 bound cached shard preprocessing to the domain-separated enhance setup seed.
 // Version 3 used the former wider action record. Version 4 namespaced table
@@ -363,6 +460,35 @@ impl Iterator for RowPlaintextIter<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shard_sum_wraps_without_u64_overflow() {
+        let q = u64::MAX;
+        let mut sum = [q - 1, 0, 1];
+        add_intermediate_assign_mod(&mut sum, &[q - 1, q - 1, q - 1], q).unwrap();
+        assert_eq!(sum, [q - 2, q - 1, 0]);
+    }
+
+    #[test]
+    fn shard_combiners_reject_malformed_contributions() {
+        let (rlwe, _) = shard_parameters(&crate::types::ENHANCE_LAYOUT).unwrap();
+        assert!(add_intermediate_assign_mod(&mut [0; 8], &[0; 7], rlwe.q).is_err());
+        assert!(add_intermediate_assign_mod(&mut [0], &[rlwe.q], rlwe.q).is_err());
+        assert!(add_intermediate_assign_mod(&mut [rlwe.q], &[0], rlwe.q).is_err());
+        assert!(add_intermediate_assign_mod(&mut [0], &[0], 1).is_err());
+        let mut malformed = [CrsBlock { rows: vec![] }];
+        assert!(add_crs_blocks_assign_mod(&mut malformed, &[], &rlwe).is_err());
+        assert!(
+            add_crs_blocks_assign_mod(&mut malformed, &[CrsBlock { rows: vec![] }], &rlwe).is_err()
+        );
+        let malformed_row = CrsBlock {
+            rows: vec![vec![]; rlwe.d],
+        };
+        assert!(
+            add_crs_blocks_assign_mod(&mut [malformed_row.clone()], &[malformed_row], &rlwe)
+                .is_err()
+        );
+    }
 
     /// Every served layout, with the instance count its rows need. One instance
     /// carries d * log2(p) = 28,672 plaintext bits.

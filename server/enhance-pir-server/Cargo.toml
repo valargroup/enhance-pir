@@ -23,8 +23,8 @@ transparent-spend-pir = { path = "../../pir/transparent-spend" }
 arc-swap = "1"
 clap = { version = "4", features = ["derive"] }
 hex = "0.4"
-inspiring = { git = "https://github.com/valargroup/ipir-sp.git", rev = "e875404cef33661906ab60af236dfb327e6b28b1" }
-ipir-sp = { git = "https://github.com/valargroup/ipir-sp.git", rev = "e875404cef33661906ab60af236dfb327e6b28b1" }
+inspiring = { git = "https://github.com/valargroup/ipir-sp.git", rev = "0a929ea89b078b918e50f99793e646d4821c059d" }
+ipir-sp = { git = "https://github.com/valargroup/ipir-sp.git", rev = "0a929ea89b078b918e50f99793e646d4821c059d" }
 prometheus = { version = "0.13", default-features = false, features = ["process"] }
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
