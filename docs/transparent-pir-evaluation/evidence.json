@@ -1,0 +1,69 @@
+{
+  "retrieved_on": "2026-09-04",
+  "repository_head": "11d312a79f94f51b5907225965b4339b6c94661c",
+  "enhance_load_test": {
+    "source": "local load-test-summary.json; run timestamp and client hardware absent",
+    "sha256": "772049d0d87638b3c47502881d9b4f10462ed680fac802ac78f696dcc0eed692",
+    "original_json": "{\n  \"server\": \"https://enhance-pir.valargroup.dev\",\n  \"generation\": 3471029,\n  \"anchor_height\": 3471029,\n  \"ironwood_tree_size\": 195624,\n  \"duration_s\": 300.0,\n  \"parallelism\": 8,\n  \"completed\": 6389,\n  \"succeeded\": 6389,\n  \"errors\": 0,\n  \"error_rate\": 0.0,\n  \"requests_per_second\": 21.296666666666667,\n  \"stages\": [\n    {\n      \"name\": \"end-to-end\",\n      \"samples\": 6389,\n      \"p50_ms\": 334.847,\n      \"p90_ms\": 445.183,\n      \"p95_ms\": 554.495,\n      \"p99_ms\": 1208.319,\n      \"p999_ms\": 2217.983,\n      \"max_ms\": 5488.639\n    },\n    {\n      \"name\": \"prepare\",\n      \"samples\": 6389,\n      \"p50_ms\": 42.367,\n      \"p90_ms\": 116.927,\n      \"p95_ms\": 164.095,\n      \"p99_ms\": 302.335,\n      \"p999_ms\": 429.311,\n      \"max_ms\": 557.055\n    },\n    {\n      \"name\": \"http\",\n      \"samples\": 6389,\n      \"p50_ms\": 288.511,\n      \"p90_ms\": 318.207,\n      \"p95_ms\": 344.063,\n      \"p99_ms\": 1078.271,\n      \"p999_ms\": 2115.583,\n      \"max_ms\": 5406.719\n    },\n    {\n      \"name\": \"decode\",\n      \"samples\": 6389,\n      \"p50_ms\": 0.608,\n      \"p90_ms\": 1.184,\n      \"p95_ms\": 1.865,\n      \"p99_ms\": 9.223,\n      \"p999_ms\": 43.327,\n      \"max_ms\": 101.695\n    }\n  ],\n  \"error_classes\": []\n}\n"
+  },
+  "recorded_wire_geometries": [
+    {
+      "name": "enhance_32768_by_4096",
+      "upload_bytes": 258056,
+      "response_bytes": 10256,
+      "source": "README.md at repository_head",
+      "classification": "recorded existing configuration; not measured in this evaluation"
+    },
+    {
+      "name": "ipir_sp_16_instances",
+      "upload_bytes": 236544,
+      "response_bytes": 81920,
+      "source": "https://github.com/valargroup/ipir-sp/blob/2bc1075aa72895fbaa99c83e964567aae317ea61/bench-results/2026-09-02-second-optimization-pass/REPORT.md",
+      "local_report_sha256": "3ee91959f1e09db2a22ea1010ef47ec313776055314ee7cb0848de82f8072fee",
+      "classification": "previously reported measured wire at 28672 x 32768; not a transparent workload"
+    }
+  ],
+  "unverified_historical_counts": {
+    "anchor_height": 3471419,
+    "outputs_created": 29409580,
+    "outputs_spent": 1375697,
+    "outputs_unspent": 28033883,
+    "source": "docs/transparent_pir_design.md; no raw census supplied"
+  },
+  "missing_measurements": [
+    "historical scripts and events census",
+    "transparent compact compressed bytes",
+    "representative wallet traces",
+    "transparent directory and page PIR geometry",
+    "mobile setup memory and latency",
+    "index publication cost"
+  ],
+  "access_attempts": [
+    {
+      "target": "configured roman-zakura-1 SSH",
+      "result": "connection timed out; no remote command executed"
+    },
+    {
+      "target": "Enhance coordinator SSH resolved from enhance-pir.valargroup.dev",
+      "result": "connection timed out; no remote command executed"
+    },
+    {
+      "target": "archive-vct-off root@104.131.174.28 from Zakura deploy/deployer/README.md",
+      "result": "SSH succeeded; active unpruned Mainnet archive; historical block and previous-output RPC reads succeeded"
+    },
+    {
+      "target": "us-east-0 root@159.65.183.89 from Zakura deploy/deployer/README.md",
+      "result": "SSH succeeded; zakurad active"
+    }
+  ],
+  "target": {
+    "interface": "Zcash-wallet-independent",
+    "first_integration": "Vizor"
+  },
+  "mainnet_pilot": {
+    "report": "../transparent_pir_mainnet_pilot.md",
+    "results": "mainnet-sample-results.json",
+    "sample": "mainnet-3470396-3470523.jsonl.gz",
+    "coverage": "128 blocks; not full history or an end-to-end PIR benchmark"
+  }
+}

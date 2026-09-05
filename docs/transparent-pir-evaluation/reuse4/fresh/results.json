@@ -1,0 +1,452 @@
+{
+  "classification": "integrated adaptive client with real serialized in-process PIR; no network or device sync",
+  "network": "main",
+  "start": 3470268,
+  "end": 3471419,
+  "anchor": "000000000056129a32531d398a37eee5b1fb9d0c6c5125ee2b3459987dc41c0a",
+  "generation": "6081ea950e4f2f88d55b7e63bf5ec8b053d3f7b58502c6c8540bb0856a257349",
+  "manifest": {
+    "anchor": "000000000056129a32531d398a37eee5b1fb9d0c6c5125ee2b3459987dc41c0a",
+    "directory": {
+      "row_bytes": 3584,
+      "rows": 4096,
+      "salt": 0,
+      "sha256": "b0350f8b491f8989923cb2f63e17fbbd17494511f8b06ad1f73fef55ff69c283"
+    },
+    "end": 3471419,
+    "entry_bytes": 256,
+    "filter_probability": 1e-06,
+    "filters_sha256": "5efb499e0292f0c56463d3ce34c6d2b58b8f5b879447c61d24bfde84569d3f83",
+    "inline": 2,
+    "network": "main",
+    "page_capacity": 186,
+    "pages": {
+      "row_bytes": 17920,
+      "rows": 4096,
+      "sha256": "be8c23d47104c9a3a7ee3a7de25590a9775701f72bda32eeb5c8bfe55ffd83b0"
+    },
+    "parent": "00000000005d6b53fa142c89c857b734ac31a4e6dfff2b6e22a6295e4e1ca140",
+    "schema": "transparent-incremental-research-v1",
+    "sealed_through": 3471417,
+    "slots": 13,
+    "start": 3470268
+  },
+  "machine": "Linux-6.8.0-124-generic-x86_64-with-glibc2.39",
+  "row_page_bytes": 17920,
+  "reference_day_incremental_application_bytes": 2888097,
+  "trust": "complete indexer, accepted chain supplied by wallet; no authentication/composition claim",
+  "checkpoint_fixture": "only prior outputs referenced by these chain events; not full real wallet balances",
+  "runs": [
+    {
+      "name": "unused_100",
+      "repeat": 0,
+      "script_count": 100,
+      "checkpoint": 3470267,
+      "verified_events": 0,
+      "cost": {
+        "core_ms": 0.0,
+        "public_download_bytes": 174379,
+        "queries": 0,
+        "response_bytes": 0,
+        "setup_download_bytes": 0,
+        "upload_bytes": 0
+      },
+      "application_bytes": 174379,
+      "harness_wall_seconds_including_server_precomputation_and_files": 0.41128518400364555,
+      "day_50_percent_byte_screen": "pass",
+      "screen_applicable": true,
+      "private_batches": []
+    },
+    {
+      "name": "sparse_1",
+      "repeat": 0,
+      "script_count": 1,
+      "checkpoint": 3470267,
+      "verified_events": 2,
+      "cost": {
+        "core_ms": 23.421065000000002,
+        "public_download_bytes": 174379,
+        "queries": 1,
+        "response_bytes": 5120,
+        "setup_download_bytes": 14336,
+        "upload_bytes": 106496
+      },
+      "application_bytes": 300331,
+      "harness_wall_seconds_including_server_precomputation_and_files": 1.7033864080149215,
+      "day_50_percent_byte_screen": "pass",
+      "screen_applicable": true,
+      "private_batches": [
+        {
+          "table": "directory",
+          "queries": 1
+        }
+      ]
+    },
+    {
+      "name": "median_10",
+      "repeat": 0,
+      "script_count": 10,
+      "checkpoint": 3470267,
+      "verified_events": 20,
+      "cost": {
+        "core_ms": 234.53012999999999,
+        "public_download_bytes": 174379,
+        "queries": 10,
+        "response_bytes": 51200,
+        "setup_download_bytes": 14336,
+        "upload_bytes": 1064960
+      },
+      "application_bytes": 1304875,
+      "harness_wall_seconds_including_server_precomputation_and_files": 1.9202742829802446,
+      "day_50_percent_byte_screen": "pass",
+      "screen_applicable": true,
+      "private_batches": [
+        {
+          "table": "directory",
+          "queries": 10
+        }
+      ]
+    },
+    {
+      "name": "large_1",
+      "repeat": 0,
+      "script_count": 1,
+      "checkpoint": 3470267,
+      "verified_events": 9152,
+      "cost": {
+        "core_ms": 2223.086164,
+        "public_download_bytes": 174379,
+        "queries": 51,
+        "response_bytes": 1285120,
+        "setup_download_bytes": 86016,
+        "upload_bytes": 5431296
+      },
+      "application_bytes": 6976811,
+      "harness_wall_seconds_including_server_precomputation_and_files": 7.95067773401388,
+      "day_50_percent_byte_screen": "fail",
+      "screen_applicable": true,
+      "private_batches": [
+        {
+          "table": "directory",
+          "queries": 1
+        },
+        {
+          "table": "pages",
+          "queries": 50
+        }
+      ]
+    },
+    {
+      "name": "large_half_day",
+      "repeat": 0,
+      "script_count": 1,
+      "checkpoint": 3470843,
+      "verified_events": 8576,
+      "cost": {
+        "core_ms": 2237.915087,
+        "public_download_bytes": 174379,
+        "queries": 51,
+        "response_bytes": 1285120,
+        "setup_download_bytes": 86016,
+        "upload_bytes": 5431296
+      },
+      "application_bytes": 6976811,
+      "harness_wall_seconds_including_server_precomputation_and_files": 7.904042789014056,
+      "day_50_percent_byte_screen": "fail",
+      "screen_applicable": false,
+      "private_batches": [
+        {
+          "table": "directory",
+          "queries": 1
+        },
+        {
+          "table": "pages",
+          "queries": 50
+        }
+      ]
+    },
+    {
+      "name": "unused_100",
+      "repeat": 1,
+      "script_count": 100,
+      "checkpoint": 3470267,
+      "verified_events": 0,
+      "cost": {
+        "core_ms": 0.0,
+        "public_download_bytes": 174379,
+        "queries": 0,
+        "response_bytes": 0,
+        "setup_download_bytes": 0,
+        "upload_bytes": 0
+      },
+      "application_bytes": 174379,
+      "harness_wall_seconds_including_server_precomputation_and_files": 0.41258877399377525,
+      "day_50_percent_byte_screen": "pass",
+      "screen_applicable": true,
+      "private_batches": []
+    },
+    {
+      "name": "sparse_1",
+      "repeat": 1,
+      "script_count": 1,
+      "checkpoint": 3470267,
+      "verified_events": 2,
+      "cost": {
+        "core_ms": 24.105012,
+        "public_download_bytes": 174379,
+        "queries": 1,
+        "response_bytes": 5120,
+        "setup_download_bytes": 0,
+        "upload_bytes": 106496
+      },
+      "application_bytes": 285995,
+      "harness_wall_seconds_including_server_precomputation_and_files": 1.6776615089911502,
+      "day_50_percent_byte_screen": "pass",
+      "screen_applicable": true,
+      "private_batches": [
+        {
+          "table": "directory",
+          "queries": 1
+        }
+      ]
+    },
+    {
+      "name": "median_10",
+      "repeat": 1,
+      "script_count": 10,
+      "checkpoint": 3470267,
+      "verified_events": 20,
+      "cost": {
+        "core_ms": 233.232165,
+        "public_download_bytes": 174379,
+        "queries": 10,
+        "response_bytes": 51200,
+        "setup_download_bytes": 0,
+        "upload_bytes": 1064960
+      },
+      "application_bytes": 1290539,
+      "harness_wall_seconds_including_server_precomputation_and_files": 1.9201353029930033,
+      "day_50_percent_byte_screen": "pass",
+      "screen_applicable": true,
+      "private_batches": [
+        {
+          "table": "directory",
+          "queries": 10
+        }
+      ]
+    },
+    {
+      "name": "large_1",
+      "repeat": 1,
+      "script_count": 1,
+      "checkpoint": 3470267,
+      "verified_events": 9152,
+      "cost": {
+        "core_ms": 2240.820497,
+        "public_download_bytes": 174379,
+        "queries": 51,
+        "response_bytes": 1285120,
+        "setup_download_bytes": 0,
+        "upload_bytes": 5431296
+      },
+      "application_bytes": 6890795,
+      "harness_wall_seconds_including_server_precomputation_and_files": 7.948118425993016,
+      "day_50_percent_byte_screen": "fail",
+      "screen_applicable": true,
+      "private_batches": [
+        {
+          "table": "directory",
+          "queries": 1
+        },
+        {
+          "table": "pages",
+          "queries": 50
+        }
+      ]
+    },
+    {
+      "name": "large_half_day",
+      "repeat": 1,
+      "script_count": 1,
+      "checkpoint": 3470843,
+      "verified_events": 8576,
+      "cost": {
+        "core_ms": 2235.301242,
+        "public_download_bytes": 174379,
+        "queries": 51,
+        "response_bytes": 1285120,
+        "setup_download_bytes": 0,
+        "upload_bytes": 5431296
+      },
+      "application_bytes": 6890795,
+      "harness_wall_seconds_including_server_precomputation_and_files": 8.01057650599978,
+      "day_50_percent_byte_screen": "fail",
+      "screen_applicable": false,
+      "private_batches": [
+        {
+          "table": "directory",
+          "queries": 1
+        },
+        {
+          "table": "pages",
+          "queries": 50
+        }
+      ]
+    },
+    {
+      "name": "unused_100",
+      "repeat": 2,
+      "script_count": 100,
+      "checkpoint": 3470267,
+      "verified_events": 0,
+      "cost": {
+        "core_ms": 0.0,
+        "public_download_bytes": 174379,
+        "queries": 0,
+        "response_bytes": 0,
+        "setup_download_bytes": 0,
+        "upload_bytes": 0
+      },
+      "application_bytes": 174379,
+      "harness_wall_seconds_including_server_precomputation_and_files": 0.4133695359923877,
+      "day_50_percent_byte_screen": "pass",
+      "screen_applicable": true,
+      "private_batches": []
+    },
+    {
+      "name": "sparse_1",
+      "repeat": 2,
+      "script_count": 1,
+      "checkpoint": 3470267,
+      "verified_events": 2,
+      "cost": {
+        "core_ms": 23.827865999999997,
+        "public_download_bytes": 174379,
+        "queries": 1,
+        "response_bytes": 5120,
+        "setup_download_bytes": 0,
+        "upload_bytes": 106496
+      },
+      "application_bytes": 285995,
+      "harness_wall_seconds_including_server_precomputation_and_files": 1.678068825014634,
+      "day_50_percent_byte_screen": "pass",
+      "screen_applicable": true,
+      "private_batches": [
+        {
+          "table": "directory",
+          "queries": 1
+        }
+      ]
+    },
+    {
+      "name": "median_10",
+      "repeat": 2,
+      "script_count": 10,
+      "checkpoint": 3470267,
+      "verified_events": 20,
+      "cost": {
+        "core_ms": 232.864643,
+        "public_download_bytes": 174379,
+        "queries": 10,
+        "response_bytes": 51200,
+        "setup_download_bytes": 0,
+        "upload_bytes": 1064960
+      },
+      "application_bytes": 1290539,
+      "harness_wall_seconds_including_server_precomputation_and_files": 1.9203242259973194,
+      "day_50_percent_byte_screen": "pass",
+      "screen_applicable": true,
+      "private_batches": [
+        {
+          "table": "directory",
+          "queries": 10
+        }
+      ]
+    },
+    {
+      "name": "large_1",
+      "repeat": 2,
+      "script_count": 1,
+      "checkpoint": 3470267,
+      "verified_events": 9152,
+      "cost": {
+        "core_ms": 2234.7357380000003,
+        "public_download_bytes": 174379,
+        "queries": 51,
+        "response_bytes": 1285120,
+        "setup_download_bytes": 0,
+        "upload_bytes": 5431296
+      },
+      "application_bytes": 6890795,
+      "harness_wall_seconds_including_server_precomputation_and_files": 8.295723679009825,
+      "day_50_percent_byte_screen": "fail",
+      "screen_applicable": true,
+      "private_batches": [
+        {
+          "table": "directory",
+          "queries": 1
+        },
+        {
+          "table": "pages",
+          "queries": 50
+        }
+      ]
+    },
+    {
+      "name": "large_half_day",
+      "repeat": 2,
+      "script_count": 1,
+      "checkpoint": 3470843,
+      "verified_events": 8576,
+      "cost": {
+        "core_ms": 2227.708075,
+        "public_download_bytes": 174379,
+        "queries": 51,
+        "response_bytes": 1285120,
+        "setup_download_bytes": 0,
+        "upload_bytes": 5431296
+      },
+      "application_bytes": 6890795,
+      "harness_wall_seconds_including_server_precomputation_and_files": 7.935543395986315,
+      "day_50_percent_byte_screen": "fail",
+      "screen_applicable": false,
+      "private_batches": [
+        {
+          "table": "directory",
+          "queries": 1
+        },
+        {
+          "table": "pages",
+          "queries": 50
+        }
+      ]
+    }
+  ],
+  "public_cache_policy": "retain public decoding data per workload across repetitions",
+  "budget_resume": {
+    "pauses": 5,
+    "cost": {
+      "core_ms": 2237.267182,
+      "public_download_bytes": 174379,
+      "queries": 51,
+      "response_bytes": 1285120,
+      "setup_download_bytes": 86016,
+      "upload_bytes": 5431296
+    },
+    "verified_events": 9152,
+    "completed": true
+  },
+  "lost_response": {
+    "pauses": 1,
+    "cost": {
+      "core_ms": 47.686926,
+      "public_download_bytes": 174379,
+      "queries": 2,
+      "response_bytes": 10240,
+      "setup_download_bytes": 14336,
+      "upload_bytes": 212992
+    },
+    "verified_events": 2,
+    "completed": true
+  }
+}

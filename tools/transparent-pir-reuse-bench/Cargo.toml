@@ -1,0 +1,21 @@
+[package]
+name = "transparent-pir-reuse-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+# Research-only: the sibling checkout contains the uncommitted reuse experiment.
+# Measurement archives preserve its exact source; production dependencies are unchanged.
+[dependencies]
+ipir-sp = { path = "../../../ipir-sp/ipir-sp", features = ["experimental-key-reuse"] }
+inspiring = { path = "../../../ipir-sp/inspiring" }
+spiral-rs = { package = "valar-spiral-rs", git = "https://github.com/valargroup/spiral-rs.git", rev = "6f5b66c6a5a639827c6486c59d31c7ec2d4399a8" }
+serde_json = "1"
+sysinfo = "0.36"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

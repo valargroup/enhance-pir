@@ -1,0 +1,201 @@
+{
+  "assumed_bucket_requests_per_lookup": 2,
+  "capacity_assumptions": {
+    "headroom_factor": 2,
+    "peak_factor": 10,
+    "peak_syncs_per_second": 4.62962962962963,
+    "required_queries_per_second_at_2_queries_per_sync": 18.51851851851852,
+    "required_queries_per_second_at_40_queries_per_sync": 370.3703703703704,
+    "required_syncs_per_second": 9.25925925925926,
+    "syncs_per_day": 4,
+    "wallets": 10000
+  },
+  "classification": "arithmetic sensitivity, not a transparent PIR benchmark",
+  "decision": "HOLD: no end-to-end transparent PIR benchmark",
+  "exclusions": [
+    "setup",
+    "filters",
+    "history pages",
+    "HTTP/TLS",
+    "retries",
+    "wallet processing",
+    "generation refresh"
+  ],
+  "false_positive_sensitivity": [
+    {
+      "absent_scripts": 100,
+      "expected_bytes_before_coalescing": 6369.28,
+      "expected_matches_before_coalescing": 0.01,
+      "expected_mib_before_coalescing": 0.00607421875,
+      "false_positive_probability": 0.0001,
+      "intervals": 1
+    },
+    {
+      "absent_scripts": 100,
+      "expected_bytes_before_coalescing": 636.928,
+      "expected_matches_before_coalescing": 0.001,
+      "expected_mib_before_coalescing": 0.000607421875,
+      "false_positive_probability": 1e-05,
+      "intervals": 1
+    },
+    {
+      "absent_scripts": 100,
+      "expected_bytes_before_coalescing": 63.69279999999999,
+      "expected_matches_before_coalescing": 9.999999999999999e-05,
+      "expected_mib_before_coalescing": 6.074218749999999e-05,
+      "false_positive_probability": 1e-06,
+      "intervals": 1
+    },
+    {
+      "absent_scripts": 100,
+      "expected_bytes_before_coalescing": 152862.72,
+      "expected_matches_before_coalescing": 0.24000000000000002,
+      "expected_mib_before_coalescing": 0.14578125,
+      "false_positive_probability": 0.0001,
+      "intervals": 24
+    },
+    {
+      "absent_scripts": 100,
+      "expected_bytes_before_coalescing": 15286.272,
+      "expected_matches_before_coalescing": 0.024,
+      "expected_mib_before_coalescing": 0.014578125,
+      "false_positive_probability": 1e-05,
+      "intervals": 24
+    },
+    {
+      "absent_scripts": 100,
+      "expected_bytes_before_coalescing": 1528.6272,
+      "expected_matches_before_coalescing": 0.0024,
+      "expected_mib_before_coalescing": 0.0014578125,
+      "false_positive_probability": 1e-06,
+      "intervals": 24
+    },
+    {
+      "absent_scripts": 100,
+      "expected_bytes_before_coalescing": 7337410.5600000005,
+      "expected_matches_before_coalescing": 11.520000000000001,
+      "expected_mib_before_coalescing": 6.9975000000000005,
+      "false_positive_probability": 0.0001,
+      "intervals": 1152
+    },
+    {
+      "absent_scripts": 100,
+      "expected_bytes_before_coalescing": 733741.0560000001,
+      "expected_matches_before_coalescing": 1.1520000000000001,
+      "expected_mib_before_coalescing": 0.6997500000000001,
+      "false_positive_probability": 1e-05,
+      "intervals": 1152
+    },
+    {
+      "absent_scripts": 100,
+      "expected_bytes_before_coalescing": 73374.1056,
+      "expected_matches_before_coalescing": 0.1152,
+      "expected_mib_before_coalescing": 0.069975,
+      "false_positive_probability": 1e-06,
+      "intervals": 1152
+    }
+  ],
+  "scenarios": [
+    {
+      "cases": [
+        {
+          "download_bytes": 410240,
+          "reference_geometry": "enhance_32768_by_4096",
+          "total_bytes": 10732480,
+          "total_mib": 10.23529052734375,
+          "upload_bytes": 10322240
+        },
+        {
+          "download_bytes": 3276800,
+          "reference_geometry": "ipir_sp_16_instances",
+          "total_bytes": 12738560,
+          "total_mib": 12.1484375,
+          "upload_bytes": 9461760
+        }
+      ],
+      "physical_requests": 40,
+      "scenario": "direct_20_candidates"
+    },
+    {
+      "cases": [
+        {
+          "download_bytes": 2051200,
+          "reference_geometry": "enhance_32768_by_4096",
+          "total_bytes": 53662400,
+          "total_mib": 51.17645263671875,
+          "upload_bytes": 51611200
+        },
+        {
+          "download_bytes": 16384000,
+          "reference_geometry": "ipir_sp_16_instances",
+          "total_bytes": 63692800,
+          "total_mib": 60.7421875,
+          "upload_bytes": 47308800
+        }
+      ],
+      "physical_requests": 200,
+      "scenario": "direct_100_candidates"
+    },
+    {
+      "cases": [
+        {
+          "download_bytes": 20512000,
+          "reference_geometry": "enhance_32768_by_4096",
+          "total_bytes": 536624000,
+          "total_mib": 511.7645263671875,
+          "upload_bytes": 516112000
+        },
+        {
+          "download_bytes": 163840000,
+          "reference_geometry": "ipir_sp_16_instances",
+          "total_bytes": 636928000,
+          "total_mib": 607.421875,
+          "upload_bytes": 473088000
+        }
+      ],
+      "physical_requests": 2000,
+      "scenario": "direct_1000_candidates"
+    },
+    {
+      "cases": [
+        {
+          "download_bytes": 20512,
+          "reference_geometry": "enhance_32768_by_4096",
+          "total_bytes": 536624,
+          "total_mib": 0.5117645263671875,
+          "upload_bytes": 516112
+        },
+        {
+          "download_bytes": 163840,
+          "reference_geometry": "ipir_sp_16_instances",
+          "total_bytes": 636928,
+          "total_mib": 0.607421875,
+          "upload_bytes": 473088
+        }
+      ],
+      "physical_requests": 2,
+      "scenario": "hybrid_1_changed_script"
+    },
+    {
+      "cases": [
+        {
+          "download_bytes": 205120,
+          "reference_geometry": "enhance_32768_by_4096",
+          "total_bytes": 5366240,
+          "total_mib": 5.117645263671875,
+          "upload_bytes": 5161120
+        },
+        {
+          "download_bytes": 1638400,
+          "reference_geometry": "ipir_sp_16_instances",
+          "total_bytes": 6369280,
+          "total_mib": 6.07421875,
+          "upload_bytes": 4730880
+        }
+      ],
+      "physical_requests": 20,
+      "scenario": "hybrid_10_changed_scripts"
+    }
+  ],
+  "source_enhance_requests_per_second": 21.296666666666667
+}

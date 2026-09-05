@@ -1,0 +1,45 @@
+{
+  "batches": 1,
+  "cached_public_mask": 1,
+  "classification": "row-file four-slot experiment; local IPC, no network",
+  "columns": 10240,
+  "combined_client_server_end_rss_bytes": 2070171648,
+  "combined_client_server_ready_rss_bytes": 2069204992,
+  "database_build_ms": 413.996917,
+  "decryption_threshold": 2199023255543,
+  "extra_public_bytes_for_reuse": 215040,
+  "key_uploads": 1,
+  "max_decryption_error": 68081162665,
+  "mode": "fresh",
+  "packing_cache_payload_bytes": 503152640,
+  "policy": "auto",
+  "predicted_key_saving_bytes": 0,
+  "preparation_ms_per_set": [
+    2940.4110029999997
+  ],
+  "public_c1_bytes_per_set": 71680,
+  "public_matrix_generation_ms": 0.184053,
+  "public_sets": 1,
+  "published_setup_bytes": 71680,
+  "row_bytes": 17920,
+  "rows": 4096,
+  "samples": [
+    {
+      "batch": 0,
+      "decode_ms": 1.164029,
+      "key_upload_bytes": 86016,
+      "prepare_ms": 16.505817,
+      "query_body_bytes": 20480,
+      "response_bytes": 25600,
+      "retry": false,
+      "row": 2897,
+      "server_ms": 27.087353999999998,
+      "slot": 0,
+      "total_ms": 44.7572,
+      "upload_bytes": 106496
+    }
+  ],
+  "unique_queries": 1,
+  "unused_final_batch_slots": 0,
+  "charged_public_download_bytes": 0
+}

@@ -1,0 +1,370 @@
+[
+  {
+    "prefix_blocks": 0,
+    "remaining_blocks": 1152,
+    "verified_events": 9152,
+    "compact_suffix_bytes": 2888097,
+    "cold": {
+      "all_bytes": 4009259,
+      "navigation_bytes": 4009259,
+      "reduction_percent": 0.0,
+      "all_queries": 51,
+      "navigation_queries": 51,
+      "navigation_batches": [
+        {
+          "queries": 1,
+          "table": "directory"
+        },
+        {
+          "queries": 50,
+          "table": "pages"
+        }
+      ]
+    },
+    "warm": {
+      "all_bytes": 3708203,
+      "navigation_bytes": 3708203,
+      "reduction_percent": 0.0,
+      "all_queries": 51,
+      "navigation_queries": 51,
+      "navigation_batches": [
+        {
+          "queries": 1,
+          "table": "directory"
+        },
+        {
+          "queries": 50,
+          "table": "pages"
+        }
+      ]
+    }
+  },
+  {
+    "prefix_blocks": 576,
+    "remaining_blocks": 576,
+    "verified_events": 8576,
+    "compact_suffix_bytes": 1423042,
+    "cold": {
+      "all_bytes": 4009259,
+      "navigation_bytes": 4307243,
+      "reduction_percent": -7.432395861679186,
+      "all_queries": 51,
+      "navigation_queries": 50,
+      "navigation_batches": [
+        {
+          "queries": 1,
+          "table": "directory"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 43,
+          "table": "pages"
+        }
+      ]
+    },
+    "warm": {
+      "all_bytes": 3708203,
+      "navigation_bytes": 4006187,
+      "reduction_percent": -8.035806022485815,
+      "all_queries": 51,
+      "navigation_queries": 50,
+      "navigation_batches": [
+        {
+          "queries": 1,
+          "table": "directory"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 43,
+          "table": "pages"
+        }
+      ]
+    }
+  },
+  {
+    "prefix_blocks": 864,
+    "remaining_blocks": 288,
+    "verified_events": 288,
+    "compact_suffix_bytes": 446142,
+    "cold": {
+      "all_bytes": 4009259,
+      "navigation_bytes": 1296683,
+      "reduction_percent": 67.6577891326053,
+      "all_queries": 51,
+      "navigation_queries": 8,
+      "navigation_batches": [
+        {
+          "queries": 1,
+          "table": "directory"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 2,
+          "table": "pages"
+        }
+      ]
+    },
+    "warm": {
+      "all_bytes": 3708203,
+      "navigation_bytes": 1210667,
+      "reduction_percent": 67.35165253897912,
+      "all_queries": 51,
+      "navigation_queries": 8,
+      "navigation_batches": [
+        {
+          "queries": 1,
+          "table": "directory"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 2,
+          "table": "pages"
+        }
+      ]
+    }
+  },
+  {
+    "prefix_blocks": 1036,
+    "remaining_blocks": 116,
+    "verified_events": 116,
+    "compact_suffix_bytes": 224877,
+    "cold": {
+      "all_bytes": 4009259,
+      "navigation_bytes": 1164587,
+      "reduction_percent": 70.9525625558239,
+      "all_queries": 51,
+      "navigation_queries": 7,
+      "navigation_batches": [
+        {
+          "queries": 1,
+          "table": "directory"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        }
+      ]
+    },
+    "warm": {
+      "all_bytes": 3708203,
+      "navigation_bytes": 1078571,
+      "reduction_percent": 70.91391706441098,
+      "all_queries": 51,
+      "navigation_queries": 7,
+      "navigation_batches": [
+        {
+          "queries": 1,
+          "table": "directory"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        }
+      ]
+    }
+  },
+  {
+    "prefix_blocks": 1140,
+    "remaining_blocks": 12,
+    "verified_events": 12,
+    "compact_suffix_bytes": 9492,
+    "cold": {
+      "all_bytes": 4009259,
+      "navigation_bytes": 1164587,
+      "reduction_percent": 70.9525625558239,
+      "all_queries": 51,
+      "navigation_queries": 7,
+      "navigation_batches": [
+        {
+          "queries": 1,
+          "table": "directory"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        }
+      ]
+    },
+    "warm": {
+      "all_bytes": 3708203,
+      "navigation_bytes": 1078571,
+      "reduction_percent": 70.91391706441098,
+      "all_queries": 51,
+      "navigation_queries": 7,
+      "navigation_batches": [
+        {
+          "queries": 1,
+          "table": "directory"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        },
+        {
+          "queries": 1,
+          "table": "pages"
+        }
+      ]
+    }
+  }
+]
